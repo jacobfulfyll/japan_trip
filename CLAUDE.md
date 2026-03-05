@@ -38,4 +38,6 @@ Single-file architecture. All CSS is in a `<style>` block in the `<head>`. Conte
 - Semantic HTML sections with id anchors (`#option1`, `#option2`, `#option3`, `#comparison`)
 - CSS classes use kebab-case (e.g., `trip-card`, `budget-grid`, `destination-tag`)
 - Color themes per trip: spring pink (`#ff6b9d`), default purple (`#667eea`), summer teal (`#4ecdc4`)
-- Responsive design via CSS Grid with `auto-fit` and media queries at 768px
+- Responsive design via CSS Grid with `auto-fit` and media queries at 760px
+- Mobile tab nav (< 760px): horizontal scroll strip with hidden scrollbar (`flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none`), active tab auto-scrolls into view via `scrollIntoView`
+- Sound: `playSwish()` plays a synthesized swish via Web Audio API on tab switch (always on, no toggle)

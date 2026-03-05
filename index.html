@@ -177,23 +177,6 @@
             box-shadow: 0 8px 16px rgba(170, 92, 78, 0.28);
         }
 
-        .sound-btn {
-            margin-left: auto;
-            border: 1px solid rgba(12, 61, 95, 0.34);
-            border-radius: 999px;
-            background: var(--paper-btn);
-            color: var(--brand-deep);
-            padding: 8px 12px;
-            font-size: 0.75rem;
-            font-weight: 700;
-            cursor: pointer;
-        }
-
-        .sound-btn.off {
-            opacity: 0.7;
-            background: rgba(223, 206, 182, 0.88);
-        }
-
         .panel-shell {
             --panel-inset: 12px;
             position: relative;
@@ -823,12 +806,19 @@
             .tab-nav {
                 padding: 8px;
                 gap: 6px;
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                scrollbar-width: none;
             }
 
-            .tab-btn,
-            .sound-btn {
+            .tab-nav::-webkit-scrollbar {
+                display: none;
+            }
+
+            .tab-btn {
                 font-size: 0.72rem;
                 padding: 7px 10px;
+                flex-shrink: 0;
             }
 
             .panel-shell {
@@ -874,7 +864,6 @@
             <button class="tab-btn" id="tab-btn-flights" role="tab" aria-controls="tab-flights" aria-selected="false" tabindex="-1" data-target="tab-flights">Flights</button>
             <button class="tab-btn" id="tab-btn-prep" role="tab" aria-controls="tab-prep" aria-selected="false" tabindex="-1" data-target="tab-prep">Culture + Prep</button>
             <button class="tab-btn research-tab" id="tab-btn-research" role="tab" aria-controls="tab-research" aria-selected="false" tabindex="-1" data-target="tab-research">Priority Research</button>
-            <button class="sound-btn" id="sound-toggle" type="button" aria-pressed="true">Swish: On</button>
         </nav>
 
         <main class="panel-shell">
@@ -1665,7 +1654,6 @@
         (function () {
             const tabs = Array.from(document.querySelectorAll(".tab-btn[data-target]"));
             const panels = Array.from(document.querySelectorAll(".tab-panel"));
-            const soundToggle = document.getElementById("sound-toggle");
             const tripDayHeader = document.getElementById("trip-day-header");
 
             const timelineSlider = document.getElementById("timeline-slider");
@@ -1676,7 +1664,6 @@
             const timelinePrev = document.getElementById("timeline-prev");
             const timelineNext = document.getElementById("timeline-next");
 
-            let soundEnabled = true;
             let audioCtx = null;
             let timelineReady = false;
             let activeSlide = null;
@@ -1695,10 +1682,6 @@
             }
 
             function playSwish() {
-                if (!soundEnabled) {
-                    return;
-                }
-
                 const ctx = ensureAudioContext();
                 if (!ctx) {
                     return;
@@ -1961,8 +1944,11 @@
                     tab.classList.toggle("active", isActive);
                     tab.setAttribute("aria-selected", String(isActive));
                     tab.tabIndex = isActive ? 0 : -1;
-                    if (isActive && options.focusTab) {
-                        tab.focus();
+                    if (isActive) {
+                        tab.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                        if (options.focusTab) {
+                            tab.focus();
+                        }
                     }
                 });
 
@@ -2028,16 +2014,6 @@
 
                     activateTab(tabs[next].dataset.target, { playSound: true, focusTab: true });
                 });
-            });
-
-            soundToggle.addEventListener("click", () => {
-                soundEnabled = !soundEnabled;
-                soundToggle.textContent = soundEnabled ? "Swish: On" : "Swish: Off";
-                soundToggle.classList.toggle("off", !soundEnabled);
-                soundToggle.setAttribute("aria-pressed", String(soundEnabled));
-                if (soundEnabled) {
-                    playSwish();
-                }
             });
 
             const firstPanel = document.querySelector(".tab-panel.active") || panels[0];
