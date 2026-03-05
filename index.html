@@ -877,6 +877,28 @@
             .timeline-signifier {
                 display: none;
             }
+
+            .timeline-slide {
+                overflow-y: auto;
+                overflow-x: hidden;
+            }
+
+            .slide-photo {
+                position: sticky;
+                top: 0;
+                z-index: 2;
+                min-height: 40px;
+                max-height: 120px;
+                transition: max-height 0.15s ease-out;
+            }
+
+            .slide-photo.collapsed {
+                max-height: 40px;
+            }
+
+            .slide-content {
+                overflow-y: visible;
+            }
         }
 
         @media (prefers-reduced-motion: reduce) {
@@ -1973,6 +1995,22 @@
                 });
 
                 setActiveSlide(timelineSlides[initialIndex]);
+
+                // Mobile: shrink photo to banner on scroll
+                if (window.matchMedia("(max-width: 760px)").matches) {
+                    timelineSlides.forEach(function (slide) {
+                        slide.addEventListener("scroll", function () {
+                            var photo = slide.querySelector(".slide-photo");
+                            if (!photo) return;
+                            if (slide.scrollTop > 10) {
+                                photo.classList.add("collapsed");
+                            } else {
+                                photo.classList.remove("collapsed");
+                            }
+                        }, { passive: true });
+                    });
+                }
+
                 timelineReady = true;
                 window.setTimeout(syncActiveSlideFromScroll, 30);
             }
