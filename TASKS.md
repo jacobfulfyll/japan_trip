@@ -2,31 +2,6 @@
 
 ## Active Tasks
 
-### mobile-tab-navigation
-**Task**: Redesign tab nav as horizontal scroll strip, remove sound toggle
-**Stage**: REVIEW-WITH-USER
-**Pipeline**: code-workflow
-**Branch**: task/mobile-tab-navigation
-**Worktree**: .worktree/mobile-tab-navigation
-**Base**: main
-**Started**: 2026-03-05
-**Attempts**: 1
-**Files**:
-- MOD: index.html
-**Quality Scores**:
-| Stage | Score | Attempts | Status |
-|-------|-------|----------|--------|
-| IMPLEMENT | 9.2 | 1 | PASS |
-| WRITE-TESTS | - | - | SKIP |
-| QUALITY-CHECK | - | - | SKIP |
-| SIMPLIFY | 9.0 | 1 | PASS |
-| VERIFY-APP | 9.5 | 1 | PASS |
-| REVIEW | 9.0 | 1 | PASS |
-| SECURITY-REVIEW | - | - | SKIP |
-| SYNC-DOCS | 9.0 | 1 | PASS |
-| UPDATE-CLAUDE | 9.0 | 1 | PASS |
-| REVIEW-WITH-USER | - | 1 | APPROVED |
-
 ---
 
 ## Backlog
