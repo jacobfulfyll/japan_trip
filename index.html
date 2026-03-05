@@ -728,11 +728,13 @@
         .fade-in {
             opacity: 0;
             transform: translateY(14px);
+            transition: opacity 0.45s ease, transform 0.45s ease;
+            transition-delay: var(--delay, 0ms);
         }
 
         .fade-in.run {
-            animation: rise 0.45s ease forwards;
-            animation-delay: var(--delay, 0ms);
+            opacity: 1;
+            transform: translateY(0);
         }
 
         .footer {
@@ -1792,8 +1794,12 @@
                 animated.forEach((el, idx) => {
                     el.classList.remove("run");
                     el.style.setProperty("--delay", `${Math.min(idx * 55, 500)}ms`);
+                });
+                requestAnimationFrame(() => {
                     requestAnimationFrame(() => {
-                        el.classList.add("run");
+                        animated.forEach((el) => {
+                            el.classList.add("run");
+                        });
                     });
                 });
             }
