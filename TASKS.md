@@ -16,11 +16,22 @@
 
 ---
 
+### day-view-screen
+**Task**: Hype-photo hero + scroll-down practical plan, three lifecycle framings
+**Pipeline**: code-workflow
+**Branch**: task/day-view-screen
+**Worktree**: .worktree/day-view-screen
+**Base**: main
+**Started**: 2026-05-24
+**Files**:
+- MOD: index.html
+- MOD: app.js
+
+---
+
 ## Backlog
 
 ### Static Companion (v1 — ship before Jun 16)
-- [ ] day-view-screen: Hype-photo hero + scroll-down practical plan, three lifecycle framings [P1] [complex] [tier: opus:high] [depends: data-model-and-scaffold] [conflicts: date-time-aware-navigation, trip-overview-home] [code] [planned]
-  files: index.html (MOD), app.js (MOD)
 - [ ] date-time-aware-navigation: Lifecycle framing, smart landing, forward/back nav, evening "Prep for tomorrow" button [P1] [complex] [tier: opus:high] [depends: data-model-and-scaffold, day-view-screen] [conflicts: day-view-screen, trip-overview-home] [code] [planned]
   files: app.js (MOD), index.html (MOD)
 - [ ] trip-overview-home: Pre-trip home with countdown + tappable all-days index [P2] [moderate] [tier: opus:medium] [depends: data-model-and-scaffold] [conflicts: day-view-screen, date-time-aware-navigation] [code] [planned]
