@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← 44 tests for the data/API layer (node --test).
+app.test.js    ← 97 tests for the data/API layer (node --test).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -134,22 +134,23 @@ it never throws, so the page always renders whatever is valid), derives
 `dayNumber`, deep-freezes everything, and exposes these named exports. Downstream
 screens import them.
 
-| Function                | Returns                                              |
-|-------------------------|------------------------------------------------------|
-| `getTrip()`             | The trip metadata object (deeply frozen).            |
+| Function                | Returns / effect                                              |
+|-------------------------|--------------------------------------------------------------|
+| `getTrip()`             | The trip metadata object (deeply frozen).                    |
 | `getDays()`             | A **fresh array** of all valid days, sorted by date ascending, each with `dayNumber`. Day objects are deeply frozen. |
 | `getDay(iso)`           | The day matching ISO date `iso`, or `null` if absent. Frozen. |
 | `getDayByNumber(n)`     | The day whose derived `dayNumber === n`, or `null` if absent (also `null` for non-finite `n`). Frozen. |
-| `renderInto(rootEl)`    | Renders the current proof-of-pipeline view into `rootEl`. No-ops (warns) if `rootEl` is falsy. |
+| `renderDay(day, framing?)` | Returns `{ node, start, stop }`. `node` is the day-view DOM element (hero + plan + lodging + recommendations). `framing` is `'anticipation'`, `'plan'` (default), or `'reminisce'`. Call `start()` after mounting `node` to begin the hero slideshow; call `stop()` before discarding to avoid orphaned intervals. Null/absent `day` renders a graceful placeholder. |
+| `renderInto(rootEl, day?, framing?)` | Mounts a day view into `rootEl` (defaults to Jun 24, `'plan'` framing). Stops any prior view's slideshow before mounting. No-ops (warns) if `rootEl` is falsy. Backward compatible: `renderInto(root)` still works. |
 | `buildValidatedDays(days?, trip?)` | The validation core, exported for tests. Returns a frozen, sorted, validated array. You won't normally call this. |
+| `haversineMeters(a, b)` | Returns the great-circle distance in meters between two `{ lat, lng }` points. Exported for tests. |
+| `formatWalk(meters)`    | Returns a human-readable walking estimate string (e.g. `"~3 min walk"`). Exported for tests. |
+| `safeUrl(url)`          | Returns the URL if its scheme is in the allow-list (`https`, `http`, `maps`), otherwise `null`. Strips tab/LF/CR before checking. Exported for tests. |
+| `nearestPrecedingCoords(plan, index, lodging)` | Returns the `{ lat, lng }` of the nearest preceding plan item with coords, falling back to `lodging.coords`, or `null`. Used to compute walking distances to recommendations. Exported for tests. |
 
 **Immutability / copy-safety:** everything the API hands back is deeply frozen,
 so callers can't accidentally corrupt the shared data. `getDays()` additionally
 returns a new array each call, so you can sort/filter the result freely.
-
-**`renderInto` is temporary.** It currently draws a minimal card-per-day view
-that just proves the data pipeline works end-to-end. The `day-view-screen` task
-will replace it with the real UI; the data API above stays put.
 
 ## PWA — install to your phone and use offline
 
@@ -215,8 +216,10 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-44 tests cover the data validation, `dayNumber` derivation, the null-on-absent
-lookups, and the immutability guarantees.
+97 tests cover the data validation, `dayNumber` derivation, the null-on-absent
+lookups, the immutability guarantees, and the day-view render layer (haversine
+math, `safeUrl` scheme gating, framing variants, recommendation expansion, and
+the sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub).
 
 ## Deploy
 

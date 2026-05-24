@@ -23,6 +23,11 @@ import {
   getDay,
   getDayByNumber,
   buildValidatedDays,
+  haversineMeters,
+  safeUrl,
+  nearestPrecedingCoords,
+  formatWalk,
+  renderDay,
 } from './app.js';
 import { TRIP, DAYS } from './data/days.js';
 
@@ -503,4 +508,700 @@ test('deep-freeze reaches nested arrays inside plan items, not just one level', 
   assert.throws(() => {
     recItem.recommendations.push('intruder');
   }, TypeError);
+});
+
+// ===========================================================================
+// day-view-screen — pure helpers (no DOM required).
+//
+// These functions are exported from app.js so the distance math, URL scheme
+// gate, walk-origin selection, and walk-label formatting can be unit-tested
+// directly, WITHOUT a DOM. (safeUrl / nearestPrecedingCoords / formatWalk were
+// given a one-line `export` purely for testability; their behavior also surfaces
+// through renderDay's DOM, asserted further below.)
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// haversineMeters — pure great-circle distance (item 1).
+// ---------------------------------------------------------------------------
+
+test('haversineMeters returns 0 for two identical points', () => {
+  assert.equal(haversineMeters({ lat: 35.0116, lng: 135.7681 }, { lat: 35.0116, lng: 135.7681 }), 0);
+});
+
+test('haversineMeters: 1 degree of latitude at the equator is ~111.19 km', () => {
+  // Reference: 1° latitude ≈ 111,195 m for a 6,371,000 m mean-radius sphere.
+  const d = haversineMeters({ lat: 0, lng: 0 }, { lat: 1, lng: 0 });
+  assert.ok(Math.abs(d - 111195) < 50, `expected ~111195 m, got ${d}`);
+});
+
+test('haversineMeters: a known Kyoto pair (Kyoto Station → Fushimi Inari) is ~2.43 km', () => {
+  // Kyoto Station (34.9858,135.7588) → Fushimi Inari (34.9671,135.7727).
+  const d = haversineMeters({ lat: 34.9858, lng: 135.7588 }, { lat: 34.9671, lng: 135.7727 });
+  assert.ok(Math.abs(d - 2435) < 30, `expected ~2435 m, got ${d}`);
+});
+
+test('haversineMeters is symmetric: dist(a,b) === dist(b,a)', () => {
+  const a = { lat: 34.9858, lng: 135.7588 };
+  const b = { lat: 34.9671, lng: 135.7727 };
+  assert.equal(haversineMeters(a, b), haversineMeters(b, a));
+});
+
+test('haversineMeters returns null when either point is null/undefined', () => {
+  const p = { lat: 35, lng: 135 };
+  assert.equal(haversineMeters(null, p), null);
+  assert.equal(haversineMeters(p, null), null);
+  assert.equal(haversineMeters(undefined, p), null);
+  assert.equal(haversineMeters(p, undefined), null);
+  assert.equal(haversineMeters(null, null), null);
+});
+
+test('haversineMeters returns null when a coordinate component is missing', () => {
+  const p = { lat: 35, lng: 135 };
+  assert.equal(haversineMeters({ lat: 35 }, p), null); // no lng
+  assert.equal(haversineMeters({ lng: 135 }, p), null); // no lat
+  assert.equal(haversineMeters(p, {}), null);
+});
+
+test('haversineMeters returns null for NaN / non-numeric coordinate components', () => {
+  const p = { lat: 35, lng: 135 };
+  assert.equal(haversineMeters({ lat: NaN, lng: 135 }, p), null);
+  assert.equal(haversineMeters({ lat: 35, lng: Infinity }, p), null);
+  assert.equal(haversineMeters({ lat: '35', lng: 135 }, p), null); // string, not number
+  assert.equal(haversineMeters(p, { lat: null, lng: 135 }), null);
+});
+
+// ---------------------------------------------------------------------------
+// safeUrl — scheme allow-list (item 2). Also exercised via DOM href/src below.
+// ---------------------------------------------------------------------------
+
+test('safeUrl allows https: and http: absolute URLs unchanged', () => {
+  assert.equal(safeUrl('https://maps.google.com/?q=Yasaka'), 'https://maps.google.com/?q=Yasaka');
+  assert.equal(safeUrl('http://example.com/x.jpg'), 'http://example.com/x.jpg');
+  // Scheme matching is case-insensitive.
+  assert.equal(safeUrl('HTTPS://example.com'), 'HTTPS://example.com');
+});
+
+test('safeUrl allows scheme-less relative and root-relative paths', () => {
+  assert.equal(safeUrl('img/hero.jpg'), 'img/hero.jpg');
+  assert.equal(safeUrl('/photos/day1.png'), '/photos/day1.png');
+  assert.equal(safeUrl('./local.jpg'), './local.jpg');
+});
+
+test('safeUrl rejects javascript: URLs (returns null)', () => {
+  assert.equal(safeUrl('javascript:alert(1)'), null);
+  // Case / whitespace variations must not slip past the gate.
+  assert.equal(safeUrl('JavaScript:alert(1)'), null);
+  assert.equal(safeUrl('  javascript:alert(1)'), null);
+});
+
+test('safeUrl rejects data: URLs (returns null)', () => {
+  assert.equal(safeUrl('data:text/html,<script>alert(1)</script>'), null);
+  assert.equal(safeUrl('data:image/png;base64,AAAA'), null);
+});
+
+test('safeUrl rejects other dangerous/unknown schemes', () => {
+  assert.equal(safeUrl('vbscript:msgbox(1)'), null);
+  assert.equal(safeUrl('file:///etc/passwd'), null);
+  assert.equal(safeUrl('ftp://host/file'), null);
+});
+
+test('safeUrl rejects javascript: smuggled with embedded tab/newline/CR (URL-parser strips them)', () => {
+  // The WHATWG URL parser strips ASCII tab/LF/CR, so these would re-form into a
+  // live javascript: href if safeUrl did not strip them before the scheme check.
+  assert.equal(safeUrl('java\tscript:alert(1)'), null);
+  assert.equal(safeUrl('java\nscript:alert(1)'), null);
+  assert.equal(safeUrl('java\rscript:alert(1)'), null);
+  assert.equal(safeUrl('\tjavascript:alert(1)'), null);
+});
+
+test('safeUrl returns null for non-strings and empty/whitespace input', () => {
+  assert.equal(safeUrl(null), null);
+  assert.equal(safeUrl(undefined), null);
+  assert.equal(safeUrl(42), null);
+  assert.equal(safeUrl({}), null);
+  assert.equal(safeUrl(''), null);
+  assert.equal(safeUrl('   '), null);
+});
+
+// ---------------------------------------------------------------------------
+// nearestPrecedingCoords — walk-origin selection (item 3).
+// ---------------------------------------------------------------------------
+
+test('nearestPrecedingCoords returns the nearest preceding plan stop that has coords', () => {
+  const plan = [
+    { title: 'A', coords: { lat: 1, lng: 1 } },
+    { title: 'B', coords: { lat: 2, lng: 2 } },
+    { title: 'C' }, // current item (index 2) has no coords
+  ];
+  const origin = nearestPrecedingCoords(plan, 2, null);
+  assert.deepEqual(origin.from, { lat: 2, lng: 2 });
+  assert.equal(origin.label, 'B'); // nearest preceding, not the first
+});
+
+test('nearestPrecedingCoords skips preceding items lacking coords', () => {
+  const plan = [
+    { title: 'HasCoords', coords: { lat: 5, lng: 5 } },
+    { title: 'NoCoords' },
+    { title: 'AlsoNoCoords' },
+    { title: 'Current' },
+  ];
+  const origin = nearestPrecedingCoords(plan, 3, null);
+  assert.deepEqual(origin.from, { lat: 5, lng: 5 });
+  assert.equal(origin.label, 'HasCoords');
+});
+
+test('nearestPrecedingCoords falls back to lodging coords when no plan stop precedes with coords', () => {
+  const plan = [
+    { title: 'NoCoords' },
+    { title: 'Current' },
+  ];
+  const lodging = { name: 'Cross Hotel Kyoto', coords: { lat: 35.0, lng: 135.77 } };
+  const origin = nearestPrecedingCoords(plan, 1, lodging);
+  assert.deepEqual(origin.from, { lat: 35.0, lng: 135.77 });
+  assert.equal(origin.label, 'Cross Hotel Kyoto');
+});
+
+test('nearestPrecedingCoords prefers a preceding plan stop over lodging when both exist', () => {
+  const plan = [
+    { title: 'Earlier stop', coords: { lat: 10, lng: 10 } },
+    { title: 'Current' },
+  ];
+  const lodging = { name: 'Hotel', coords: { lat: 99, lng: 99 } };
+  const origin = nearestPrecedingCoords(plan, 1, lodging);
+  assert.deepEqual(origin.from, { lat: 10, lng: 10 }); // plan wins
+  assert.equal(origin.label, 'Earlier stop');
+});
+
+test('nearestPrecedingCoords falls back to a default label when lodging has no name', () => {
+  const lodging = { coords: { lat: 1, lng: 2 } }; // no name
+  const origin = nearestPrecedingCoords([{ title: 'x' }, {}], 1, lodging);
+  assert.equal(origin.label, 'your lodging');
+});
+
+test('nearestPrecedingCoords returns null when nothing precedes and lodging lacks coords', () => {
+  assert.equal(nearestPrecedingCoords([{ title: 'only' }], 0, null), null);
+  assert.equal(nearestPrecedingCoords([{ title: 'a' }, { title: 'b' }], 1, { name: 'no coords here' }), null);
+});
+
+test('nearestPrecedingCoords ignores malformed coords (non-numeric lat/lng)', () => {
+  const plan = [
+    { title: 'Bad', coords: { lat: '1', lng: 2 } }, // lat not a number → skipped
+    { title: 'Current' },
+  ];
+  // No usable preceding coords and no lodging → null.
+  assert.equal(nearestPrecedingCoords(plan, 1, null), null);
+});
+
+test('nearestPrecedingCoords falls back to a generic label when the preceding stop has coords but no title', () => {
+  const plan = [
+    { coords: { lat: 35.0, lng: 135.7 } }, // valid coords, no title
+    { title: 'Current' },
+  ];
+  const result = nearestPrecedingCoords(plan, 1, null);
+  assert.deepEqual(result.from, { lat: 35.0, lng: 135.7 });
+  assert.equal(result.label, 'the previous stop'); // never literal "undefined"
+});
+
+// ---------------------------------------------------------------------------
+// formatWalk — distance → human walk label (supports item 6's walk line).
+// ---------------------------------------------------------------------------
+
+test('formatWalk returns null for null / non-finite input', () => {
+  assert.equal(formatWalk(null), null);
+  assert.equal(formatWalk(undefined), null);
+  assert.equal(formatWalk(NaN), null);
+  assert.equal(formatWalk(Infinity), null);
+});
+
+test('formatWalk renders short distances in metres with a minute estimate', () => {
+  const label = formatWalk(240); // 240 m / 80 m·min⁻¹ = 3 min
+  assert.match(label, /m/);
+  assert.match(label, /min walk/);
+  assert.match(label, /3 min/);
+});
+
+test('formatWalk renders longer distances in kilometres', () => {
+  const label = formatWalk(2435); // ≥ 950 m → km form
+  assert.match(label, /2\.4 km/);
+});
+
+test('formatWalk clamps the walking time to a minimum of 1 minute', () => {
+  assert.match(formatWalk(10), /1 min/); // 10 m would round to 0 min; clamped to 1
+});
+
+// ===========================================================================
+// day-view-screen — DOM rendering (renderDay).
+//
+// This project has NO jsdom (dependency-free static site; CLAUDE.md mandates no
+// npm). To assert renderDay's STRUCTURE (tags, classes, attributes, presence of
+// the reservation badge / reminisce seam / placeholder / walk line) without a
+// browser, we install a TINY hand-rolled DOM stub below: just enough of
+// document.createElement + element to mirror what app.js's el()/renderDay touch
+// (className, textContent, setAttribute, classList, hidden, appendChild,
+// addEventListener, and the href/src/etc. property assignments).
+//
+// The stub is deliberately minimal and does NOT emulate a real browser: layout,
+// CSS, crossfade animation, and actual navigation are out of scope here and are
+// covered by the orchestrator's real-browser VERIFY-APP stage. What we CAN
+// assert deterministically in Node is the DOM tree app.js builds.
+// ===========================================================================
+
+// --- Minimal DOM stub --------------------------------------------------------
+
+class StubClassList {
+  constructor() { this._set = new Set(); }
+  add(...cs) { cs.forEach((c) => c && this._set.add(c)); }
+  remove(...cs) { cs.forEach((c) => this._set.delete(c)); }
+  toggle(c, force) {
+    const want = force === undefined ? !this._set.has(c) : force;
+    if (want) this._set.add(c); else this._set.delete(c);
+    return want;
+  }
+  contains(c) { return this._set.has(c); }
+  get _list() { return [...this._set]; }
+}
+
+class StubElement {
+  constructor(tag) {
+    this.tagName = String(tag).toUpperCase();
+    this.children = [];
+    this.attributes = {};
+    this.listeners = {};
+    this._classList = new StubClassList();
+    this._textContent = '';
+    this.hidden = false;
+  }
+  // className mirrors classList (app.js sets node.className = 'a b c').
+  get className() { return this._classList._list.join(' '); }
+  set className(v) {
+    this._classList = new StubClassList();
+    String(v).split(/\s+/).forEach((c) => c && this._classList.add(c));
+  }
+  get classList() { return this._classList; }
+  // textContent: setting replaces; reading aggregates own + descendants' text
+  // (matches the DOM, so a subtree text search "just works" in assertions).
+  set textContent(v) { this._textContent = String(v); this.children = []; }
+  get textContent() {
+    const own = this._textContent;
+    const kids = this.children.map((c) => c.textContent).join('');
+    return own + kids;
+  }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return name in this.attributes ? this.attributes[name] : null; }
+  appendChild(child) { this.children.push(child); return child; }
+  addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+  // Test-only helper: fire a registered listener (for the rec-toggle click).
+  _fire(type) { (this.listeners[type] || []).forEach((fn) => fn()); }
+  // Test-only traversal helpers --------------------------------------------
+  _all() {
+    const out = [];
+    const walk = (n) => { out.push(n); n.children.forEach(walk); };
+    this.children.forEach(walk);
+    return out;
+  }
+  query(predicate) { return this._all().find(predicate) ?? null; }
+  queryAll(predicate) { return this._all().filter(predicate); }
+  byClass(cls) { return this.queryAll((n) => n._classList.contains(cls)); }
+  firstByClass(cls) { return this.query((n) => n._classList.contains(cls)); }
+}
+
+const stubDocument = {
+  createElement(tag) { return new StubElement(tag); },
+};
+
+/**
+ * Run a fn with a stub document (and optional window.matchMedia) installed on
+ * globalThis, restoring the originals afterward. renderDay reads globalThis
+ * `document` (via el()) and `window` (for prefers-reduced-motion), so this lets
+ * us drive it deterministically in Node.
+ */
+function withDom(fn, { reduceMotion } = {}) {
+  const prevDoc = globalThis.document;
+  const prevWin = globalThis.window;
+  globalThis.document = stubDocument;
+  if (reduceMotion !== undefined) {
+    globalThis.window = {
+      matchMedia(q) {
+        return { matches: reduceMotion && /prefers-reduced-motion/.test(q) };
+      },
+    };
+  }
+  try {
+    return fn();
+  } finally {
+    globalThis.document = prevDoc;
+    globalThis.window = prevWin;
+  }
+}
+
+// --- Shared fixtures (synthetic, schema-shaped) -----------------------------
+
+function fullDayFixture() {
+  return {
+    date: '2026-06-24',
+    dayNumber: 9,
+    base: 'Kyoto',
+    title: 'A full Kyoto day',
+    intro: 'Gion and the river.',
+    photos: [
+      { url: 'https://example.com/a.jpg', alt: 'A' },
+      { url: 'https://example.com/b.jpg', alt: 'B' },
+      { url: 'https://example.com/c.jpg', alt: 'C' },
+    ],
+    lodging: {
+      name: 'Cross Hotel Kyoto',
+      address: 'Kawaramachi, Nakagyo-ku, Kyoto',
+      mapUrl: 'https://maps.google.com/?q=Cross+Hotel+Kyoto',
+      breakfast: 'Buffet from 7am',
+      coords: { lat: 35.0047, lng: 135.7700 },
+    },
+    plan: [
+      { time: '09:00', tag: 'sight', title: 'Yasaka Shrine', note: 'Lanterns.',
+        mapUrl: 'https://maps.google.com/?q=Yasaka', coords: { lat: 35.0036, lng: 135.7785 } },
+      { time: '20:00', tag: 'meal', title: 'Dinner at Tousuiro', reserved: true,
+        note: 'Riverside terrace.',
+        recommendations: [
+          { name: 'Tousuiro Kiyamachi',
+            pros: ['Riverside terrace', 'Vegetarian course'],
+            con: 'Needs a reservation.',
+            mapUrl: 'https://maps.google.com/?q=Tousuiro',
+            coords: { lat: 35.0040, lng: 135.7710 } },
+          { name: 'Omen (walk-in fallback)',
+            pros: ['No reservation'],
+            con: 'Tiny.',
+            mapUrl: 'https://maps.google.com/?q=Omen' },
+        ] },
+    ],
+  };
+}
+
+// --- Item 4: framing selection ----------------------------------------------
+
+test('renderDay applies the framing modifier class for each of the three framings', () => {
+  withDom(() => {
+    const a = renderDay(fullDayFixture(), 'anticipation').node;
+    const p = renderDay(fullDayFixture(), 'plan').node;
+    const r = renderDay(fullDayFixture(), 'reminisce').node;
+    assert.ok(a.classList.contains('framing-anticipation'));
+    assert.ok(p.classList.contains('framing-plan'));
+    assert.ok(r.classList.contains('framing-reminisce'));
+  });
+});
+
+test('renderDay produces a distinct kicker per framing', () => {
+  withDom(() => {
+    const kicker = (f) => renderDay(fullDayFixture(), f).node.firstByClass('day-kicker').textContent;
+    assert.equal(kicker('anticipation'), 'Coming up');
+    assert.equal(kicker('plan'), 'Today');
+    assert.equal(kicker('reminisce'), 'Looking back');
+  });
+});
+
+test('renderDay applies a lead prefix on the intro for anticipation/reminisce but not plan', () => {
+  withDom(() => {
+    const prefix = (f) => {
+      const node = renderDay(fullDayFixture(), f).node;
+      const el = node.firstByClass('day-intro-prefix');
+      return el ? el.textContent : null;
+    };
+    assert.match(prefix('anticipation'), /What's ahead:/);
+    assert.match(prefix('reminisce'), /Remember:/);
+    assert.equal(prefix('plan'), null); // plan framing has no lead prefix
+  });
+});
+
+test('renderDay defaults to the plan framing when given an unknown framing name', () => {
+  withDom(() => {
+    const node = renderDay(fullDayFixture(), 'not-a-framing').node;
+    assert.ok(node.classList.contains('framing-plan'));
+    assert.equal(node.firstByClass('day-kicker').textContent, 'Today');
+  });
+});
+
+// --- Item 4 (cont.): reminisce seam present only in reminisce ----------------
+
+test('renderDay includes the reminisce photo seam ONLY in the reminisce framing', () => {
+  withDom(() => {
+    assert.ok(renderDay(fullDayFixture(), 'reminisce').node.firstByClass('reminisce-seam'),
+      'reminisce framing should include the photo seam');
+    assert.equal(renderDay(fullDayFixture(), 'anticipation').node.firstByClass('reminisce-seam'), null);
+    assert.equal(renderDay(fullDayFixture(), 'plan').node.firstByClass('reminisce-seam'), null);
+  });
+});
+
+test("renderDay's plan heading copy varies by framing", () => {
+  withDom(() => {
+    const heading = (f) => renderDay(fullDayFixture(), f).node.firstByClass('section-heading').textContent;
+    assert.equal(heading('anticipation'), 'The plan');
+    assert.equal(heading('plan'), 'The plan');
+    assert.equal(heading('reminisce'), 'How the day went');
+  });
+});
+
+// --- Item 5: sparse + absent day placeholders --------------------------------
+
+test('renderDay renders the "details coming" placeholder for an absent (null) day without throwing', () => {
+  withDom(() => {
+    let result;
+    assert.doesNotThrow(() => { result = renderDay(null, 'plan'); });
+    const node = result.node;
+    assert.ok(node.classList.contains('day-view-empty'));
+    const ph = node.firstByClass('placeholder-title');
+    assert.ok(ph);
+    assert.equal(ph.textContent, 'Details coming');
+    // The controller is still well-formed (no-op timer handles).
+    assert.equal(typeof result.start, 'function');
+    assert.equal(typeof result.stop, 'function');
+    assert.doesNotThrow(() => { result.start(); result.stop(); });
+  });
+});
+
+test('renderDay renders the placeholder for a non-object day argument', () => {
+  withDom(() => {
+    for (const bad of [undefined, 42, 'nope']) {
+      const node = renderDay(bad, 'plan').node;
+      assert.ok(node.classList.contains('day-view-empty'), `expected empty state for ${String(bad)}`);
+    }
+  });
+});
+
+test('renderDay renders the sparse-day placeholder (empty plan + photos) and no plan/lodging', () => {
+  withDom(() => {
+    const sparse = {
+      date: '2026-06-25', dayNumber: 10, base: 'Kyoto', title: 'A quiet day',
+      intro: 'Nothing planned yet.', photos: [], plan: [], lodging: null,
+    };
+    const node = renderDay(sparse, 'plan').node;
+    // Header still renders (title/kicker), but the plan section is absent and a
+    // placeholder explains the day isn't filled in.
+    assert.equal(node.firstByClass('day-title').textContent, 'A quiet day');
+    assert.equal(node.firstByClass('placeholder-title').textContent, 'Details coming');
+    assert.equal(node.firstByClass('plan-section'), null, 'sparse day should have no plan section');
+    assert.equal(node.firstByClass('lodging-card'), null, 'sparse day should have no lodging card');
+  });
+});
+
+test('renderDay does not throw on a sparse day and returns usable timer handles', () => {
+  withDom(() => {
+    const sparse = { date: '2026-06-25', title: 'x', photos: [], plan: [], lodging: null };
+    let r;
+    assert.doesNotThrow(() => { r = renderDay(sparse, 'plan'); });
+    assert.doesNotThrow(() => { r.start(); r.stop(); });
+  });
+});
+
+// --- Item 1 (acceptance): the core day renders its parts ---------------------
+
+test('renderDay renders hero, header, plan list, and lodging card for a full day', () => {
+  withDom(() => {
+    const node = renderDay(fullDayFixture(), 'plan').node;
+    assert.ok(node.firstByClass('day-hero'), 'hero present');
+    assert.ok(node.firstByClass('day-header'), 'header present');
+    assert.ok(node.firstByClass('plan-list'), 'plan list present');
+    assert.ok(node.firstByClass('lodging-card'), 'lodging card present');
+    // dayNumber + base surface in the kicker row.
+    assert.equal(node.firstByClass('day-number').textContent, 'Day 9');
+    assert.equal(node.firstByClass('day-base').textContent, 'Kyoto');
+  });
+});
+
+test('renderDay renders one plan item per plan entry', () => {
+  withDom(() => {
+    const node = renderDay(fullDayFixture(), 'plan').node;
+    assert.equal(node.byClass('plan-item').length, 2);
+  });
+});
+
+test('renderDay renders the lodging breakfast note when present', () => {
+  withDom(() => {
+    const node = renderDay(fullDayFixture(), 'plan').node;
+    const bf = node.firstByClass('lodging-breakfast');
+    assert.ok(bf);
+    assert.match(bf.textContent, /Buffet from 7am/);
+  });
+});
+
+// --- Item 4 (acceptance): map links are safe external links ------------------
+
+test('renderDay map links carry target=_blank and rel=noopener noreferrer', () => {
+  withDom(() => {
+    const node = renderDay(fullDayFixture(), 'plan').node;
+    const links = node.byClass('map-link');
+    assert.ok(links.length > 0, 'expected at least one map link');
+    for (const a of links) {
+      assert.equal(a.tagName, 'A');
+      assert.equal(a.target, '_blank');
+      assert.equal(a.rel, 'noopener noreferrer');
+      assert.match(a.href, /^https?:/);
+    }
+  });
+});
+
+test('renderDay omits a map link whose URL has a dangerous scheme (safeUrl gate via DOM)', () => {
+  withDom(() => {
+    const day = fullDayFixture();
+    day.plan[0].mapUrl = 'javascript:alert(1)'; // must be dropped, not rendered
+    day.plan[1].recommendations = []; // simplify
+    const node = renderDay(day, 'plan').node;
+    // No map-link should point at a javascript: URL.
+    const bad = node.byClass('map-link').find((a) => /javascript:/i.test(a.href || ''));
+    assert.equal(bad, undefined, 'a javascript: map URL must never reach an href');
+  });
+});
+
+test('renderDay drops a hero photo whose url has a dangerous scheme (img src gate)', () => {
+  withDom(() => {
+    const day = fullDayFixture();
+    day.photos = [
+      { url: 'javascript:alert(1)', alt: 'evil' },
+      { url: 'https://example.com/ok.jpg', alt: 'ok' },
+    ];
+    const node = renderDay(day, 'plan').node;
+    const imgs = node.queryAll((n) => n.tagName === 'IMG');
+    assert.ok(imgs.length >= 1);
+    for (const img of imgs) {
+      assert.ok(!/javascript:/i.test(img.src || ''), 'a javascript: photo url must never reach an img src');
+    }
+  });
+});
+
+// --- Item 7: reservation highlighting ---------------------------------------
+
+test('renderDay marks a reserved plan item with the reserved class and a "Reserved" badge', () => {
+  withDom(() => {
+    const node = renderDay(fullDayFixture(), 'plan').node;
+    const reserved = node.byClass('plan-item-reserved');
+    assert.equal(reserved.length, 1, 'exactly one reserved item in the fixture');
+    const badge = node.firstByClass('plan-reserved-badge');
+    assert.ok(badge, 'reserved item shows a Reserved badge');
+    assert.equal(badge.textContent, 'Reserved');
+  });
+});
+
+test('renderDay does NOT mark non-reserved plan items as reserved', () => {
+  withDom(() => {
+    const day = fullDayFixture();
+    // Make every item non-reserved.
+    day.plan.forEach((it) => { delete it.reserved; });
+    const node = renderDay(day, 'plan').node;
+    assert.equal(node.byClass('plan-item-reserved').length, 0);
+    assert.equal(node.firstByClass('plan-reserved-badge'), null);
+  });
+});
+
+// --- Item 5/6: recommendation expansion + walk distance ----------------------
+
+test('renderDay renders a recommendation toggle (collapsed) for items with recommendations', () => {
+  withDom(() => {
+    const node = renderDay(fullDayFixture(), 'plan').node;
+    const toggle = node.firstByClass('rec-toggle');
+    assert.ok(toggle, 'expected a rec toggle button');
+    assert.equal(toggle.tagName, 'BUTTON');
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false'); // collapsed initially
+    const panel = node.firstByClass('rec-panel');
+    assert.ok(panel);
+    assert.equal(panel.hidden, true); // panel starts hidden
+  });
+});
+
+test('clicking the rec toggle expands the panel and flips aria-expanded', () => {
+  withDom(() => {
+    const node = renderDay(fullDayFixture(), 'plan').node;
+    const toggle = node.firstByClass('rec-toggle');
+    const panel = node.firstByClass('rec-panel');
+    toggle._fire('click');
+    assert.equal(panel.hidden, false, 'panel should open on click');
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+    assert.ok(toggle.classList.contains('is-open'));
+    // Toggling again collapses it.
+    toggle._fire('click');
+    assert.equal(panel.hidden, true);
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+  });
+});
+
+test('renderDay renders each recommendation card with name, pros, and con', () => {
+  withDom(() => {
+    const node = renderDay(fullDayFixture(), 'plan').node;
+    const cards = node.byClass('rec-card');
+    assert.equal(cards.length, 2, 'two recommendations in the fixture');
+    const names = node.byClass('rec-name').map((n) => n.textContent);
+    assert.ok(names.includes('Tousuiro Kiyamachi'));
+    assert.ok(names.includes('Omen (walk-in fallback)'));
+    assert.ok(node.byClass('rec-pro').length >= 2, 'pros rendered');
+    assert.ok(node.byClass('rec-con').length >= 1, 'cons rendered');
+  });
+});
+
+test('renderDay shows a walking-distance line when both origin and recommendation have coords (item 6)', () => {
+  withDom(() => {
+    // Fixture: plan[0] Yasaka has coords (origin), rec[0] Tousuiro has coords.
+    const node = renderDay(fullDayFixture(), 'plan').node;
+    const walks = node.byClass('rec-walk');
+    assert.ok(walks.length >= 1, 'expected a walk line for the coord-bearing recommendation');
+    const walk = walks[0];
+    assert.match(walk.textContent, /min walk/);
+    // The "from <origin label>" suffix names the preceding stop with coords.
+    assert.match(walk.textContent, /from Yasaka Shrine/);
+  });
+});
+
+test('renderDay omits the walking-distance line when the recommendation has no coords (item 6)', () => {
+  withDom(() => {
+    // rec[1] Omen has NO coords → no walk line for it. The fixture has exactly
+    // one coord-bearing rec, so there should be exactly one walk line total.
+    const node = renderDay(fullDayFixture(), 'plan').node;
+    assert.equal(node.byClass('rec-walk').length, 1);
+  });
+});
+
+test('renderDay omits ALL walk lines when there is no usable origin (no preceding coords, no lodging coords)', () => {
+  withDom(() => {
+    const day = fullDayFixture();
+    // Strip coords from the preceding stop AND lodging → no origin to measure from.
+    delete day.plan[0].coords;
+    day.lodging.coords = undefined;
+    const node = renderDay(day, 'plan').node;
+    assert.equal(node.byClass('rec-walk').length, 0);
+  });
+});
+
+// --- Item 2 / 8: slideshow + reduced-motion ----------------------------------
+
+test('renderDay (motion allowed) renders all valid hero slides and a start()/stop() that cycle without throwing', () => {
+  withDom(() => {
+    const ctl = renderDay(fullDayFixture(), 'plan');
+    const slides = ctl.node.byClass('hero-slide');
+    assert.equal(slides.length, 3, 'all three valid photos become slides when motion is allowed');
+    // First slide active initially.
+    assert.ok(slides[0].classList.contains('is-active'));
+    // start() begins the interval; stop() clears it — neither should throw, and
+    // we must not leak a live interval out of the test.
+    assert.doesNotThrow(() => ctl.start());
+    assert.doesNotThrow(() => ctl.stop());
+  }, { reduceMotion: false });
+});
+
+test('renderDay under prefers-reduced-motion renders a SINGLE slide and start() is a no-op (item 8)', () => {
+  withDom(() => {
+    const ctl = renderDay(fullDayFixture(), 'plan');
+    const slides = ctl.node.byClass('hero-slide');
+    assert.equal(slides.length, 1, 'reduced-motion collapses the slideshow to one static slide');
+    // No timer should be started; start()/stop() must be safe no-ops. If a real
+    // setInterval were created here it would keep the Node process alive and the
+    // test runner would hang — so a clean exit is itself part of the assertion.
+    assert.doesNotThrow(() => { ctl.start(); ctl.stop(); });
+  }, { reduceMotion: true });
+});
+
+test('renderDay renders an empty-hero placeholder (role=img) when a day has no valid photos', () => {
+  withDom(() => {
+    const day = fullDayFixture();
+    day.photos = []; // no photos (plan is still populated, so the day isn't "sparse")
+    const node = renderDay(day, 'plan').node;
+    const hero = node.firstByClass('day-hero');
+    assert.ok(hero.classList.contains('day-hero-empty'));
+    assert.equal(hero.getAttribute('role'), 'img');
+    assert.ok(node.byClass('hero-slide').length === 0, 'no slides when there are no photos');
+  });
 });

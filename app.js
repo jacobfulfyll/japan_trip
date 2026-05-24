@@ -192,7 +192,66 @@ export function getDayByNumber(n) {
 }
 
 // ---------------------------------------------------------------------------
-// Rendering (proof-of-pipeline; downstream day-view-screen replaces this)
+// Geo helper (pure, exported for unit tests)
+// ---------------------------------------------------------------------------
+
+const EARTH_RADIUS_M = 6_371_000; // mean Earth radius in metres
+
+/**
+ * Great-circle (haversine) distance in METRES between two {lat,lng} points.
+ * Pure and side-effect-free; exported so the distance math is unit-testable
+ * without a DOM. Returns null if either coordinate is missing or non-finite,
+ * so callers can omit the distance gracefully (no geolocation / GPS involved —
+ * this works purely off coords stored in data/days.js).
+ * @param {{lat:number,lng:number}|null|undefined} a
+ * @param {{lat:number,lng:number}|null|undefined} b
+ * @returns {number | null} distance in metres, or null when uncomputable
+ */
+export function haversineMeters(a, b) {
+  if (!a || !b) return null;
+  const { lat: lat1, lng: lng1 } = a;
+  const { lat: lat2, lng: lng2 } = b;
+  if (
+    typeof lat1 !== 'number' || typeof lng1 !== 'number' ||
+    typeof lat2 !== 'number' || typeof lng2 !== 'number' ||
+    !Number.isFinite(lat1) || !Number.isFinite(lng1) ||
+    !Number.isFinite(lat2) || !Number.isFinite(lng2)
+  ) {
+    return null;
+  }
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const sinLat = Math.sin(dLat / 2);
+  const sinLng = Math.sin(dLng / 2);
+  const h =
+    sinLat * sinLat +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * sinLng * sinLng;
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/**
+ * Format a metre distance as a short human label, plus a rough walking time at
+ * ~80 m/min (a relaxed sightseeing pace). Returns null for null/non-finite
+ * input so callers can omit it.
+ * @param {number|null} meters
+ * @returns {string | null}
+ */
+export function formatWalk(meters) {
+  if (meters == null || !Number.isFinite(meters)) return null;
+  const mins = Math.max(1, Math.round(meters / 80));
+  const dist = meters < 950
+    ? `${Math.round(meters / 10) * 10} m`
+    : `${(meters / 1000).toFixed(1)} km`;
+  return `~${dist} · ${mins} min walk`;
+}
+
+// ---------------------------------------------------------------------------
+// Rendering (day-view-screen) — builds one day's DOM from a day object.
+//
+// SECURITY: every data-derived string reaches the DOM via textContent /
+// createElement only (the el() helper). Data URLs are scheme-checked by
+// safeUrl() before they touch href/src; external links get rel + target.
 // ---------------------------------------------------------------------------
 
 /** Small helper: create an element with a text child, all via safe DOM APIs. */
@@ -204,62 +263,397 @@ function el(tag, className, text) {
 }
 
 /**
- * Render a minimal but real proof that the data pipeline works: the trip title,
- * the travelers, and a card per day (date, Day N, base, title, plan-item count,
- * photo count). This is intentionally simple — it exists to prove the data flows
- * end-to-end and to give downstream screens a working mount point.
- * @param {HTMLElement} rootEl
+ * Return a URL only if it uses an http(s) scheme; otherwise null. Blocks
+ * javascript:/data:/etc. so a malicious URL in the data can never become an
+ * executable href/src. Relative/root-relative URLs are allowed (no scheme).
+ *
+ * The WHATWG URL parser strips ASCII tab/newline/CR from a URL before parsing,
+ * so `java\tscript:` would re-form into a live `javascript:` href. We strip the
+ * same characters BEFORE the scheme check to close that bypass.
+ * @param {unknown} url
+ * @returns {string | null}
  */
-export function renderInto(rootEl) {
+export function safeUrl(url) {
+  if (typeof url !== 'string') return null;
+  const trimmed = url.replace(/[\t\n\r]/g, '').trim();
+  if (trimmed === '') return null;
+  // No scheme (relative path) → safe to use as-is.
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed;
+  return /^https?:/i.test(trimmed) ? trimmed : null;
+}
+
+/** Build a safe external link (map link), or null if the URL is unusable. */
+function mapLink(url, label) {
+  const safe = safeUrl(url);
+  if (!safe) return null;
+  const a = el('a', 'map-link', label ?? 'Open in Google Maps');
+  a.href = safe;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  return a;
+}
+
+const TAG_LABELS = {
+  meal: 'Meal',
+  transit: 'Transit',
+  sight: 'Sight',
+  checkin: 'Check-in',
+  reservation: 'Reservation',
+  rest: 'Rest',
+  bar: 'Drinks',
+  spa: 'Spa',
+};
+
+const FRAMINGS = {
+  anticipation: {
+    className: 'framing-anticipation',
+    kicker: 'Coming up',
+    leadPrefix: "What's ahead:",
+    planHeading: 'The plan',
+  },
+  plan: {
+    className: 'framing-plan',
+    kicker: 'Today',
+    leadPrefix: '',
+    planHeading: 'The plan',
+  },
+  reminisce: {
+    className: 'framing-reminisce',
+    kicker: 'Looking back',
+    leadPrefix: 'Remember:',
+    planHeading: 'How the day went',
+  },
+};
+
+/**
+ * Pick the coords to measure a recommendation walk FROM: the nearest preceding
+ * plan item (scanning backwards) that has coords, falling back to the day's
+ * lodging coords. Returns null when nothing usable precedes it.
+ * @param {Array<object>} plan
+ * @param {number} index the index of the current (recommendation) plan item
+ * @param {object|null} lodging
+ * @returns {{from:{lat:number,lng:number}, label:string} | null}
+ */
+export function nearestPrecedingCoords(plan, index, lodging) {
+  for (let i = index - 1; i >= 0; i--) {
+    const c = plan[i]?.coords;
+    if (c && typeof c.lat === 'number' && typeof c.lng === 'number') {
+      return { from: c, label: plan[i].title ?? 'the previous stop' };
+    }
+  }
+  const lc = lodging?.coords;
+  if (lc && typeof lc.lat === 'number' && typeof lc.lng === 'number') {
+    return { from: lc, label: lodging.name ?? 'your lodging' };
+  }
+  return null;
+}
+
+/** Build the auto-crossfading hero slideshow (or a single static image under
+ * reduced-motion / a lone photo). Returns { node, start, stop } so the caller
+ * controls the timer lifecycle. */
+function buildHero(photos, framing) {
+  const valid = (Array.isArray(photos) ? photos : [])
+    .map((p) => ({ ...p, safe: safeUrl(p?.url) }))
+    .filter((p) => p.safe);
+
+  const hero = el('div', 'day-hero');
+  hero.classList.add(framing.className + '-hero');
+
+  if (valid.length === 0) {
+    hero.classList.add('day-hero-empty');
+    hero.setAttribute('role', 'img');
+    hero.setAttribute('aria-label', 'No photos yet for this day');
+    return { node: hero, start() {}, stop() {} };
+  }
+
+  // Detect reduced-motion at build time; if matched, render one static image.
+  const reduceMotion =
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const slidesToShow = reduceMotion ? valid.slice(0, 1) : valid;
+  const slideEls = [];
+
+  slidesToShow.forEach((p, i) => {
+    const slide = el('div', 'hero-slide');
+    if (i === 0) slide.classList.add('is-active');
+    const img = el('img');
+    img.src = p.safe;
+    img.alt = p.alt ? String(p.alt) : '';
+    img.loading = i === 0 ? 'eager' : 'lazy';
+    img.decoding = 'async';
+    slide.appendChild(img);
+    hero.appendChild(slide);
+    slideEls.push(slide);
+  });
+
+  // Gradient scrim + kicker overlay (purely decorative scrim is aria-hidden).
+  const scrim = el('div', 'hero-scrim');
+  scrim.setAttribute('aria-hidden', 'true');
+  hero.appendChild(scrim);
+
+  let timer = null;
+  let idx = 0;
+  const canCycle = !reduceMotion && slideEls.length > 1;
+
+  return {
+    node: hero,
+    start() {
+      if (!canCycle || timer) return;
+      timer = setInterval(() => {
+        slideEls[idx].classList.remove('is-active');
+        idx = (idx + 1) % slideEls.length;
+        slideEls[idx].classList.add('is-active');
+      }, 4500);
+    },
+    stop() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    },
+  };
+}
+
+// Monotonic id source for rec-panel aria wiring — deterministic and
+// collision-free even if multiple day-views are ever mounted at once.
+let recPanelSeq = 0;
+
+/** Build one plan item (timeline row), wiring recommendation expansion. */
+function buildPlanItem(item, index, plan, lodging) {
+  const isReserved = item.reserved === true;
+  const li = el('li', 'plan-item' + (isReserved ? ' plan-item-reserved' : ''));
+
+  const rail = el('div', 'plan-rail');
+  rail.appendChild(el('span', 'plan-dot', ''));
+  li.appendChild(rail);
+
+  const body = el('div', 'plan-body');
+
+  const head = el('div', 'plan-head');
+  if (item.time) head.appendChild(el('span', 'plan-time', item.time));
+  const tagLabel = TAG_LABELS[item.tag] ?? item.tag;
+  if (tagLabel) head.appendChild(el('span', 'plan-tag tag-' + (item.tag ?? 'other'), tagLabel));
+  if (isReserved) head.appendChild(el('span', 'plan-reserved-badge', 'Reserved'));
+  body.appendChild(head);
+
+  body.appendChild(el('h3', 'plan-title', item.title ?? ''));
+  if (item.note) body.appendChild(el('p', 'plan-note', item.note));
+
+  const link = mapLink(item.mapUrl, 'Open in Google Maps');
+  if (link) body.appendChild(link);
+
+  const recs = Array.isArray(item.recommendations) ? item.recommendations : [];
+  if (recs.length > 0) {
+    const origin = nearestPrecedingCoords(plan, index, lodging);
+
+    const toggle = el('button', 'rec-toggle');
+    toggle.type = 'button';
+    const panelId = `recs-${index}-${recPanelSeq++}`;
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.setAttribute('aria-controls', panelId);
+    toggle.appendChild(el('span', 'rec-toggle-label', `${recs.length} option${recs.length > 1 ? 's' : ''} — tap to compare`));
+    toggle.appendChild(el('span', 'rec-toggle-chev', '▾'));
+
+    const panel = el('div', 'rec-panel');
+    panel.id = panelId;
+    panel.hidden = true;
+
+    recs.forEach((rec) => {
+      const card = el('div', 'rec-card');
+      card.appendChild(el('h4', 'rec-name', rec?.name ?? ''));
+
+      if (origin) {
+        const dist = formatWalk(haversineMeters(origin.from, rec?.coords));
+        if (dist) {
+          const walk = el('p', 'rec-walk', dist);
+          walk.appendChild(el('span', 'rec-walk-from', ` from ${origin.label}`));
+          card.appendChild(walk);
+        }
+      }
+
+      const pros = Array.isArray(rec?.pros) ? rec.pros : [];
+      if (pros.length) {
+        const ul = el('ul', 'rec-pros');
+        pros.forEach((pro) => {
+          const proLi = el('li', 'rec-pro');
+          proLi.appendChild(el('span', 'rec-mark rec-mark-pro', '+'));
+          proLi.appendChild(el('span', null, pro));
+          ul.appendChild(proLi);
+        });
+        card.appendChild(ul);
+      }
+
+      if (rec?.con) {
+        const con = el('p', 'rec-con');
+        con.appendChild(el('span', 'rec-mark rec-mark-con', '–'));
+        con.appendChild(el('span', null, rec.con));
+        card.appendChild(con);
+      }
+
+      const recLink = mapLink(rec?.mapUrl, 'Map');
+      if (recLink) card.appendChild(recLink);
+
+      panel.appendChild(card);
+    });
+
+    toggle.addEventListener('click', () => {
+      const open = panel.hidden;
+      panel.hidden = !open;
+      toggle.setAttribute('aria-expanded', String(open));
+      toggle.classList.toggle('is-open', open);
+    });
+
+    body.appendChild(toggle);
+    body.appendChild(panel);
+  }
+
+  li.appendChild(body);
+  return li;
+}
+
+/** Build the lodging card (with optional breakfast note + map link). */
+function buildLodging(lodging) {
+  if (!lodging) return null;
+  const card = el('section', 'lodging-card');
+  card.appendChild(el('p', 'lodging-kicker', 'Where you sleep'));
+  card.appendChild(el('h3', 'lodging-name', lodging.name ?? ''));
+  if (lodging.address) card.appendChild(el('p', 'lodging-address', lodging.address));
+  if (lodging.breakfast) {
+    const bf = el('p', 'lodging-breakfast');
+    bf.appendChild(el('span', 'lodging-breakfast-label', 'Breakfast: '));
+    bf.appendChild(el('span', null, lodging.breakfast));
+    card.appendChild(bf);
+  }
+  const link = mapLink(lodging.mapUrl, 'Open in Google Maps');
+  if (link) card.appendChild(link);
+  return card;
+}
+
+/**
+ * Build the full day-view DOM for a single day object in one of three framings
+ * (anticipation / plan / reminisce). Pure DOM construction — XSS-safe by
+ * construction. Returns { node, start, stop }; the caller mounts node and calls
+ * start() (begin the slideshow timer) / stop() (cleanup before re-render).
+ *
+ * @param {object|null} day a day object from getDay()/getDays(), or null
+ * @param {'anticipation'|'plan'|'reminisce'} [framingName='plan']
+ * @returns {{ node: HTMLElement, start: () => void, stop: () => void }}
+ */
+export function renderDay(day, framingName = 'plan') {
+  const framing = FRAMINGS[framingName] ?? FRAMINGS.plan;
+
+  const view = el('article', 'day-view ' + framing.className);
+
+  // Absent day (e.g. the unauthored Jun 16–23 gap) — graceful empty state.
+  if (!day || typeof day !== 'object') {
+    view.classList.add('day-view-empty');
+    const ph = el('div', 'day-placeholder');
+    ph.appendChild(el('p', 'placeholder-kicker', framing.kicker));
+    ph.appendChild(el('h2', 'placeholder-title', 'Details coming'));
+    ph.appendChild(el('p', 'placeholder-note', "This day isn't planned out yet — check back soon."));
+    view.appendChild(ph);
+    return { node: view, start() {}, stop() {} };
+  }
+
+  const plan = Array.isArray(day.plan) ? day.plan : [];
+  const photos = Array.isArray(day.photos) ? day.photos : [];
+  const isSparse = plan.length === 0 && photos.length === 0;
+
+  // Hero slideshow on top.
+  const hero = buildHero(photos, framing);
+  view.appendChild(hero.node);
+
+  // Title block (kicker varies by framing).
+  const headerBlock = el('header', 'day-header');
+  const kickerRow = el('div', 'day-kicker-row');
+  kickerRow.appendChild(el('span', 'day-kicker', framing.kicker));
+  if (day.dayNumber != null) kickerRow.appendChild(el('span', 'day-number', `Day ${day.dayNumber}`));
+  if (day.base) kickerRow.appendChild(el('span', 'day-base', day.base));
+  headerBlock.appendChild(kickerRow);
+  headerBlock.appendChild(el('h1', 'day-title', day.title ?? '(untitled day)'));
+  if (day.intro) {
+    const intro = el('p', 'day-intro');
+    if (framing.leadPrefix) intro.appendChild(el('span', 'day-intro-prefix', framing.leadPrefix + ' '));
+    intro.appendChild(el('span', null, day.intro));
+    headerBlock.appendChild(intro);
+  }
+  view.appendChild(headerBlock);
+
+  // Sparse day: "details coming" placeholder, then stop (no plan/lodging).
+  if (isSparse) {
+    const ph = el('div', 'day-placeholder');
+    ph.appendChild(el('h2', 'placeholder-title', 'Details coming'));
+    ph.appendChild(el('p', 'placeholder-note', "The plan for this day isn't filled in yet."));
+    view.appendChild(ph);
+    return { node: view, start: hero.start, stop: hero.stop };
+  }
+
+  // Reminisce framing: a soft seam for the future photo gallery (NOT built here).
+  if (framingName === 'reminisce') {
+    const seam = el('section', 'reminisce-seam');
+    seam.setAttribute('aria-label', 'Your photos from this day will appear here');
+    seam.appendChild(el('p', 'seam-kicker', 'Your photos'));
+    seam.appendChild(el('p', 'seam-note', 'Your trip photos from this day will live here. For now, here’s how the day was planned.'));
+    view.appendChild(seam);
+  }
+
+  // The plan list.
+  if (plan.length) {
+    const planSection = el('section', 'plan-section');
+    planSection.appendChild(el('h2', 'section-heading', framing.planHeading));
+    const list = el('ol', 'plan-list');
+    plan.forEach((item, i) => {
+      list.appendChild(buildPlanItem(item, i, plan, day.lodging ?? null));
+    });
+    planSection.appendChild(list);
+    view.appendChild(planSection);
+  }
+
+  // Lodging card.
+  const lodging = buildLodging(day.lodging ?? null);
+  if (lodging) view.appendChild(lodging);
+
+  return { node: view, start: hero.start, stop: hero.stop };
+}
+
+// ---------------------------------------------------------------------------
+// Mount seam — downstream date-time-aware-navigation will decide which day +
+// framing to show. renderInto() is kept as the public mount point (the API
+// contract downstream tasks depend on). For now it renders one representative
+// day so the screen is viewable.
+// ---------------------------------------------------------------------------
+
+// Tracks the live day-view controller so a re-render can stop its slideshow
+// timer before mounting a new one (no orphaned intervals).
+let activeDayView = null;
+
+/**
+ * Mount a day-view into a root element. Defaults to the first fully-populated
+ * day (Jun 24) in 'plan' framing so the screen renders standalone. Clears the
+ * previous render and stops its slideshow timer first.
+ * @param {HTMLElement} rootEl
+ * @param {object|null} [day] day object (defaults to getDay("2026-06-24"))
+ * @param {'anticipation'|'plan'|'reminisce'} [framing='plan']
+ */
+export function renderInto(rootEl, day = getDay('2026-06-24'), framing = 'plan') {
   if (!rootEl) {
     console.warn('[app] renderInto called without a root element.');
     return;
   }
-  const trip = getTrip();
-  const days = getDays();
+
+  if (activeDayView) {
+    activeDayView.stop();
+    activeDayView = null;
+  }
 
   rootEl.textContent = ''; // clear without innerHTML
 
-  const wrap = el('div', 'scaffold');
-
-  // Header
-  const header = el('header', 'scaffold-header');
-  header.appendChild(el('h1', 'scaffold-title', trip.title));
-  header.appendChild(
-    el('p', 'scaffold-sub', `${trip.start} → ${trip.end} · ${trip.travelers.join(', ')}`),
-  );
-  header.appendChild(
-    el('p', 'scaffold-note', `${days.length} day(s) authored (Jun 16–23 are not yet present — that's expected).`),
-  );
-  wrap.appendChild(header);
-
-  // Day cards
-  const list = el('div', 'scaffold-list');
-  days.forEach((day) => {
-    const card = el('article', 'scaffold-day');
-
-    const top = el('div', 'scaffold-day-top');
-    top.appendChild(el('span', 'scaffold-daynum', `Day ${day.dayNumber ?? '?'}`));
-    top.appendChild(el('span', 'scaffold-date', day.date));
-    top.appendChild(el('span', 'scaffold-base', day.base ?? ''));
-    card.appendChild(top);
-
-    card.appendChild(el('h2', 'scaffold-day-title', day.title ?? '(untitled)'));
-
-    const planCount = Array.isArray(day.plan) ? day.plan.length : 0;
-    const photoCount = Array.isArray(day.photos) ? day.photos.length : 0;
-    card.appendChild(
-      el('p', 'scaffold-counts', `${planCount} plan item(s) · ${photoCount} photo(s)`),
-    );
-
-    list.appendChild(card);
-  });
-  wrap.appendChild(list);
-
-  rootEl.appendChild(wrap);
-
-  // Console proof for the verification step.
-  console.info(`[app] Rendered ${days.length} day(s).`, days.map((d) => `${d.date} (Day ${d.dayNumber})`));
+  const view = renderDay(day, framing);
+  rootEl.appendChild(view.node);
+  view.start();
+  activeDayView = view;
 }
 
 // ---------------------------------------------------------------------------

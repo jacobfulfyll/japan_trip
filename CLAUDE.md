@@ -22,11 +22,11 @@ The site renders from `data/days.js`. **10 days are authored (Jun 24 – Jul 3).
 | File | Purpose |
 |------|---------|
 | `data/days.js` | **Single source of trip content** — ES module exporting `TRIP` + `DAYS`. Editing the trip = editing this file. |
-| `app.js` | Render pipeline: imports `data/days.js`, validates (warn-and-skip), deep-freezes, derives `dayNumber`, exposes the day API + `renderInto`. |
+| `app.js` | Render pipeline: imports `data/days.js`, validates (warn-and-skip), deep-freezes, derives `dayNumber`, exposes the day API + `renderDay` + `renderInto`. |
 | `index.html` | Slim shell — ukiyo-e theme CSS + `<main id="app-root">` + `<script type="module" src="app.js">` + PWA wiring (manifest link, iOS meta, SW registration). |
 | `sw.js` | Hand-written service worker (no build step) — precaches the app shell into `app-shell-v1`, runtime-caches photos/fonts into `runtime-v1`. Bump `CACHE_VERSION` when shell files change. |
 | `manifest.json` | Web app manifest (install-to-home-screen). Relative `start_url`/`scope` for the `/japan_trip/` Pages subpath. Icons live in `img/`. |
-| `app.test.js` | 44 `node:test` cases for the data layer. Run with `node --test`. |
+| `app.test.js` | 97 `node:test` cases for the data and render layers. Run with `node --test`. |
 | `sw.test.js` | `node:test` cases for the service worker (vm-sandboxed) + manifest/index.html PWA wiring. |
 | `README.md` | How to edit the trip (schema + example), the `app.js` API, how to preview, deploy. |
 | `CHANGELOG.md` | Keep-a-Changelog history. |
@@ -88,8 +88,10 @@ Conventions baked into the data: reservations are plan items with `reserved:true
 - `getDays()` → fresh array of validated, date-sorted, deeply-frozen days (each with derived `dayNumber`).
 - `getDay(iso)` → the day for an ISO date, or `null` if absent (e.g. the Jun 16–23 gap).
 - `getDayByNumber(n)` → day by derived `dayNumber`, or `null` (non-finite input → `null`).
-- `renderInto(rootEl)` → proof-of-pipeline render (day-view-screen will replace this).
-- `buildValidatedDays(days, trip)` / `deriveDayNumber(iso, startIso)` → exported for tests.
+- `renderDay(day, framingName = 'plan')` → returns `{ node, start, stop }`. Mount `node`, call `start()` to begin the hero slideshow, call `stop()` before discarding. Framings: `'anticipation'`, `'plan'`, `'reminisce'`. Null/absent day renders a placeholder.
+- `renderInto(rootEl, day?, framing?)` → mounts a day view (defaults to Jun 24, `'plan'`). Stops any prior view's slideshow before mounting. Backward compatible.
+- `buildValidatedDays(days, trip)` → exported for tests. (`deriveDayNumber` is internal — not exported.)
+- Pure helpers exported for testing: `haversineMeters(a, b)`, `formatWalk(meters)`, `safeUrl(url)`, `nearestPrecedingCoords(plan, index, lodging)`.
 
 Returns are **deeply frozen and copy-safe** — callers cannot corrupt shared module state.
 
@@ -99,10 +101,10 @@ Returns are **deeply frozen and copy-safe** — callers cannot corrupt shared mo
 - **Bump `CACHE_VERSION` in `sw.js` whenever you change a precached shell file** (index.html, app.js, data/days.js, manifest, icons). With no build step this is the only cache-busting mechanism — skip it and installed users get stale files until the old cache happens to evict.
 - All trip data lives in `data/days.js`; editing a day should stay a localized data edit.
 - Render is **XSS-safe by construction**: data reaches the DOM via `textContent` / `createElement` only — never `innerHTML` with interpolated data. Preserve this in downstream screens.
-- When wiring data URLs (`photos[].url`, `mapUrl`) into `href`/`src` in screen tasks (and especially once v2 adds user-uploaded photos), validate the scheme (reject `javascript:`/`data:`) and add `rel="noopener noreferrer"` on external links.
+- When wiring data URLs (`photos[].url`, `mapUrl`) into `href`/`src` in screen tasks (and especially once v2 adds user-uploaded photos), validate the scheme through `safeUrl()` (rejects `javascript:`/`data:`/etc., allows http(s) + relative) and add `rel="noopener noreferrer"` on external links. **Gotcha:** `safeUrl` strips ASCII tab/LF/CR *before* the scheme check — the WHATWG URL parser strips those characters, so `java\tscript:` would otherwise re-form into a live `javascript:` href. Keep that stripping if you touch `safeUrl`.
 - Validation is non-fatal: malformed/absent days warn-and-skip; the site must always render whatever is valid (partial-trip safe).
 - CSS classes use kebab-case; the ukiyo-e theme tokens live in `:root` in `index.html`.
-- Tests are dependency-free (`node:test` + `node:assert/strict`); the DOM `renderInto` is verified via a manual/headless check, not jsdom.
+- Tests are dependency-free (`node:test` + `node:assert/strict`). Pure logic (e.g. `haversineMeters`, `safeUrl`) is unit-tested directly. Render functions (`renderDay`) are tested with a small hand-rolled DOM stub in `app.test.js` (no jsdom) — reuse that stub for downstream screens; real-browser behavior (crossfade, layout) is covered by the VERIFY-APP stage, not unit tests.
 
 ## Known Issues
 
