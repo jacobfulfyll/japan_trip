@@ -67,3 +67,7 @@
 - [ ] (optional) reserve-jul2-farewell-dinner: IF you want a special farewell dinner Jul 2 (Ningyocho Imahan or Sushi Fukunaga) — reserve ~2–4 weeks ahead
 - [ ] add-recommendation-coords: Populate `recommendations[].coords` in data/days.js so day-view walking distances appear (discovered during IMPLEMENT of day-view-screen)
   > 0 of 49 recommendations across all 10 days have `coords`. The schema allows it and day-view computes a haversine walking distance per option, but with no rec coords every distance is gracefully omitted — the feature is invisible against current data. Pure data-authoring task (add `coords:{lat,lng}` to rec objects); the render path is already built + verified with synthetic coords.
+- [ ] sw-runtime-cache-cap: Add an eviction cap (count/age) to the service worker `runtime-v1` photo cache (discovered during offline-and-installable)
+  > sw.js staleWhileRevalidate grows unbounded. Fine for the small Wikimedia hero set today, but a real device-storage concern once v2 adds user-uploaded photos. Revisit alongside reminisce-photo-gallery / photo-upload-flow.
+- [ ] upgrade-deploy-pages-actions: Bump deploy-pages.yml `upload-pages-artifact` and `deploy-pages` from @v1 to @v3 (discovered during offline-and-installable; also in CLAUDE.md Known Issues)
+  > @v1 actions are deprecated. Low-risk mechanical bump; verify a Pages deploy still succeeds after.
