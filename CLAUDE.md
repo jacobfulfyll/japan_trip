@@ -14,6 +14,7 @@ The site renders from `data/days.js`. **10 days are authored (Jun 24 – Jul 3).
 - Content lives in a single data module (`data/days.js`); `app.js` validates and renders it.
 - Tests via Node's built-in runner (`node:test`) — **no npm, no dependencies**.
 - Fonts: Manrope + Playfair Display (Google Fonts). Theme: ukiyo-e / washi / Great Wave.
+- **PWA**: installable + works offline via a hand-written service worker (`sw.js`) + `manifest.json` — no PWA tooling/build.
 - GitHub Pages deployment.
 
 ## Key Files
@@ -22,8 +23,11 @@ The site renders from `data/days.js`. **10 days are authored (Jun 24 – Jul 3).
 |------|---------|
 | `data/days.js` | **Single source of trip content** — ES module exporting `TRIP` + `DAYS`. Editing the trip = editing this file. |
 | `app.js` | Render pipeline: imports `data/days.js`, validates (warn-and-skip), deep-freezes, derives `dayNumber`, exposes the day API + `renderInto`. |
-| `index.html` | Slim shell — ukiyo-e theme CSS + `<main id="app-root">` + `<script type="module" src="app.js">`. |
+| `index.html` | Slim shell — ukiyo-e theme CSS + `<main id="app-root">` + `<script type="module" src="app.js">` + PWA wiring (manifest link, iOS meta, SW registration). |
+| `sw.js` | Hand-written service worker (no build step) — precaches the app shell into `app-shell-v1`, runtime-caches photos/fonts into `runtime-v1`. Bump `CACHE_VERSION` when shell files change. |
+| `manifest.json` | Web app manifest (install-to-home-screen). Relative `start_url`/`scope` for the `/japan_trip/` Pages subpath. Icons live in `img/`. |
 | `app.test.js` | 44 `node:test` cases for the data layer. Run with `node --test`. |
+| `sw.test.js` | `node:test` cases for the service worker (vm-sandboxed) + manifest/index.html PWA wiring. |
 | `README.md` | How to edit the trip (schema + example), the `app.js` API, how to preview, deploy. |
 | `CHANGELOG.md` | Keep-a-Changelog history. |
 | `deploy-pages.yml` | GitHub Actions workflow for Pages deployment. |
@@ -92,6 +96,7 @@ Returns are **deeply frozen and copy-safe** — callers cannot corrupt shared mo
 ## Conventions
 
 - **No build step, no dependencies.** Keep it plain HTML/CSS/ES modules.
+- **Bump `CACHE_VERSION` in `sw.js` whenever you change a precached shell file** (index.html, app.js, data/days.js, manifest, icons). With no build step this is the only cache-busting mechanism — skip it and installed users get stale files until the old cache happens to evict.
 - All trip data lives in `data/days.js`; editing a day should stay a localized data edit.
 - Render is **XSS-safe by construction**: data reaches the DOM via `textContent` / `createElement` only — never `innerHTML` with interpolated data. Preserve this in downstream screens.
 - When wiring data URLs (`photos[].url`, `mapUrl`) into `href`/`src` in screen tasks (and especially once v2 adds user-uploaded photos), validate the scheme (reject `javascript:`/`data:`) and add `rel="noopener noreferrer"` on external links.

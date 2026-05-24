@@ -4,6 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Newly Weds in Japan!</title>
+
+    <!-- PWA: installable + offline (service worker registered before </body>). -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="img/icon-192.png" type="image/png">
+    <meta name="theme-color" content="#0b3d66">
+    <link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Japan Trip">
+
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;family=Playfair+Display:wght@600;700&amp;display=swap" rel="stylesheet">
@@ -1018,5 +1029,22 @@
     <main id="app-root"></main>
 
     <script type="module" src="app.js"></script>
+
+    <!--
+      Service worker registration (makes the site installable + offline-capable).
+      Plain (non-module) script; a relative path so it resolves under the GitHub
+      Pages project subpath (/japan_trip/) as well as the domain root. Guarded by
+      a feature check, and registered on window load so it never competes with
+      first paint.
+    -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker.register('sw.js').catch(function (err) {
+                    console.warn('[sw] registration failed:', err);
+                });
+            });
+        }
+    </script>
 </body>
 </html>

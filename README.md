@@ -151,6 +151,51 @@ returns a new array each call, so you can sort/filter the result freely.
 that just proves the data pipeline works end-to-end. The `day-view-screen` task
 will replace it with the real UI; the data API above stays put.
 
+## PWA — install to your phone and use offline
+
+The site ships a service worker and web app manifest, so it works as a
+Progressive Web App.
+
+### Install to your home screen
+
+- **iOS Safari:** tap the Share button → "Add to Home Screen".
+- **Android Chrome:** tap the browser menu (⋮) → "Add to Home screen", or accept
+  the install prompt if Chrome offers one automatically.
+
+Once installed it opens full-screen (no browser chrome) and launches instantly
+from the icon.
+
+### What works offline
+
+The app shell — `index.html`, `app.js`, `data/days.js`, and icons — is precached
+on first visit, so the full itinerary loads with no network. Fonts and hero photos
+are cached the first time you load them (stale-while-revalidate), so
+previously-viewed photos (and the fonts) also load offline afterward. Google Maps
+links still require a network connection.
+
+### Maintainer: bump `CACHE_VERSION` when you ship changes
+
+There is no build step, so there is no automatic cache-busting. When you change
+**any** precached shell file — `index.html`, `app.js`, `data/days.js`,
+`manifest.json`, or any icon in `img/` — you must manually bump `CACHE_VERSION`
+at the top of `sw.js`:
+
+```js
+// sw.js
+const CACHE_VERSION = 'v2';  // was 'v1' — increment whenever shell files change
+```
+
+On the next visit the old caches are deleted and the fresh files install. Skip
+this step and users on the old cache will not see your changes until the browser
+evicts the cache on its own.
+
+### Service workers require HTTPS (or localhost)
+
+Service workers only register on a secure origin. They work on the live GitHub
+Pages site (`https://`) and on `localhost` (`http://localhost:8000`). They will
+**not** register over `file://` — consistent with the ES-module constraint
+described in "Preview locally" below.
+
 ## Preview locally
 
 ES modules won't load over `file://` — you need an HTTP origin. Any static server
