@@ -1,87 +1,105 @@
-# Japan Trip Planning Guide
+# Japan Trip Companion
 
-Static HTML site for planning a 16-day Japan trip for 4 travelers (2 couples). Deployed via GitHub Pages.
+Data-driven static site for a 16-day Japan trip — a daily companion for 4 travelers (2 couples). Deployed via GitHub Pages. No build step.
 
 ## Trip Status
 
-**Flights booked: June 16 - July 3, 2026 (in/out of Tokyo)**
+**Flights booked: June 16 - July 3, 2026 (in/out of Tokyo).**
 
-The site currently shows 3 itinerary options as a comparison guide. The booked dates align closest with Option 3 (Hokkaido Summer). Note: `index.html` still shows pre-booking dates (Jun 19 - Jul 4) that need updating to match actual flights (Jun 16 - Jul 3).
+The site renders from `data/days.js`. **10 days are authored (Jun 24 – Jul 3).** The **Jun 16–23** leg (travel Jun 16–17, Tokyo Jun 17–22, Hakone Jun 22–24) is not in the data yet — it's owed by a friend and gets added later. The scaffold renders the partial set gracefully (absent days return `null`, no crash). `dayNumber` is derived from `TRIP.start` (Jun 16 = Day 1), so authored days are Day 9 → Day 18.
 
 ## Tech Stack
 
-- Static HTML with embedded CSS (no JavaScript, no build step)
-- GitHub Pages deployment
-- System fonts only (`'Segoe UI', Tahoma, Geneva, Verdana, sans-serif`)
+- Static site, **no build step**: plain HTML/CSS + ES modules served as files.
+- Content lives in a single data module (`data/days.js`); `app.js` validates and renders it.
+- Tests via Node's built-in runner (`node:test`) — **no npm, no dependencies**.
+- Fonts: Manrope + Playfair Display (Google Fonts). Theme: ukiyo-e / washi / Great Wave.
+- GitHub Pages deployment.
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `index.html` | Main (only) page — all content and styles in one 843-line file |
-| `deploy-pages.yml` | GitHub Actions workflow for Pages deployment |
+| `data/days.js` | **Single source of trip content** — ES module exporting `TRIP` + `DAYS`. Editing the trip = editing this file. |
+| `app.js` | Render pipeline: imports `data/days.js`, validates (warn-and-skip), deep-freezes, derives `dayNumber`, exposes the day API + `renderInto`. |
+| `index.html` | Slim shell — ukiyo-e theme CSS + `<main id="app-root">` + `<script type="module" src="app.js">`. |
+| `app.test.js` | 44 `node:test` cases for the data layer. Run with `node --test`. |
+| `README.md` | How to edit the trip (schema + example), the `app.js` API, how to preview, deploy. |
+| `CHANGELOG.md` | Keep-a-Changelog history. |
+| `deploy-pages.yml` | GitHub Actions workflow for Pages deployment. |
 
 ## Commands
 
-No build or test commands — open `index.html` in a browser to preview.
+```bash
+node --test                 # run the test suite (no npm needed)
+python3 -m http.server 8000 # preview locally, then open http://localhost:8000
+```
+
+ES modules require an HTTP origin — opening `index.html` via `file://` will NOT load the modules.
 
 ## Deployment
 
 Pushes to `main` trigger automatic GitHub Pages deployment via `deploy-pages.yml`.
 Repo: https://github.com/jacobfulfyll/japan_trip
 
-Note: `deploy-pages.yml` lives at repo root (not `.github/workflows/`). The entire repo root is uploaded as the Pages artifact — all files are publicly served.
+Note: `deploy-pages.yml` lives at repo root (not `.github/workflows/`). The entire repo root is uploaded as the Pages artifact — **all files are publicly served** (keep secrets out of the repo).
 
 ## Architecture
 
-Single-file architecture. All CSS is in a `<style>` block in `<head>`. The HTML structure is:
+Data-driven, single render pipeline:
 
 ```
-<div class="container">        ← max-width 1200px wrapper
-  <div class="hero">           ← gradient banner with title
-  <div class="nav">            ← sticky anchor navigation
-  <div class="content">        ← padding wrapper
-    <section id="option1">     ← Trip 1: Cherry Blossom Classic (spring theme)
-    <section id="option2">     ← Trip 2: Tohoku Frontier (default theme)
-    <section id="option3">     ← Trip 3: Hokkaido Summer (summer theme)
-    <section id="comparison">  ← Comparison table + decision guide
+data/days.js   ← TRIP + DAYS (content; the only file you edit to change the trip)
+     │ import
+     ▼
+app.js         ← validate → deep-freeze → derive dayNumber → public API + renderInto()
+     │ <script type="module">
+     ▼
+index.html     ← slim shell: theme CSS + <main id="app-root"> (render target)
 ```
 
-### Trip Card Structure (repeated per option)
+### Data schema (`data/days.js`)
 
-Each trip section follows this exact template:
+```js
+export const TRIP = { title, start, end, travelers: [..], eveningWindow: { startHour, endHour } };
+export const DAYS = [{
+  date,                       // ISO "YYYY-MM-DD"; dayNumber is DERIVED (do NOT author it)
+  base, title, intro,
+  spend,                      // optional
+  photos: [{ url, alt, credit }],          // [] = none
+  lodging: { name, address, mapUrl, coords?, breakfast? } | null,
+  prep: [".."],               // free-text; powers the evening "Prep for tomorrow"
+  plan: [{
+    time?, tag, title, note?, mapUrl?, coords?, reserved?,   // reservations = reserved:true
+    recommendations: [{ name, pros: [".."], con, mapUrl?, coords?, address? }],  // MAX 4 per item
+  }],
+}];
 ```
-.trip-card[.spring|.summer]
-  .trip-header > h2.trip-title + .dates
-  .overview > destinations + info-boxes (dates, weather)
-  .pros-cons > .pros (5 items) + .cons (5 items)
-  .budget-grid > 3x .budget-card (Budget / Mid / Luxury)
-  .info-box (key insight)
-```
 
-### Color Theme System
+Conventions baked into the data: reservations are plan items with `reserved:true` (no separate field); there is **no `status` field** — a sparse day = empty `plan`/`photos`. See `README.md` for an annotated example and field-by-field docs.
 
-Themes cascade via modifier class on `.trip-card`:
-- **Default (Option 2):** `#667eea` indigo / `#764ba2` purple
-- **`.spring` (Option 1):** `#ff6b9d` pink / `#c44569` rose
-- **`.summer` (Option 3):** `#4ecdc4` teal / `#44a08d` green-teal
-- **Budget tiers:** Budget = default indigo, Mid = `#f39c12` amber, Luxury = `#9b59b6` violet
+### `app.js` public API (downstream screen tasks build on this)
+
+- `getTrip()` → frozen `TRIP`.
+- `getDays()` → fresh array of validated, date-sorted, deeply-frozen days (each with derived `dayNumber`).
+- `getDay(iso)` → the day for an ISO date, or `null` if absent (e.g. the Jun 16–23 gap).
+- `getDayByNumber(n)` → day by derived `dayNumber`, or `null` (non-finite input → `null`).
+- `renderInto(rootEl)` → proof-of-pipeline render (day-view-screen will replace this).
+- `buildValidatedDays(days, trip)` / `deriveDayNumber(iso, startIso)` → exported for tests.
+
+Returns are **deeply frozen and copy-safe** — callers cannot corrupt shared module state.
 
 ## Conventions
 
-- CSS classes use kebab-case (`trip-card`, `budget-grid`, `destination-tag`)
-- Section IDs: `#option1`, `#option2`, `#option3`, `#comparison`
-- Layout: Flexbox for rows (nav, headers, tags), CSS Grid for 2D layouts (pros-cons, budgets, activities)
-- Single responsive breakpoint at `760px`; budget/activity grids use `auto-fit/minmax` for automatic responsiveness
-- Mobile tab nav (< 760px): horizontal scroll strip with hidden scrollbar (`flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none`), active tab auto-scrolls into view via `scrollIntoView`
-- Sound: `playSwish()` plays a synthesized swish via Web Audio API on tab switch (always on, no toggle)
-- Info-box variants use inline style overrides rather than modifier classes
-- Hover effects: `translateY(-3px to -5px)` + shadow changes, all using `transition: all 0.3s`
-- Pros/cons lists use `::before` pseudo-elements for check/cross markers
-- Budget line items are `<p>` tags with `<strong>` labels (not structured data)
+- **No build step, no dependencies.** Keep it plain HTML/CSS/ES modules.
+- All trip data lives in `data/days.js`; editing a day should stay a localized data edit.
+- Render is **XSS-safe by construction**: data reaches the DOM via `textContent` / `createElement` only — never `innerHTML` with interpolated data. Preserve this in downstream screens.
+- When wiring data URLs (`photos[].url`, `mapUrl`) into `href`/`src` in screen tasks (and especially once v2 adds user-uploaded photos), validate the scheme (reject `javascript:`/`data:`) and add `rel="noopener noreferrer"` on external links.
+- Validation is non-fatal: malformed/absent days warn-and-skip; the site must always render whatever is valid (partial-trip safe).
+- CSS classes use kebab-case; the ukiyo-e theme tokens live in `:root` in `index.html`.
+- Tests are dependency-free (`node:test` + `node:assert/strict`); the DOM `renderInto` is verified via a manual/headless check, not jsdom.
 
 ## Known Issues
 
-- Option 3 dates in `index.html` show Jun 19 - Jul 4 but booked flights are Jun 16 - Jul 3 (appears in nav, dates badge, info-box, comparison table)
-- Option 3 nav link uses cherry blossom emoji `🌸` instead of a summer-appropriate emoji
-- `deploy-pages.yml` uses `@v1` for `upload-pages-artifact` and `deploy-pages` (current is `@v3`)
+- The **Jun 16–23 days** are not yet authored in `data/days.js` (content owed) — rendered as an absent range by design.
+- `deploy-pages.yml` uses `@v1` for `upload-pages-artifact` and `deploy-pages` (current is `@v3`).
