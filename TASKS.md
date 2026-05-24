@@ -2,18 +2,6 @@
 
 ## Active Tasks
 
-### data-model-and-scaffold
-**Task**: Scaffold the no-build site (slim index.html + app.js render pipeline) around the EXISTING data/days.js
-**Pipeline**: code-workflow
-**Branch**: task/data-model-and-scaffold
-**Worktree**: .worktree/data-model-and-scaffold
-**Base**: main
-**Started**: 2026-05-24
-**Files**:
-- NEW: app.js
-- MOD: index.html
-- EXISTS: data/days.js (validate, don't recreate)
-
 ---
 
 ## Backlog
