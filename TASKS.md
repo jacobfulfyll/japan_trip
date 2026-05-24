@@ -2,6 +2,18 @@
 
 ## Active Tasks
 
+### offline-and-installable
+**Task**: Service worker + manifest, install to home screen, asset + photo caches
+**Pipeline**: code-workflow
+**Branch**: task/offline-and-installable
+**Worktree**: .worktree/offline-and-installable
+**Base**: main
+**Started**: 2026-05-24
+**Files**:
+- NEW: manifest.json
+- NEW: sw.js
+- MOD: index.html
+
 ---
 
 ## Backlog
@@ -13,8 +25,6 @@
   files: app.js (MOD), index.html (MOD)
 - [ ] trip-overview-home: Pre-trip home with countdown + tappable all-days index [P2] [moderate] [tier: opus:medium] [depends: data-model-and-scaffold] [conflicts: day-view-screen, date-time-aware-navigation] [code] [planned]
   files: index.html (MOD), app.js (MOD)
-- [ ] offline-and-installable: Service worker + manifest, install to home screen, asset + photo caches [P2] [moderate] [tier: opus:medium] [depends: data-model-and-scaffold] [code] [planned]
-  files: sw.js (NEW), manifest.json (NEW), index.html (MOD)
 - [ ] time-travel-test-mode: Fake the clock (override `now`) + a test page to verify time-of-day behavior on a phone [P2] [moderate] [tier: opus:medium] [depends: date-time-aware-navigation] [code] [planned]
   files: app.js (MOD), test.html (NEW), index.html (MOD)
 
