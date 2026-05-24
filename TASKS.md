@@ -2,20 +2,6 @@
 
 ## Active Tasks
 
-### offline-and-installable
-**Task**: Service worker + manifest, install to home screen, asset + photo caches
-**Pipeline**: code-workflow
-**Branch**: task/offline-and-installable
-**Worktree**: .worktree/offline-and-installable
-**Base**: main
-**Started**: 2026-05-24
-**Files**:
-- NEW: manifest.json
-- NEW: sw.js
-- MOD: index.html
-
----
-
 ### day-view-screen
 **Task**: Hype-photo hero + scroll-down practical plan, three lifecycle framings
 **Pipeline**: code-workflow
