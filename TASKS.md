@@ -2,13 +2,22 @@
 
 ## Active Tasks
 
+### date-time-aware-navigation
+**Task**: Lifecycle framing, smart landing, forward/back nav, evening "Prep for tomorrow" button
+**Pipeline**: code-workflow
+**Branch**: task/date-time-aware-navigation
+**Worktree**: .worktree/date-time-aware-navigation
+**Base**: main
+**Started**: 2026-05-24
+**Files**:
+- MOD: app.js
+- MOD: index.html
+
 ---
 
 ## Backlog
 
 ### Static Companion (v1 — ship before Jun 16)
-- [ ] date-time-aware-navigation: Lifecycle framing, smart landing, forward/back nav, evening "Prep for tomorrow" button [P1] [complex] [tier: opus:high] [depends: data-model-and-scaffold, day-view-screen] [conflicts: day-view-screen, trip-overview-home] [code] [planned]
-  files: app.js (MOD), index.html (MOD)
 - [ ] trip-overview-home: Pre-trip home with countdown + tappable all-days index [P2] [moderate] [tier: opus:medium] [depends: data-model-and-scaffold] [conflicts: day-view-screen, date-time-aware-navigation] [code] [planned]
   files: index.html (MOD), app.js (MOD)
 - [ ] time-travel-test-mode: Fake the clock (override `now`) + a test page to verify time-of-day behavior on a phone [P2] [moderate] [tier: opus:medium] [depends: date-time-aware-navigation] [code] [planned]
