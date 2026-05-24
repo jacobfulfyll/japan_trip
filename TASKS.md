@@ -65,3 +65,5 @@
 - [ ] reserve-jul2-couples-massage: Book the couples massage at SPA KIOI by Swiss Perfection (30F, Prince Gallery) for Jul 2 — phone/email, ahead
 - [ ] reserve-jul3-narita-express: Reserve Narita Express (N'EX) seats Tokyo Station → Narita for Jul 3 (~1 PM, for the 5:35 PM flight)
 - [ ] (optional) reserve-jul2-farewell-dinner: IF you want a special farewell dinner Jul 2 (Ningyocho Imahan or Sushi Fukunaga) — reserve ~2–4 weeks ahead
+- [ ] add-recommendation-coords: Populate `recommendations[].coords` in data/days.js so day-view walking distances appear (discovered during IMPLEMENT of day-view-screen)
+  > 0 of 49 recommendations across all 10 days have `coords`. The schema allows it and day-view computes a haversine walking distance per option, but with no rec coords every distance is gracefully omitted — the feature is invisible against current data. Pure data-authoring task (add `coords:{lat,lng}` to rec objects); the render path is already built + verified with synthetic coords.
