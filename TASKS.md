@@ -2,17 +2,6 @@
 
 ## Active Tasks
 
-### day-view-screen
-**Task**: Hype-photo hero + scroll-down practical plan, three lifecycle framings
-**Pipeline**: code-workflow
-**Branch**: task/day-view-screen
-**Worktree**: .worktree/day-view-screen
-**Base**: main
-**Started**: 2026-05-24
-**Files**:
-- MOD: index.html
-- MOD: app.js
-
 ---
 
 ## Backlog
