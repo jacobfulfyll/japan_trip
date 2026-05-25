@@ -6,15 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Time-travel test mode** — fake the current date+time to verify time-of-day behavior on demand. **Inert by default**: with no override set, the app uses the real device clock.
+  - Override resolution wires into the existing `getNow`/`setNow` clock seam at module load. Precedence: URL param `?now=<datetime-local>` (e.g. `?now=2026-06-25T22:00`) wins, then localStorage key `jt:now`. A `datetime-local` value is parsed as LOCAL time (the traveler's wall clock). Invalid input is ignored (never throws at load); a URL override is mirrored into localStorage so it survives the app's own internal day-to-day navigation.
+  - Clearing: `?now=clear` (also `off`/`real`/`reset`/empty) wipes the stored override and restores the real clock.
+  - `test.html` — a standalone, on-theme dev page: a `datetime-local` picker, quick presets derived from the trip window (Pre-trip countdown · Kyoto morning Jun 25 9am · Kyoto evening Jun 25 10pm · Post-trip reminisce), a "Launch app in this moment" action (opens `index.html?now=…`, bookmarkable/shareable to a phone), a "Clear override" action, and a live indicator of the active override.
+  - `index.html` shows an unobtrusive "Time-travel mode" banner (with the simulated moment + a "Use real clock" link) whenever an override is active, so you never forget the app is faking time.
+  - New public exports for the override layer: `resolveNowOverride()`, `parseNowOverride(value)`.
 - **Date/time-aware navigation** — the app now knows what time it is and behaves accordingly.
   - **Lifecycle framing**: each day is framed by when you're viewing it — `anticipation` before the day, `plan` on the day itself, `reminisce` afterward. `renderDay` already accepted a framing; now the app picks the right one automatically.
   - **Smart landing**: on open, the app decides what to show. Before the trip: a countdown overview displaying days until departure. During the trip: today's day in its lifecycle framing. After the trip: the last day in `reminisce`.
   - **Pre-trip countdown overview**: a self-contained interim screen shown when the trip hasn't started. The `trip-overview-home` backlog task will replace/enhance it later.
   - **Day-to-day navigation**: a prev/next nav bar pages across all 18 trip dates (Jun 16 – Jul 3). Absent days (the Jun 16–23 gap) render placeholder screens, not crashes. Navigation re-applies the lifecycle framing on each page.
   - **Evening "Prep for tomorrow" button**: during the evening window (9 pm – 4 am, from `TRIP.eveningWindow`) while viewing today's day, a button appears that navigates to tomorrow and surfaces the prep checklist. Hidden when viewing other days, on the last day, and outside the evening window.
-  - **Clock seam** (`getNow` / `setNow`): `getNow()` is the single source of "now" throughout the app. `setNow(fn)` overrides it with a zero-arg function returning a `Date`; `setNow(null)` restores the wall clock. Degrades gracefully if the provider throws or returns a non-Date. Used by the upcoming time-travel test mode.
+  - **Clock seam** (`getNow` / `setNow`): `getNow()` is the single source of "now" throughout the app. `setNow(fn)` overrides it with a zero-arg function returning a `Date`; `setNow(null)` restores the wall clock. Degrades gracefully if the provider throws or returns a non-Date. Used by the time-travel test mode and pinned in tests.
 - New public exports: `mountApp(rootEl)`, `pickLandingView(now?)`, `frameForDay(day, now?)`, `isEveningWindow(now, window?)`, `tripWindowDates(trip?)`, `getNow()`, `setNow(fn|null)`.
-- `CACHE_VERSION` bumped to `v2` in `sw.js` (shell files changed — installed users pick up the update on next visit).
+- `CACHE_VERSION` bumped to `v3` in `sw.js` (shell files changed — installed users pick up the update on next visit). `test.html` is intentionally left out of the precache (dev tool, network-only) but is reachable.
 
 ### Changed
 - `mountApp(rootEl)` is now the primary mount entry point called by the bootstrap. `renderInto(rootEl, day?, framing?)` is retained unchanged for backward compatibility and standalone/test use.

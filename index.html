@@ -763,6 +763,55 @@
         .overview-enter:hover { background: var(--brand-mid); transform: translateY(-1px); }
         .overview-enter:focus-visible { outline: 2px solid var(--brand-glow); outline-offset: 2px; }
 
+        /* --- Time-travel mode indicator (only shown when ?now override is active) */
+        .time-travel-banner {
+            position: fixed;
+            left: 50%;
+            bottom: 14px;
+            transform: translateX(-50%);
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            max-width: calc(100% - 24px);
+            padding: 8px 14px;
+            border-radius: 999px;
+            background: var(--brand-deep);
+            color: #fff;
+            font-size: 0.8rem;
+            font-weight: 600;
+            box-shadow: var(--shadow-md);
+        }
+
+        .time-travel-banner-label {
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            font-size: 0.66rem;
+            font-weight: 800;
+            color: var(--brand-glow);
+            white-space: nowrap;
+        }
+
+        .time-travel-banner-when {
+            font-variant-numeric: tabular-nums;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .time-travel-banner-clear {
+            flex-shrink: 0;
+            color: #fff;
+            text-decoration: underline;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .time-travel-banner-clear:focus-visible {
+            outline: 2px solid var(--brand-glow);
+            outline-offset: 2px;
+        }
+
         /* --- Mobile tuning ----------------------------------------------- */
         @media (max-width: 760px) {
             body { padding: 8px; }

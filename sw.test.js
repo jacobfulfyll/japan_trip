@@ -155,8 +155,8 @@ function makeFetchEvent(request) {
 }
 
 // Shell URLs precached on install (relative paths resolve to these keys).
-const SHELL_CACHE = 'app-shell-v2';
-const RUNTIME_CACHE = 'runtime-v2';
+const SHELL_CACHE = 'app-shell-v3';
+const RUNTIME_CACHE = 'runtime-v3';
 const PRECACHE_URLS = [
   '.',
   'index.html',

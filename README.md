@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← 138 tests for the data/API/nav layer (node --test; 168 with sw.test.js).
+app.test.js    ← 160 tests for the data/API/nav layer (node --test; 190 with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -158,7 +158,7 @@ screens import them.
 | `isEveningWindow(now, window?)` | Returns `true` during the evening window defined by `TRIP.eveningWindow` (default 9 pm – 4 am, midnight-wrapping). Defaults `window` to `getTrip().eveningWindow`. |
 | `tripWindowDates(trip?)` | Returns an ordered ISO array of every date in the trip window (18 dates for Jun 16 – Jul 3). Returns `[]` if the window is inverted or unparseable. Defaults `trip` to `getTrip()`. |
 | `getNow()`              | Returns the current `Date` from the active clock provider. Degrades to `new Date()` if the provider throws or returns a non-Date. |
-| `setNow(fn\|null)`      | Overrides the clock: pass a zero-argument function that returns a `Date` to substitute a fixed or simulated time. Pass `null` to restore the wall clock. Intended for the upcoming time-travel test mode — do not call in production paths. |
+| `setNow(fn\|null)`      | Overrides the clock: pass a zero-argument function that returns a `Date` to substitute a fixed or simulated time. Pass `null` to restore the wall clock. Used by the time-travel test mode and pinned in tests — do not call in production paths. |
 
 **Immutability / copy-safety:** everything the API hands back is deeply frozen,
 so callers can't accidentally corrupt the shared data. `getDays()` additionally
@@ -180,12 +180,49 @@ While viewing today's day during the evening window (9 pm – 4 am, configured i
 
 #### Previewing time-dependent behavior locally
 
-Today's real date is before the trip, so `mountApp` will land on the countdown overview. To preview in-trip behavior:
+Today's real date is before the trip, so `mountApp` lands on the countdown overview. To preview in-trip behavior, use the time-travel test mode described below.
 
-1. Open DevTools console.
-2. Override the clock: `import('/japan_trip/app.js').then(m => m.setNow(() => new Date('2026-06-24T22:00')))` — or call `setNow` if the module is already on `window`.
-3. Reload the page. The app will now treat Jun 24 at 10 pm as "now": the day view opens in `'plan'` framing, and the evening-prep button is visible.
-4. Restore: `setNow(null)`, then reload.
+## Time-travel test mode
+
+The app ships a lightweight override layer so you can fake the current date and time to verify time-of-day behavior on demand. **Inert by default** — with no override set the app uses the real device clock, so it is safe to ship.
+
+### Using `test.html`
+
+Open the test page in your local preview server:
+
+```
+http://localhost:8000/test.html
+```
+
+Pick a moment from the datetime picker or tap one of the quick presets (Pre-trip countdown · Kyoto morning · Kyoto evening · Post-trip reminisce), then click **Launch app in this moment**. The app opens at `index.html?now=<value>` simulating that exact date and time.
+
+The resulting URL is bookmarkable and shareable — you can send it to another phone to preview a specific day and framing.
+
+### URL param
+
+Append `?now=<datetime-local>` to any app URL:
+
+```
+http://localhost:8000/?now=2026-06-25T22:00
+```
+
+The value is parsed as **local time** (the traveler's wall clock). The override is mirrored into `localStorage` (key `jt:now`) so it survives the app's own internal prev/next navigation.
+
+### `localStorage` key
+
+Set `localStorage.setItem('jt:now', '2026-06-25T22:00')` in the console to apply a sticky override that persists across reloads without a URL param.
+
+### Precedence
+
+URL param `?now` wins over `jt:now` in localStorage, which wins over the real clock.
+
+### Clearing the override
+
+Navigate to `?now=clear` (or `?now=off` / `?now=real` / `?now=reset` / `?now=` with an empty value) to wipe the stored override and restore the real clock. The "Clear override" button on `test.html` does the same thing.
+
+### Active-override indicator
+
+When an override is active, `index.html` shows an unobtrusive banner with the simulated moment and a **Use real clock** link, so you can never accidentally forget the app is faking time.
 
 ## PWA — install to your phone and use offline
 
@@ -218,7 +255,7 @@ at the top of `sw.js`:
 
 ```js
 // sw.js
-const CACHE_VERSION = 'v2';  // was 'v1' — increment whenever shell files change
+const CACHE_VERSION = 'v3';  // increment whenever shell files change
 ```
 
 On the next visit the old caches are deleted and the fresh files install. Skip
@@ -251,12 +288,13 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The `app.test.js` suite (138 cases; 168 total alongside `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The `app.test.js` suite (160 cases; 190 total alongside `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),
-and the date/time-aware navigation layer (`frameForDay`, `pickLandingView`,
-`isEveningWindow`, `tripWindowDates`, `mountApp`, and the `getNow`/`setNow` clock seam).
+the date/time-aware navigation layer (`frameForDay`, `pickLandingView`,
+`isEveningWindow`, `tripWindowDates`, `mountApp`, and the `getNow`/`setNow` clock seam),
+and the time-travel override layer (`parseNowOverride`, `resolveNowOverride`, precedence, clear tokens).
 
 ## Deploy
 

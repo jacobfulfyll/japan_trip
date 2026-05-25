@@ -128,6 +128,133 @@ export function setNow(fn) {
 }
 
 // ---------------------------------------------------------------------------
+// Time-travel test mode — INERT BY DEFAULT.
+//
+// On module load (browser only) we look for a "now" override from two sources,
+// in this PRECEDENCE order:
+//   1. the URL query param `?now=...`  (wins — lets you bookmark/share a moment)
+//   2. localStorage key `jt:now`        (a sticky override set by the test page)
+//
+// A `datetime-local` value like "2026-06-25T22:00" is parsed by new Date() as
+// LOCAL time — exactly what we want (the traveler's local wall clock). When an
+// override resolves, we pin the clock via setNow(() => new Date(<override>)) so
+// every getNow() read across the app sees the simulated moment.
+//
+// CLEARING: `?now=clear` (or an empty `?now=`) removes the stored override and
+// restores the real clock. The test page also clears localStorage directly.
+//
+// PERSISTENCE CHOICE: a URL `?now=...` is mirrored into localStorage so the
+// override survives the app's OWN internal navigation. mountApp()/the nav
+// controller re-read getNow() but never re-append `?now` to internal link
+// state, so without persistence the override would silently evaporate the
+// instant you paged to the next day. Mirroring keeps "I'm in 10pm Kyoto" sticky
+// across taps. The tradeoff: the override outlives the tab until explicitly
+// cleared — which is why the active-override indicator (below + in index.html)
+// exists, and why `?now=clear` is a first-class, easy escape hatch.
+//
+// NEVER throws at load: bad input is ignored and the real clock is used.
+// ---------------------------------------------------------------------------
+
+const NOW_OVERRIDE_KEY = 'jt:now';
+const NOW_CLEAR_TOKENS = new Set(['', 'clear', 'off', 'real', 'reset']);
+
+/**
+ * Parse a time-travel "now" string (a datetime-local value, or any string
+ * new Date() accepts) into a valid Date, or null if unparseable. LOCAL-time
+ * parse is intentional — the override means the traveler's local wall clock.
+ * @param {unknown} value
+ * @returns {Date | null}
+ */
+export function parseNowOverride(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (trimmed === '') return null;
+  const d = new Date(trimmed);
+  return d instanceof Date && !Number.isNaN(d.getTime()) ? d : null;
+}
+
+/** Safe localStorage read — returns null if storage is unavailable/blocked. */
+function readStoredOverride() {
+  try {
+    return typeof localStorage !== 'undefined'
+      ? localStorage.getItem(NOW_OVERRIDE_KEY)
+      : null;
+  } catch {
+    return null; // private mode / disabled storage → no override
+  }
+}
+
+/** Safe localStorage write of the override (no-op if storage is unavailable). */
+function writeStoredOverride(value) {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(NOW_OVERRIDE_KEY, value);
+    }
+  } catch {
+    /* storage unavailable — URL override still pins the clock for this load */
+  }
+}
+
+/** Safe localStorage clear of the override (no-op if storage is unavailable). */
+function clearStoredOverride() {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(NOW_OVERRIDE_KEY);
+    }
+  } catch {
+    /* nothing to do */
+  }
+}
+
+/**
+ * Resolve and apply the time-travel override at module load. Reads the `?now`
+ * URL param first, then the stored override, and pins the clock via setNow()
+ * when one is valid. Returns the active override Date (so index.html can show
+ * the indicator), or null when none is active (real clock). Side-effecting but
+ * idempotent: touches location/localStorage/setNow, browser-only. Never throws.
+ * @returns {Date | null}
+ */
+export function resolveNowOverride() {
+  if (typeof window === 'undefined') return null;
+
+  let urlParam = null;
+  try {
+    urlParam = new URL(window.location.href).searchParams.get('now');
+  } catch {
+    urlParam = null; // unparseable location → ignore the URL source
+  }
+
+  // 1) URL param present (even empty) takes precedence and is authoritative.
+  if (urlParam !== null) {
+    if (NOW_CLEAR_TOKENS.has(urlParam.trim().toLowerCase())) {
+      clearStoredOverride();
+      return null; // real clock
+    }
+    const parsed = parseNowOverride(urlParam);
+    if (parsed) {
+      writeStoredOverride(urlParam.trim()); // mirror so it survives internal nav
+      setNow(() => new Date(parsed.getTime()));
+      return parsed;
+    }
+    // Bad ?now value → ignore it and fall through to any stored override.
+  }
+
+  // 2) Stored override (set by the test page / a prior URL load).
+  const stored = readStoredOverride();
+  const parsedStored = parseNowOverride(stored);
+  if (parsedStored) {
+    setNow(() => new Date(parsedStored.getTime()));
+    return parsedStored;
+  }
+
+  return null; // no override → real wall clock (inert default)
+}
+
+// Apply any override as the module loads, before the bootstrap mount below
+// reads getNow(). Inert when no ?now / stored override is present.
+const ACTIVE_NOW_OVERRIDE = typeof window !== 'undefined' ? resolveNowOverride() : null;
+
+// ---------------------------------------------------------------------------
 // Validation (runs once on import; non-fatal)
 // ---------------------------------------------------------------------------
 
@@ -1056,10 +1183,45 @@ export function renderInto(rootEl, day = getDay('2026-06-24'), framing = 'plan')
 // of the pure helpers never touches the DOM and never throws.
 // ---------------------------------------------------------------------------
 
+/**
+ * Build the small "time-travel active" indicator banner shown when an override
+ * is in effect, so the user never forgets the app is faking time. XSS-safe: the
+ * (user-controlled) override is rendered via textContent only. The "use real
+ * clock" link is a same-origin relative link to ?now=clear, built safely.
+ * @param {Date} override the active simulated "now"
+ * @returns {HTMLElement}
+ */
+function buildTimeTravelBanner(override) {
+  const bar = el('div', 'time-travel-banner');
+  bar.setAttribute('role', 'status');
+
+  const label = el('span', 'time-travel-banner-label', 'Time-travel mode');
+  bar.appendChild(label);
+
+  // Render the simulated moment via textContent (never innerHTML).
+  const when = override.toLocaleString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+  bar.appendChild(el('span', 'time-travel-banner-when', when));
+
+  // Same-origin escape hatch back to the real clock.
+  const clear = el('a', 'time-travel-banner-clear', 'Use real clock');
+  clear.href = '?now=clear';
+  bar.appendChild(clear);
+
+  return bar;
+}
+
 if (typeof document !== 'undefined') {
   const boot = () => {
     const root = document.getElementById('app-root');
     if (root) mountApp(root);
+    // Surface the time-travel indicator (if an override resolved at load).
+    // The banner is position:fixed, so it lives directly on <body>.
+    if (ACTIVE_NOW_OVERRIDE && document.body) {
+      document.body.appendChild(buildTimeTravelBanner(ACTIVE_NOW_OVERRIDE));
+    }
   };
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', boot);

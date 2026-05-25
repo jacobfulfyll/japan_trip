@@ -24,10 +24,11 @@ The site renders from `data/days.js`. **10 days are authored (Jun 24 – Jul 3).
 | `data/days.js` | **Single source of trip content** — ES module exporting `TRIP` + `DAYS`. Editing the trip = editing this file. |
 | `app.js` | Render pipeline: imports `data/days.js`, validates (warn-and-skip), deep-freezes, derives `dayNumber`, exposes the day API + `renderDay` + the date/time-aware `mountApp` (clock-driven landing, prev/next nav, evening "Prep for tomorrow"). |
 | `index.html` | Slim shell — ukiyo-e theme CSS + `<main id="app-root">` + `<script type="module" src="app.js">` + PWA wiring (manifest link, iOS meta, SW registration). |
-| `sw.js` | Hand-written service worker (no build step) — precaches the app shell into `app-shell-v<CACHE_VERSION>` (currently `v2`), runtime-caches photos/fonts into `runtime-v<CACHE_VERSION>`. Bump `CACHE_VERSION` when shell files change. |
+| `sw.js` | Hand-written service worker (no build step) — precaches the app shell into `app-shell-v<CACHE_VERSION>` (currently `v3`), runtime-caches photos/fonts into `runtime-v<CACHE_VERSION>`. Bump `CACHE_VERSION` when shell files change. `test.html` is intentionally NOT precached (dev tool, network-only). |
 | `manifest.json` | Web app manifest (install-to-home-screen). Relative `start_url`/`scope` for the `/japan_trip/` Pages subpath. Icons live in `img/`. |
-| `app.test.js` | 138 `node:test` cases for the data, render, and date/time-nav layers (168 total with `sw.test.js`). Run with `node --test`. |
+| `app.test.js` | 160 `node:test` cases for the data, render, date/time-nav, and time-travel layers (190 total with `sw.test.js`). Run with `node --test`. |
 | `sw.test.js` | `node:test` cases for the service worker (vm-sandboxed) + manifest/index.html PWA wiring. |
+| `test.html` | Standalone on-theme dev page for the time-travel test mode — datetime picker, 4 trip-scenario presets, "Launch app in this moment" (opens `index.html?now=…`), "Clear override". Served over HTTP (`http://localhost:8000/test.html`); NOT precached (dev tool only). |
 | `README.md` | How to edit the trip (schema + example), the `app.js` API, how to preview, deploy. |
 | `CHANGELOG.md` | Keep-a-Changelog history. |
 | `deploy-pages.yml` | GitHub Actions workflow for Pages deployment. |
@@ -96,7 +97,10 @@ Conventions baked into the data: reservations are plan items with `reserved:true
   - `pickLandingView(now = getNow())` → `{ view:'overview', day:null, daysUntil }` before the trip, `{ view:'day', day, framing }` during/after.
   - `isEveningWindow(now, window = getTrip().eveningWindow)` → boolean; the window **wraps midnight** (`hour >= startHour || hour < endHour`; default 21→4).
   - `tripWindowDates(trip = getTrip())` → ordered ISO array of every trip day (18 days Jun 16–Jul 3); `[]` on an inverted/unparseable window.
-  - `getNow()` / `setNow(fn|null)` → the clock seam. **All "now" reads go through `getNow()`** so the clock is overridable (the time-travel-test-mode task swaps it; tests pin it). `getNow()` degrades to the wall clock if the provider throws or returns a non-Date. `setNow(null)` restores.
+  - `getNow()` / `setNow(fn|null)` → the clock seam. **All "now" reads go through `getNow()`** so the clock is overridable (the time-travel test mode and tests pin it). `getNow()` degrades to the wall clock if the provider throws or returns a non-Date. `setNow(null)` restores.
+- Time-travel test mode (time-travel-test-mode task):
+  - `parseNowOverride(value)` → parses a datetime-local string (or any `new Date()`-parseable string) into a valid `Date`, or `null` if unparseable. Local-time parse is intentional.
+  - `resolveNowOverride()` → reads the override from URL param `?now` (wins) then `localStorage` key `jt:now`, pins the clock via `setNow()` when one is valid, and returns the active override `Date` or `null`. **Inert by default** — no override means the real device clock is used. Clear tokens (`?now=clear`, `off`, `real`, `reset`, empty) wipe the stored override and restore the real clock. Node-safe (guarded on `typeof window`). Called once at module load; `buildTimeTravelBanner()` (internal) renders the active-override indicator in `index.html`.
 - `buildValidatedDays(days, trip)` → exported for tests. (`deriveDayNumber` is internal — not exported.)
 - Pure helpers exported for testing: `haversineMeters(a, b)`, `formatWalk(meters)`, `safeUrl(url)`, `nearestPrecedingCoords(plan, index, lodging)`.
 
@@ -107,7 +111,7 @@ Returns are **deeply frozen and copy-safe** — callers cannot corrupt shared mo
 ## Conventions
 
 - **No build step, no dependencies.** Keep it plain HTML/CSS/ES modules.
-- **Bump `CACHE_VERSION` in `sw.js` whenever you change a precached shell file** (index.html, app.js, data/days.js, manifest, icons). With no build step this is the only cache-busting mechanism — skip it and installed users get stale files until the old cache happens to evict.
+- **Bump `CACHE_VERSION` in `sw.js` whenever you change a precached shell file** (index.html, app.js, data/days.js, manifest, icons). With no build step this is the only cache-busting mechanism — skip it and installed users get stale files until the old cache happens to evict. **Gotcha:** `sw.test.js` currently hardcodes the expected cache-name literals (`app-shell-v<N>`/`runtime-v<N>`), so a `CACHE_VERSION` bump also requires updating those literals in lockstep or ~9 SW tests fail (see backlog `sw-test-cache-version-coupling`).
 - All trip data lives in `data/days.js`; editing a day should stay a localized data edit.
 - Render is **XSS-safe by construction**: data reaches the DOM via `textContent` / `createElement` only — never `innerHTML` with interpolated data. Preserve this in downstream screens.
 - When wiring data URLs (`photos[].url`, `mapUrl`) into `href`/`src` in screen tasks (and especially once v2 adds user-uploaded photos), validate the scheme through `safeUrl()` (rejects `javascript:`/`data:`/etc., allows http(s) + relative) and add `rel="noopener noreferrer"` on external links. **Gotcha:** `safeUrl` strips ASCII tab/LF/CR *before* the scheme check — the WHATWG URL parser strips those characters, so `java\tscript:` would otherwise re-form into a live `javascript:` href. Keep that stripping if you touch `safeUrl`.

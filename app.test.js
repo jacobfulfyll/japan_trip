@@ -35,6 +35,8 @@ import {
   pickLandingView,
   tripWindowDates,
   mountApp,
+  parseNowOverride,
+  resolveNowOverride,
 } from './app.js';
 import { TRIP, DAYS } from './data/days.js';
 
@@ -1780,4 +1782,243 @@ test('frameForDay frames an ABSENT day (unauthored Jun 16–23 leg) purely by it
   assert.equal(frameForDay('2026-06-18', localDate(2026, 5, 17, 12, 0)), 'anticipation', 'before that calendar day');
   assert.equal(frameForDay('2026-06-18', localDate(2026, 5, 18, 12, 0)), 'plan', 'on that calendar day');
   assert.equal(frameForDay('2026-06-18', localDate(2026, 5, 19, 12, 0)), 'reminisce', 'after that calendar day');
+});
+
+// ===========================================================================
+// Time-travel test mode (time-travel-test-mode task)
+//   parseNowOverride — pure string → Date|null parser for the override value.
+//   resolveNowOverride — load-time resolver; inert under Node (no `window`).
+//   Override-flows-the-seam — pinning via setNow(() => parseNowOverride(...))
+//     makes getNow() + all downstream time logic react to the simulated moment.
+//
+// DETERMINISM: parseNowOverride is pure (no clock). Every test that pins the
+// clock restores it with setNow(null) in a finally so it can't leak.
+// ===========================================================================
+
+// --- parseNowOverride: valid datetime-local string --------------------------
+test('parseNowOverride parses a datetime-local string into a LOCAL-time Date (calendar fields)', () => {
+  const d = parseNowOverride('2026-06-25T22:00');
+  assert.ok(d instanceof Date, 'returns a Date');
+  assert.equal(Number.isNaN(d.getTime()), false, 'the Date is valid');
+  // Parsed as LOCAL time (matches localDate(2026, 5, 25, 22, 0)) — assert the
+  // meaningful calendar/time fields, not exact ms.
+  assert.equal(d.getFullYear(), 2026);
+  assert.equal(d.getMonth(), 5, 'June (0-based month index)');
+  assert.equal(d.getDate(), 25);
+  assert.equal(d.getHours(), 22);
+  assert.equal(d.getMinutes(), 0);
+});
+
+test('parseNowOverride parses the moment as LOCAL wall-clock time (matches localDate)', () => {
+  const d = parseNowOverride('2026-06-25T22:00');
+  assert.equal(d.getTime(), localDate(2026, 5, 25, 22, 0).getTime(),
+    'datetime-local value is the traveler local wall clock, not UTC');
+});
+
+test('parseNowOverride accepts a seconds-precision datetime-local value', () => {
+  const d = parseNowOverride('2026-06-25T22:30:15');
+  assert.ok(d instanceof Date && !Number.isNaN(d.getTime()));
+  assert.equal(d.getHours(), 22);
+  assert.equal(d.getMinutes(), 30);
+});
+
+// --- parseNowOverride: clear-tokens → null ----------------------------------
+// The clear-token *handling* (restore real clock) lives in resolveNowOverride;
+// parseNowOverride itself just can't parse them, so it returns null for each.
+test('parseNowOverride returns null for the empty-string clear token', () => {
+  assert.equal(parseNowOverride(''), null);
+});
+
+test('parseNowOverride returns null for each word clear token (clear/off/real/reset)', () => {
+  for (const token of ['clear', 'off', 'real', 'reset']) {
+    assert.equal(parseNowOverride(token), null, `clear token "${token}" → null`);
+  }
+});
+
+test('parseNowOverride returns null for a whitespace-only string', () => {
+  assert.equal(parseNowOverride('   '), null);
+  assert.equal(parseNowOverride('\t\n'), null);
+});
+
+// --- parseNowOverride: non-string inputs → null -----------------------------
+test('parseNowOverride returns null for non-string inputs without throwing', () => {
+  assert.equal(parseNowOverride(0), null, 'number');
+  assert.equal(parseNowOverride(1750000000000), null, 'a timestamp number is NOT accepted (string-only contract)');
+  assert.equal(parseNowOverride(null), null);
+  assert.equal(parseNowOverride(undefined), null);
+  assert.equal(parseNowOverride({}), null, 'object');
+  assert.equal(parseNowOverride([]), null, 'array');
+  assert.equal(parseNowOverride(new Date()), null, 'a Date object is not a string');
+  assert.equal(parseNowOverride(true), null, 'boolean');
+});
+
+// --- parseNowOverride: garbage strings → null -------------------------------
+test('parseNowOverride returns null for unparseable date strings (new Date → NaN)', () => {
+  assert.equal(parseNowOverride('not-a-date'), null);
+  assert.equal(parseNowOverride('2026-13-99'), null, 'impossible month → NaN');
+  assert.equal(parseNowOverride('2026-99-99'), null, 'impossible month/day → NaN');
+  assert.equal(parseNowOverride('hello world'), null);
+});
+
+// NOTE: parseNowOverride trusts `new Date()` and does NOT do strict calendar
+// validation (unlike parseISODate behind getDay). An out-of-range-but-rollable
+// date string like "2026-02-30" therefore does NOT return null — new Date()
+// rolls it over to Mar 2. This pins the actual override-parser contract; it is
+// acceptable because the override is a developer/test tool fed by a
+// <input type="datetime-local"> (which only emits valid dates). See Discovered
+// Issues if stricter rejection is ever wanted.
+test('parseNowOverride rolls over an out-of-range datetime-local string (new Date semantics)', () => {
+  // A bare YYYY-MM-DD parses as UTC midnight, so the exact local day is
+  // TZ-dependent — assert only the TZ-stable facts: it's a valid Date that
+  // rolled past February (Feb has no 30th).
+  const d = parseNowOverride('2026-02-30');
+  assert.ok(d instanceof Date && !Number.isNaN(d.getTime()), 'new Date rolls 2026-02-30 over, not NaN');
+  assert.ok(d.getTime() > new Date('2026-02-28').getTime(), 'rolled past the end of February');
+});
+
+test('parseNowOverride never throws regardless of input', () => {
+  const inputs = ['', '   ', 'clear', 'garbage', '2026-99-99', 0, null, undefined, {}, [], NaN, Symbol.for('x') === Symbol.for('x') ? 'ok' : 'ok'];
+  for (const input of inputs) {
+    assert.doesNotThrow(() => parseNowOverride(input), `parseNowOverride(${String(input)}) must not throw`);
+  }
+});
+
+// --- Override flows the clock seam (AC #1 / #3 / #4 at the logic layer) ------
+test('pinning via setNow(() => parseNowOverride(...)) makes getNow() return the simulated moment', () => {
+  try {
+    setNow(() => parseNowOverride('2026-06-25T22:00'));
+    const now = getNow();
+    assert.equal(now.getFullYear(), 2026);
+    assert.equal(now.getMonth(), 5);
+    assert.equal(now.getDate(), 25);
+    assert.equal(now.getHours(), 22);
+  } finally {
+    setNow(null);
+  }
+});
+
+test('override at 22:00 makes isEveningWindow(getNow()) true (evening prep is active)', () => {
+  try {
+    setNow(() => parseNowOverride('2026-06-25T22:00'));
+    assert.equal(isEveningWindow(getNow()), true, '22:00 is inside the 21:00–04:00 window');
+  } finally {
+    setNow(null);
+  }
+});
+
+test('override at 02:00 (POST-midnight) makes isEveningWindow(getNow()) true — the window wraps midnight through the seam', () => {
+  // AC4: the evening window is 9pm–4am, i.e. it WRAPS midnight. The 22:00 case
+  // only exercises the pre-midnight arm; this pins the clock to 02:00 to prove
+  // the override → getNow() → isEveningWindow chain honors the post-midnight arm
+  // (hour < endHour) too — the trickiest boundary of the window.
+  try {
+    setNow(() => parseNowOverride('2026-06-26T02:00'));
+    assert.equal(isEveningWindow(getNow()), true, '02:00 is inside the wrapping 21:00–04:00 window');
+  } finally {
+    setNow(null);
+  }
+});
+
+test('override at 14:00 (same day) makes isEveningWindow(getNow()) false', () => {
+  try {
+    setNow(() => parseNowOverride('2026-06-25T14:00'));
+    assert.equal(isEveningWindow(getNow()), false, '14:00 is outside the evening window');
+  } finally {
+    setNow(null);
+  }
+});
+
+test('override DURING the trip makes pickLandingView(getNow()) land on that authored day in "plan"', () => {
+  try {
+    // Jun 24 is the first authored day (dayNumber 9). Override "now" to it.
+    setNow(() => parseNowOverride('2026-06-24T10:00'));
+    const view = pickLandingView(getNow());
+    assert.equal(view.view, 'day');
+    assert.equal(view.framing, 'plan');
+    assert.equal(view.day?.date, '2026-06-24');
+  } finally {
+    setNow(null);
+  }
+});
+
+test('override BEFORE the trip makes pickLandingView(getNow()) return the overview countdown', () => {
+  try {
+    setNow(() => parseNowOverride('2026-05-24T12:00'));
+    const view = pickLandingView(getNow());
+    assert.equal(view.view, 'overview');
+    assert.equal(view.day, null);
+    assert.equal(view.daysUntil, 23, '2026-05-24 → 23 days until 2026-06-16');
+  } finally {
+    setNow(null);
+  }
+});
+
+test('override AFTER the trip makes pickLandingView(getNow()) land on the last day in "reminisce"', () => {
+  try {
+    setNow(() => parseNowOverride('2026-07-10T12:00'));
+    const view = pickLandingView(getNow());
+    assert.equal(view.view, 'day');
+    assert.equal(view.framing, 'reminisce');
+    assert.equal(view.day?.date, '2026-07-03', 'last authored day');
+  } finally {
+    setNow(null);
+  }
+});
+
+test('with the override pinned, frameForDay reads getNow() and frames each day relative to the simulated moment', () => {
+  try {
+    // Simulate "now" = Jun 25. Same day → plan, future → anticipation, past → reminisce.
+    setNow(() => parseNowOverride('2026-06-25T22:00'));
+    assert.equal(frameForDay('2026-06-25'), 'plan', 'same simulated calendar day');
+    assert.equal(frameForDay('2026-06-26'), 'anticipation', 'a future day');
+    assert.equal(frameForDay('2026-06-24'), 'reminisce', 'a past day');
+  } finally {
+    setNow(null);
+  }
+});
+
+test('setNow(null) restores the real clock after a time-travel override (no longer pinned)', () => {
+  try {
+    setNow(() => parseNowOverride('2026-06-25T22:00'));
+    assert.equal(getNow().getFullYear(), 2026, 'precondition: override is active');
+  } finally {
+    setNow(null);
+  }
+  // After restore, getNow() tracks the wall clock again.
+  const drift = Math.abs(getNow().getTime() - Date.now());
+  assert.ok(drift < 1000, 'wall clock restored after setNow(null)');
+});
+
+test('a provider returning parseNowOverride() of a BAD value (null) degrades getNow() to the wall clock', () => {
+  try {
+    // parseNowOverride('clear') === null → provider returns null → getNow degrades.
+    setNow(() => parseNowOverride('clear'));
+    const drift = Math.abs(getNow().getTime() - Date.now());
+    assert.ok(drift < 1000, 'null override → getNow falls back to the real clock');
+  } finally {
+    setNow(null);
+  }
+});
+
+// --- resolveNowOverride: inert under Node (no `window`) ----------------------
+test('resolveNowOverride is inert under Node (no window): returns null and does not throw', () => {
+  assert.equal(typeof window, 'undefined', 'precondition: no window in the Node test runner');
+  let result;
+  assert.doesNotThrow(() => { result = resolveNowOverride(); });
+  assert.equal(result, null, 'no browser → no override resolved');
+});
+
+test('resolveNowOverride does NOT change the active clock when called under Node', () => {
+  // Pin a known override, call resolveNowOverride (which should early-return and
+  // leave the provider untouched), and confirm getNow() is unchanged.
+  try {
+    setNow(() => parseNowOverride('2026-06-25T22:00'));
+    const before = getNow().getTime();
+    resolveNowOverride();
+    const after = getNow().getTime();
+    assert.equal(after, before, 'the pinned override survives a Node-context resolveNowOverride() call');
+    assert.equal(getNow().getHours(), 22, 'still the simulated moment');
+  } finally {
+    setNow(null);
+  }
 });
