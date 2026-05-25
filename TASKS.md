@@ -16,11 +16,21 @@
 
 ---
 
-## Backlog
+### trip-overview-home
+**Task**: Pre-trip home with countdown + tappable all-days index
+**Pipeline**: code-workflow
+**Branch**: task/trip-overview-home
+**Worktree**: .worktree/trip-overview-home
+**Base**: main
+**Started**: 2026-05-24
+**Files**:
+- MOD: index.html
+- MOD: app.js
+- MOD: sw.js (CACHE_VERSION bump only)
 
-### Static Companion (v1 — ship before Jun 16)
-- [ ] trip-overview-home: Pre-trip home with countdown + tappable all-days index [P2] [moderate] [tier: opus:medium] [depends: data-model-and-scaffold] [conflicts: day-view-screen, date-time-aware-navigation] [code] [planned]
-  files: index.html (MOD), app.js (MOD)
+---
+
+## Backlog
 
 ### Firebase Photo Journal (v2 — after v1)
 - [ ] firebase-project-setup: Console setup — project, Storage/Firestore/Auth, shared account, Blaze + budget [P2] [simple] [tier: sonnet:medium] [depends: data-model-and-scaffold] [manual] [planned]
