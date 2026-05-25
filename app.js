@@ -59,6 +59,74 @@ function deriveDayNumber(iso, startIso = TRIP.start) {
   return Math.round((day.getTime() - start.getTime()) / MS_PER_DAY) + 1;
 }
 
+/** Assemble a zero-padded ISO "YYYY-MM-DD" string from calendar components. */
+function padDate(year, month, day) {
+  const m = String(month).padStart(2, '0');
+  const d = String(day).padStart(2, '0');
+  return `${year}-${m}-${d}`;
+}
+
+/**
+ * Format a Date as a local-calendar ISO "YYYY-MM-DD" string. Uses the LOCAL
+ * Y/M/D (not UTC) because "today" for a traveler is their local calendar day —
+ * comparing against the trip's local ISO dates this way is timezone-correct.
+ * @param {Date} date
+ * @returns {string | null}
+ */
+function localISODate(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  return padDate(date.getFullYear(), date.getMonth() + 1, date.getDate());
+}
+
+/**
+ * Whole-calendar-day difference (b − a) between two ISO "YYYY-MM-DD" strings.
+ * Positive when b is after a. Returns null if either is unparseable. Uses the
+ * UTC-midnight parse so DST never skews the day count.
+ * @param {string} aIso
+ * @param {string} bIso
+ * @returns {number | null}
+ */
+function dayDelta(aIso, bIso) {
+  const a = parseISODate(aIso);
+  const b = parseISODate(bIso);
+  if (!a || !b) return null;
+  return Math.round((b.getTime() - a.getTime()) / MS_PER_DAY);
+}
+
+// ---------------------------------------------------------------------------
+// Clock seam — ALL "current time" reads go through getNow() so the clock can be
+// overridden (the time-travel-test-mode task swaps it; unit tests pin it). Never
+// call `new Date()` directly in the navigation/landing logic below.
+// ---------------------------------------------------------------------------
+
+let nowProvider = () => new Date();
+
+/**
+ * The single source of "now" for the whole app. Returns a Date. Defaults to the
+ * real wall clock; override via setNow() (e.g. time-travel mode, tests).
+ * @returns {Date}
+ */
+export function getNow() {
+  let d;
+  try {
+    d = nowProvider();
+  } catch {
+    d = null; // a throwing provider degrades to the wall clock, same as a bad return
+  }
+  return d instanceof Date && !Number.isNaN(d.getTime()) ? d : new Date();
+}
+
+/**
+ * Override the clock. Pass a function returning a Date to pin/scrub "now"; pass
+ * null/undefined to restore the real wall clock. Returns the active provider.
+ * @param {(() => Date) | null | undefined} fn
+ * @returns {() => Date}
+ */
+export function setNow(fn) {
+  nowProvider = typeof fn === 'function' ? fn : () => new Date();
+  return nowProvider;
+}
+
 // ---------------------------------------------------------------------------
 // Validation (runs once on import; non-fatal)
 // ---------------------------------------------------------------------------
@@ -189,6 +257,98 @@ export function getDayByNumber(n) {
   // first day. Reject anything that isn't a real number up front.
   if (typeof n !== 'number' || !Number.isFinite(n)) return null;
   return VALIDATED_DAYS.find((d) => d.dayNumber === n) ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle + landing logic (pure, exported for unit tests)
+//
+// All of these take an explicit `now` (a Date) so they're deterministic and
+// testable; production callers pass getNow(). They compare by LOCAL CALENDAR
+// DAY (via localISODate) so "today" means the traveler's current day, not a raw
+// timestamp.
+// ---------------------------------------------------------------------------
+
+/**
+ * Pick the lifecycle framing for a day relative to `now`:
+ *   future calendar day  → 'anticipation'
+ *   same calendar day    → 'plan'
+ *   past calendar day    → 'reminisce'
+ * Compares calendar days (local), not timestamps. Accepts either a day object
+ * (reads `day.date`) or an ISO "YYYY-MM-DD" string. Defaults to 'plan' when the
+ * day/date is missing or unparseable (safe fallback for absent days).
+ * @param {object|string|null} day a day object, an ISO date string, or null
+ * @param {Date} [now=getNow()]
+ * @returns {'anticipation'|'plan'|'reminisce'}
+ */
+export function frameForDay(day, now = getNow()) {
+  const iso = typeof day === 'string' ? day : day?.date;
+  const todayIso = localISODate(now);
+  const delta = dayDelta(todayIso, iso);
+  if (delta == null) return 'plan';
+  if (delta > 0) return 'anticipation';
+  if (delta < 0) return 'reminisce';
+  return 'plan';
+}
+
+/**
+ * Is `now` inside the evening "prep for tomorrow" window? The window wraps
+ * midnight (e.g. 21:00–04:00), so membership is `hour >= startHour ||
+ * hour < endHour`. Reuses TRIP.eveningWindow by default — never hardcode the
+ * hours. A non-wrapping window (start < end) is also handled.
+ * @param {Date} now
+ * @param {{startHour:number,endHour:number}} [window=getTrip().eveningWindow]
+ * @returns {boolean}
+ */
+export function isEveningWindow(now, window = getTrip().eveningWindow) {
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) return false;
+  const start = window?.startHour;
+  const end = window?.endHour;
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+  const hour = now.getHours();
+  if (start === end) return false;          // empty/degenerate window
+  if (start < end) return hour >= start && hour < end; // same-day window
+  return hour >= start || hour < end;        // wraps midnight
+}
+
+/**
+ * Decide what to show when the app opens, given `now`. Pure: reads TRIP via
+ * getTrip() and days via getDay/getDays; returns a descriptor the mount logic
+ * consumes (it never touches the DOM).
+ *
+ * Rules:
+ *   before the trip (today < TRIP.start) → { view:'overview', day:null, daysUntil }
+ *   during the trip (start ≤ today ≤ end) → { view:'day', day, framing:'plan' }
+ *        (day may be null for the unauthored Jun 16–23 leg — renderDay handles it)
+ *   after the trip (today > TRIP.end)    → { view:'day', day:lastDay, framing:'reminisce' }
+ *        falling back to { view:'overview' } only if there are no days at all.
+ *
+ * @param {Date} [now=getNow()]
+ * @returns {{view:'overview', day:null, daysUntil:number|null}
+ *         | {view:'day', day:object|null, framing:'anticipation'|'plan'|'reminisce'}}
+ */
+export function pickLandingView(now = getNow()) {
+  const trip = getTrip();
+  const todayIso = localISODate(now);
+  const toStart = dayDelta(todayIso, trip.start); // >0 ⇒ trip is in the future
+  const afterEnd = dayDelta(trip.end, todayIso);  // >0 ⇒ today is past the trip
+
+  // Before the trip → overview + countdown (how many days until Day 1).
+  if (toStart != null && toStart > 0) {
+    return { view: 'overview', day: null, daysUntil: toStart };
+  }
+
+  // After the trip → land on the last day in reminisce (fallback: overview).
+  if (afterEnd != null && afterEnd > 0) {
+    const days = getDays();
+    const last = days.length ? days[days.length - 1] : null;
+    if (last) return { view: 'day', day: last, framing: 'reminisce' };
+    return { view: 'overview', day: null, daysUntil: null };
+  }
+
+  // During the trip (today within [start, end], inclusive) → today's day view.
+  // getDay returns null for the unauthored leg; renderDay renders a placeholder.
+  const today = todayIso ? getDay(todayIso) : null;
+  return { view: 'day', day: today, framing: frameForDay(todayIso, now) };
 }
 
 // ---------------------------------------------------------------------------
@@ -619,20 +779,259 @@ export function renderDay(day, framingName = 'plan') {
 }
 
 // ---------------------------------------------------------------------------
-// Mount seam — downstream date-time-aware-navigation will decide which day +
-// framing to show. renderInto() is kept as the public mount point (the API
-// contract downstream tasks depend on). For now it renders one representative
-// day so the screen is viewable.
+// Trip-window enumeration (pure) — the ordered list of EVERY calendar day in
+// the trip, including the unauthored Jun 16–23 leg. Forward/back nav walks this
+// list so users can page across the whole window; absent days render as
+// renderDay's placeholder (its documented contract).
+// ---------------------------------------------------------------------------
+
+/**
+ * Every ISO "YYYY-MM-DD" date in [trip.start, trip.end] inclusive, ascending.
+ * Returns [] if the window is unparseable or inverted.
+ * @param {object} [trip=getTrip()]
+ * @returns {string[]}
+ */
+export function tripWindowDates(trip = getTrip()) {
+  const start = parseISODate(trip?.start);
+  const end = parseISODate(trip?.end);
+  if (!start || !end || end.getTime() < start.getTime()) return [];
+  const out = [];
+  // parseISODate yields UTC midnight, so each step lands on a clean UTC day;
+  // format from the UTC components to avoid any local-timezone drift.
+  for (let t = start.getTime(); t <= end.getTime(); t += MS_PER_DAY) {
+    const d = new Date(t);
+    out.push(padDate(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()));
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Interim overview / countdown (pre-trip landing). trip-overview-home will
+// REPLACE this later; until then this is the graceful interim the
+// {view:'overview'} descriptor maps to. Minimal, on-theme, no external deps.
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the pre-trip overview: a countdown to Day 1 plus a button into the
+ * first day. Pure DOM construction (XSS-safe via el()). `onEnter` is invoked
+ * with the first trip ISO date when the user taps "Preview the trip".
+ * @param {number|null} daysUntil whole days until TRIP.start (null = unknown)
+ * @param {(iso:string)=>void} onEnter
+ * @returns {{node: HTMLElement, start: () => void, stop: () => void}}
+ */
+function renderOverview(daysUntil, onEnter) {
+  const trip = getTrip();
+  const view = el('article', 'overview-view framing-anticipation');
+
+  const head = el('header', 'overview-header');
+  head.appendChild(el('p', 'overview-kicker', 'Counting down'));
+  head.appendChild(el('h1', 'overview-title', trip.title ?? 'Our trip'));
+
+  const count = el('div', 'overview-count');
+  if (Number.isFinite(daysUntil) && daysUntil > 0) {
+    count.appendChild(el('span', 'overview-count-num', String(daysUntil)));
+    count.appendChild(el('span', 'overview-count-label',
+      daysUntil === 1 ? 'day until the trip' : 'days until the trip'));
+  } else {
+    count.appendChild(el('span', 'overview-count-label', 'The adventure is near.'));
+  }
+  head.appendChild(count);
+
+  if (trip.start) {
+    head.appendChild(el('p', 'overview-dates',
+      `${trip.start} — ${trip.end}`));
+  }
+  view.appendChild(head);
+
+  const enter = el('button', 'overview-enter', 'Preview the trip →');
+  enter.type = 'button';
+  const firstIso = tripWindowDates(trip)[0];
+  enter.addEventListener('click', () => {
+    if (typeof onEnter === 'function' && firstIso) onEnter(firstIso);
+  });
+  view.appendChild(enter);
+
+  return { node: view, start() {}, stop() {} };
+}
+
+// ---------------------------------------------------------------------------
+// Mount seam + navigation controller.
+//
+// renderInto() stays the public mount point (API contract). It now boots the
+// date-time-aware navigation controller, which:
+//   - picks the landing view from the clock (pickLandingView/getNow),
+//   - renders prev/next controls that page across the whole trip window,
+//   - re-applies the lifecycle framing (frameForDay) on every navigation,
+//   - shows the evening "Prep for tomorrow →" button inside TRIP.eveningWindow,
+//   - stops the prior slideshow before each re-render (no orphaned intervals).
 // ---------------------------------------------------------------------------
 
 // Tracks the live day-view controller so a re-render can stop its slideshow
 // timer before mounting a new one (no orphaned intervals).
 let activeDayView = null;
 
+/** Stop + forget the active day-view (its slideshow timer). */
+function stopActiveDayView() {
+  if (activeDayView) {
+    activeDayView.stop();
+    activeDayView = null;
+  }
+}
+
 /**
- * Mount a day-view into a root element. Defaults to the first fully-populated
- * day (Jun 24) in 'plan' framing so the screen renders standalone. Clears the
- * previous render and stops its slideshow timer first.
+ * Build the prev/next navigation bar for the day at `index` in `dates`.
+ * Buttons are clamped to the window ends. `onGo(index)` navigates.
+ */
+function buildNavBar(dates, index, onGo) {
+  const nav = el('nav', 'day-nav');
+  nav.setAttribute('aria-label', 'Day navigation');
+
+  const prev = el('button', 'day-nav-btn day-nav-prev', '← Prev');
+  prev.type = 'button';
+  prev.disabled = index <= 0;
+  prev.setAttribute('aria-label', 'Previous day');
+  prev.addEventListener('click', () => onGo(index - 1));
+
+  const next = el('button', 'day-nav-btn day-nav-next', 'Next →');
+  next.type = 'button';
+  next.disabled = index >= dates.length - 1;
+  next.setAttribute('aria-label', 'Next day');
+  next.addEventListener('click', () => onGo(index + 1));
+
+  // Position label (e.g. "Day 9 · Jun 24") — derived, never authored.
+  const iso = dates[index];
+  const dayObj = getDay(iso);
+  const num = dayObj?.dayNumber ?? deriveDayNumber(iso);
+  const label = el('span', 'day-nav-pos',
+    num != null ? `Day ${num}` : iso);
+
+  nav.appendChild(prev);
+  nav.appendChild(label);
+  nav.appendChild(next);
+  return nav;
+}
+
+/**
+ * Build the evening "Prep for tomorrow →" button for the day AFTER `index`,
+ * or null if there is no tomorrow in-window or tomorrow has no prep notes.
+ * Surfaces tomorrow's prep list when expanded; tapping the title navigates.
+ */
+function buildEveningPrep(dates, index, onGo) {
+  const tomorrowIdx = index + 1;
+  if (tomorrowIdx >= dates.length) return null;
+  const tIso = dates[tomorrowIdx];
+  const tomorrow = getDay(tIso);
+  const prep = Array.isArray(tomorrow?.prep) ? tomorrow.prep : [];
+
+  const box = el('section', 'evening-prep');
+  box.setAttribute('aria-label', 'Prep for tomorrow');
+
+  const go = el('button', 'evening-prep-cta', 'Prep for tomorrow →');
+  go.type = 'button';
+  go.addEventListener('click', () => onGo(tomorrowIdx));
+  box.appendChild(go);
+
+  if (tomorrow?.title) {
+    box.appendChild(el('p', 'evening-prep-day', tomorrow.title));
+  }
+
+  if (prep.length) {
+    const ul = el('ul', 'evening-prep-list');
+    prep.forEach((p) => ul.appendChild(el('li', 'evening-prep-item', p)));
+    box.appendChild(ul);
+  } else {
+    box.appendChild(el('p', 'evening-prep-empty',
+      'Nothing to prep yet — tap through to tomorrow.'));
+  }
+  return box;
+}
+
+/**
+ * Mount the day-and-nav UI for `index` within `dates` into `rootEl`. Clears the
+ * previous render + stops its slideshow first. Framing is derived from the
+ * clock via frameForDay so manual nav re-applies the lifecycle framing. Shows
+ * the evening prep button only inside TRIP.eveningWindow AND only while viewing
+ * today's day — "tomorrow" is meaningful only relative to the actual current
+ * day, so paging to a past/future day (or previewing pre-trip) hides it.
+ */
+function mountDayAt(rootEl, dates, index, navigate) {
+  stopActiveDayView();
+  rootEl.textContent = ''; // clear without innerHTML
+
+  const iso = dates[index];
+  const day = getDay(iso); // null for the unauthored leg → placeholder
+  const now = getNow();
+  const framing = frameForDay(iso, now);
+
+  const shell = el('div', 'day-screen');
+
+  shell.appendChild(buildNavBar(dates, index, navigate));
+
+  const view = renderDay(day, framing);
+  shell.appendChild(view.node);
+
+  if (isEveningWindow(now) && iso === localISODate(now)) {
+    const prep = buildEveningPrep(dates, index, navigate);
+    if (prep) shell.appendChild(prep);
+  }
+
+  rootEl.appendChild(shell);
+  view.start();
+  activeDayView = view;
+}
+
+/**
+ * Boot the navigation controller into a root element, choosing the landing view
+ * from the clock. Returns a small controller ({ go, toIso, destroy }) so the
+ * UI is testable and a future caller can drive it.
+ * @param {HTMLElement} rootEl
+ * @returns {{go:(i:number)=>void, toIso:(iso:string)=>void, destroy:()=>void} | undefined}
+ */
+export function mountApp(rootEl) {
+  if (!rootEl) {
+    console.warn('[app] mountApp called without a root element.');
+    return undefined;
+  }
+
+  const dates = tripWindowDates();
+
+  const clampIndex = (i) => Math.max(0, Math.min(dates.length - 1, i));
+  const navigate = (i) => mountDayAt(rootEl, dates, clampIndex(i), navigate);
+  const toIso = (iso) => {
+    const i = dates.indexOf(iso);
+    if (i >= 0) navigate(i);
+  };
+
+  const landing = pickLandingView(getNow());
+
+  if (landing.view === 'overview') {
+    stopActiveDayView();
+    rootEl.textContent = '';
+    const overview = renderOverview(landing.daysUntil, toIso);
+    rootEl.appendChild(overview.node);
+    overview.start();
+  } else {
+    // Find the index of the landing day; fall back to the first window day.
+    const landingIso = landing.day?.date ?? localISODate(getNow());
+    const idx = dates.indexOf(landingIso);
+    navigate(idx >= 0 ? idx : 0);
+  }
+
+  return {
+    go: navigate,
+    toIso,
+    destroy: () => {
+      stopActiveDayView();
+      rootEl.textContent = '';
+    },
+  };
+}
+
+/**
+ * Mount a single day-view into a root element (legacy/standalone entry point).
+ * PRESERVED for backward compatibility + the existing test suite: it renders
+ * exactly one day in the given framing, no nav chrome. The full date/time-aware
+ * experience is mountApp(); the bootstrap below uses that.
  * @param {HTMLElement} rootEl
  * @param {object|null} [day] day object (defaults to getDay("2026-06-24"))
  * @param {'anticipation'|'plan'|'reminisce'} [framing='plan']
@@ -643,11 +1042,7 @@ export function renderInto(rootEl, day = getDay('2026-06-24'), framing = 'plan')
     return;
   }
 
-  if (activeDayView) {
-    activeDayView.stop();
-    activeDayView = null;
-  }
-
+  stopActiveDayView();
   rootEl.textContent = ''; // clear without innerHTML
 
   const view = renderDay(day, framing);
@@ -664,7 +1059,7 @@ export function renderInto(rootEl, day = getDay('2026-06-24'), framing = 'plan')
 if (typeof document !== 'undefined') {
   const boot = () => {
     const root = document.getElementById('app-root');
-    if (root) renderInto(root);
+    if (root) mountApp(root);
   };
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', boot);

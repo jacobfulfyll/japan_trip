@@ -28,6 +28,13 @@ import {
   nearestPrecedingCoords,
   formatWalk,
   renderDay,
+  getNow,
+  setNow,
+  frameForDay,
+  isEveningWindow,
+  pickLandingView,
+  tripWindowDates,
+  mountApp,
 } from './app.js';
 import { TRIP, DAYS } from './data/days.js';
 
@@ -1204,4 +1211,573 @@ test('renderDay renders an empty-hero placeholder (role=img) when a day has no v
     assert.equal(hero.getAttribute('role'), 'img');
     assert.ok(node.byClass('hero-slide').length === 0, 'no slides when there are no photos');
   });
+});
+
+// ===========================================================================
+// DATE/TIME-AWARE NAVIGATION (date-time-aware-navigation task)
+//
+// Covers the lifecycle + landing logic that drives the clock-aware experience:
+//   getNow / setNow (clock seam), frameForDay, isEveningWindow,
+//   pickLandingView, tripWindowDates, and the mountApp nav controller.
+//
+// DETERMINISM: every test that depends on "now" pins it via setNow() (or passes
+// `now` explicitly to the pure fn). The pure lifecycle fns compare by LOCAL
+// calendar day / local hour (getFullYear/getMonth/getDate/getHours), so the
+// fixture Dates are built with the LOCAL Date constructor — e.g.
+// `new Date(2026, 5, 25, 23, 59)` is unambiguously local midnight-minus-one and
+// is interpreted identically regardless of the machine's timezone.
+//
+// Each block that calls setNow restores the wall clock with setNow(null) in a
+// teardown so clock state never leaks across tests.
+// ===========================================================================
+
+/** Build a Date in LOCAL time. monthIndex is 0-based (5 = June). */
+function localDate(y, monthIndex, d, h = 0, min = 0) {
+  return new Date(y, monthIndex, d, h, min, 0, 0);
+}
+
+// --- getNow / setNow (clock seam) -------------------------------------------
+
+test('setNow pins getNow to a fixed instant; setNow(null) restores the wall clock', () => {
+  try {
+    const pinned = localDate(2026, 5, 25, 12, 0);
+    setNow(() => pinned);
+    assert.equal(getNow().getTime(), pinned.getTime());
+    // A second read returns the same pinned instant (no drift).
+    assert.equal(getNow().getTime(), pinned.getTime());
+  } finally {
+    setNow(null);
+  }
+  // Restored: getNow now tracks the real clock (close to Date.now()).
+  const drift = Math.abs(getNow().getTime() - Date.now());
+  assert.ok(drift < 1000, 'wall clock restored after setNow(null)');
+});
+
+test('getNow falls back to the wall clock when the override returns a non-Date / invalid value', () => {
+  try {
+    setNow(() => 'not a date');
+    const drift = Math.abs(getNow().getTime() - Date.now());
+    assert.ok(drift < 1000, 'invalid provider result → wall clock');
+    setNow(() => new Date(NaN));
+    const drift2 = Math.abs(getNow().getTime() - Date.now());
+    assert.ok(drift2 < 1000, 'NaN Date from provider → wall clock');
+  } finally {
+    setNow(null);
+  }
+});
+
+test('getNow falls back to the wall clock when the override THROWS', () => {
+  try {
+    setNow(() => { throw new Error('clock blew up'); });
+    const d = getNow();
+    assert.ok(d instanceof Date && !Number.isNaN(d.getTime()), 'throwing provider → valid Date');
+    const drift = Math.abs(d.getTime() - Date.now());
+    assert.ok(drift < 1000, 'throwing provider → wall clock, no propagated exception');
+  } finally {
+    setNow(null);
+  }
+});
+
+// --- frameForDay: calendar-day boundaries -----------------------------------
+
+test('frameForDay returns "plan" when the day is the same local calendar day (delta 0)', () => {
+  // now is 23:59 on the same calendar day as the target — still delta 0.
+  const now = localDate(2026, 5, 25, 23, 59);
+  assert.equal(frameForDay('2026-06-25', now), 'plan');
+  // ...and at 00:00 of that calendar day too.
+  assert.equal(frameForDay('2026-06-25', localDate(2026, 5, 25, 0, 0)), 'plan');
+});
+
+test('frameForDay returns "anticipation" the instant before local midnight of a future day (delta +1)', () => {
+  // 2026-06-24 23:59 local, target 2026-06-25 → tomorrow → anticipation.
+  const now = localDate(2026, 5, 24, 23, 59);
+  assert.equal(frameForDay('2026-06-25', now), 'anticipation');
+});
+
+test('frameForDay flips to "plan" the instant after local midnight (delta +1 → 0 at 00:00)', () => {
+  // One minute later than the case above — now it IS 2026-06-25 → plan.
+  const now = localDate(2026, 5, 25, 0, 0);
+  assert.equal(frameForDay('2026-06-25', now), 'plan');
+});
+
+test('frameForDay returns "reminisce" once a full calendar day has passed (delta -1 at 00:00)', () => {
+  // 2026-06-26 00:00 local, target 2026-06-25 → yesterday → reminisce.
+  const now = localDate(2026, 5, 26, 0, 0);
+  assert.equal(frameForDay('2026-06-25', now), 'reminisce');
+});
+
+test('frameForDay accepts a day OBJECT (reads .date) and an ISO STRING identically', () => {
+  const now = localDate(2026, 5, 25, 10, 0);
+  const dayObj = { date: '2026-06-26', title: 'whatever' };
+  assert.equal(frameForDay(dayObj, now), 'anticipation', 'object form, future day');
+  assert.equal(frameForDay('2026-06-26', now), 'anticipation', 'ISO form, future day');
+  assert.equal(frameForDay({ date: '2026-06-24' }, now), 'reminisce', 'object form, past day');
+});
+
+test('frameForDay falls back to "plan" for missing / unparseable input', () => {
+  const now = localDate(2026, 5, 25, 10, 0);
+  assert.equal(frameForDay(null, now), 'plan');
+  assert.equal(frameForDay(undefined, now), 'plan');
+  assert.equal(frameForDay({}, now), 'plan', 'object with no .date');
+  assert.equal(frameForDay('not-a-date', now), 'plan');
+  assert.equal(frameForDay('2026-13-99', now), 'plan', 'impossible calendar date');
+});
+
+test('frameForDay uses getNow() (the clock seam) when no explicit now is passed', () => {
+  try {
+    setNow(() => localDate(2026, 5, 24, 12, 0)); // pin "now" to Jun 24
+    assert.equal(frameForDay('2026-06-25'), 'anticipation');
+    assert.equal(frameForDay('2026-06-24'), 'plan');
+    assert.equal(frameForDay('2026-06-23'), 'reminisce');
+  } finally {
+    setNow(null);
+  }
+});
+
+// --- isEveningWindow: midnight-wrap boundaries ------------------------------
+
+test('isEveningWindow honors the wrapping TRIP.eveningWindow (21:00–04:00) at exact boundaries', () => {
+  const at = (h, m = 0) => isEveningWindow(localDate(2026, 5, 25, h, m));
+  assert.equal(at(20, 59), false, '20:59 is before the window');
+  assert.equal(at(21, 0), true, '21:00 opens the window');
+  assert.equal(at(23, 59), true, '23:59 still in window');
+  assert.equal(at(0, 0), true, 'midnight still in window (wraps)');
+  assert.equal(at(3, 59), true, '03:59 still in window');
+  assert.equal(at(4, 0), false, '04:00 closes the window');
+  assert.equal(at(14, 0), false, 'midday is out of the window');
+});
+
+test('isEveningWindow returns false for an invalid / missing now', () => {
+  assert.equal(isEveningWindow(new Date(NaN)), false);
+  assert.equal(isEveningWindow(null), false);
+  assert.equal(isEveningWindow('21:00'), false, 'non-Date input');
+});
+
+test('isEveningWindow supports an explicit NON-wrapping window (start < end)', () => {
+  const win = { startHour: 9, endHour: 17 }; // a same-day 9am–5pm window
+  assert.equal(isEveningWindow(localDate(2026, 5, 25, 8, 59), win), false);
+  assert.equal(isEveningWindow(localDate(2026, 5, 25, 9, 0), win), true);
+  assert.equal(isEveningWindow(localDate(2026, 5, 25, 16, 59), win), true);
+  assert.equal(isEveningWindow(localDate(2026, 5, 25, 17, 0), win), false);
+  assert.equal(isEveningWindow(localDate(2026, 5, 25, 0, 0), win), false, 'midnight is OUT of a non-wrapping daytime window');
+});
+
+test('isEveningWindow treats a degenerate window (start === end) as empty (always false)', () => {
+  const win = { startHour: 12, endHour: 12 };
+  assert.equal(isEveningWindow(localDate(2026, 5, 25, 12, 0), win), false);
+  assert.equal(isEveningWindow(localDate(2026, 5, 25, 0, 0), win), false);
+});
+
+test('isEveningWindow returns false when the window hours are non-finite/missing', () => {
+  assert.equal(isEveningWindow(localDate(2026, 5, 25, 22, 0), { startHour: NaN, endHour: 4 }), false);
+  assert.equal(isEveningWindow(localDate(2026, 5, 25, 22, 0), {}), false);
+});
+
+// --- pickLandingView: three phases ------------------------------------------
+
+test('pickLandingView BEFORE the trip → overview with a correct daysUntil countdown', () => {
+  // Trip starts 2026-06-16. now = 2026-05-24 → 23 days until Day 1.
+  const view = pickLandingView(localDate(2026, 4, 24, 12, 0));
+  assert.equal(view.view, 'overview');
+  assert.equal(view.day, null);
+  assert.equal(view.daysUntil, 23, '2026-06-16 minus 2026-05-24 = 23 calendar days');
+});
+
+test('pickLandingView daysUntil is 1 on the eve of the trip and the start day lands DURING (not before)', () => {
+  // 2026-06-15 → 1 day until start.
+  const eve = pickLandingView(localDate(2026, 5, 15, 9, 0));
+  assert.equal(eve.view, 'overview');
+  assert.equal(eve.daysUntil, 1);
+  // 2026-06-16 (TRIP.start) is inclusive → during the trip, not before.
+  const day1 = pickLandingView(localDate(2026, 5, 16, 9, 0));
+  assert.equal(day1.view, 'day');
+});
+
+test('pickLandingView DURING the trip on an AUTHORED day → that day in "plan" framing', () => {
+  // 2026-06-24 is authored (Day 9).
+  const view = pickLandingView(localDate(2026, 5, 24, 10, 0));
+  assert.equal(view.view, 'day');
+  assert.equal(view.framing, 'plan', 'same calendar day → plan');
+  assert.ok(view.day, 'authored day is present');
+  assert.equal(view.day.date, '2026-06-24');
+  assert.equal(view.day.dayNumber, 9);
+});
+
+test('pickLandingView DURING the trip on an ABSENT day (Jun 16–23 leg) → day descriptor with null day, "plan" framing', () => {
+  // 2026-06-18 is within [start,end] but NOT authored → getDay returns null.
+  // pickLandingView still returns a 'day' descriptor (renderDay draws the
+  // "Details coming" placeholder); framing is 'plan' because it's the same
+  // calendar day as `now`.
+  const view = pickLandingView(localDate(2026, 5, 18, 10, 0));
+  assert.equal(view.view, 'day');
+  assert.equal(view.day, null, 'unauthored day has no data');
+  assert.equal(view.framing, 'plan');
+});
+
+test('pickLandingView AFTER the trip → last authored day (Jul 3) in "reminisce" framing', () => {
+  // 2026-07-10 is past TRIP.end (2026-07-03).
+  const view = pickLandingView(localDate(2026, 6, 10, 10, 0));
+  assert.equal(view.view, 'day');
+  assert.equal(view.framing, 'reminisce');
+  assert.ok(view.day, 'lands on a real day');
+  assert.equal(view.day.date, '2026-07-03', 'the last authored day');
+  assert.equal(view.day.dayNumber, 18);
+});
+
+test('pickLandingView treats TRIP.end as inclusive (last trip day is DURING, not after)', () => {
+  // 2026-07-03 is the end date → during the trip → that day, plan framing.
+  const view = pickLandingView(localDate(2026, 6, 3, 10, 0));
+  assert.equal(view.view, 'day');
+  assert.equal(view.day?.date, '2026-07-03');
+  assert.equal(view.framing, 'plan');
+});
+
+test('pickLandingView uses getNow() (the clock seam) when no explicit now is passed', () => {
+  try {
+    setNow(() => localDate(2026, 4, 24, 12, 0)); // before the trip
+    const view = pickLandingView();
+    assert.equal(view.view, 'overview');
+    assert.equal(view.daysUntil, 23);
+  } finally {
+    setNow(null);
+  }
+});
+
+// --- tripWindowDates --------------------------------------------------------
+
+test('tripWindowDates enumerates all 18 calendar days, sorted, contiguous, inclusive', () => {
+  const dates = tripWindowDates();
+  assert.equal(dates.length, 18, 'Jun 16 … Jul 3 inclusive = 18 days');
+  assert.equal(dates[0], '2026-06-16', 'first = TRIP.start');
+  assert.equal(dates[dates.length - 1], '2026-07-03', 'last = TRIP.end');
+  // Strictly ascending and exactly one calendar day apart (no gaps/dupes).
+  // utcMidnight() returns epoch ms (a number), so subtract directly.
+  for (let i = 1; i < dates.length; i++) {
+    const delta = (utcMidnight(dates[i]) - utcMidnight(dates[i - 1])) / MS_PER_DAY;
+    assert.equal(delta, 1, `contiguous step at index ${i}`);
+  }
+});
+
+test('tripWindowDates spans the authored leg correctly (Jun 24 present, day count math holds)', () => {
+  const dates = tripWindowDates();
+  assert.ok(dates.includes('2026-06-24'), 'authored leg start is in the window');
+  assert.ok(dates.includes('2026-06-18'), 'unauthored leg day is still in the window');
+});
+
+test('tripWindowDates returns [] for an inverted window (end before start)', () => {
+  assert.deepEqual(tripWindowDates({ start: '2026-07-03', end: '2026-06-16' }), []);
+});
+
+test('tripWindowDates returns [] for an unparseable window', () => {
+  assert.deepEqual(tripWindowDates({ start: 'nope', end: '2026-07-03' }), []);
+  assert.deepEqual(tripWindowDates({ start: '2026-06-16', end: 'nope' }), []);
+  assert.deepEqual(tripWindowDates({}), []);
+});
+
+test('tripWindowDates returns a single date when start === end', () => {
+  assert.deepEqual(tripWindowDates({ start: '2026-06-20', end: '2026-06-20' }), ['2026-06-20']);
+});
+
+// --- mountApp: navigation, clamping, slideshow cleanup ----------------------
+//
+// These drive the controller through the existing DOM stub. To prove the
+// slideshow timers are managed (no orphaned intervals across navigations) we
+// install spy setInterval/clearInterval. Real crossfade timing is NOT under
+// test here (covered by the browser VERIFY-APP stage) — we only assert that
+// every interval the controller starts is later cleared.
+
+/**
+ * Run `fn` with spy timers installed on globalThis. Each setInterval returns a
+ * unique id and is recorded; clearInterval records the cleared id. Returns the
+ * live set of un-cleared interval ids so a test can assert none leaked. Timers
+ * never actually fire (we don't want the slideshow to tick during a unit test).
+ */
+function withTimerSpies(fn) {
+  const prevSet = globalThis.setInterval;
+  const prevClear = globalThis.clearInterval;
+  let seq = 0;
+  const live = new Set();
+  globalThis.setInterval = () => { const id = ++seq; live.add(id); return id; };
+  globalThis.clearInterval = (id) => { live.delete(id); };
+  try {
+    return fn(live);
+  } finally {
+    globalThis.setInterval = prevSet;
+    globalThis.clearInterval = prevClear;
+  }
+}
+
+/** A stub root element (reuses StubElement) the controller mounts into. */
+function makeRoot() { return new StubElement('main'); }
+
+test('mountApp returns a controller ({go, toIso, destroy}) and mounts a nav bar', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0)); // during the trip (authored day)
+        const root = makeRoot();
+        const ctl = mountApp(root);
+        assert.ok(ctl && typeof ctl.go === 'function' && typeof ctl.toIso === 'function' && typeof ctl.destroy === 'function');
+        assert.ok(root.firstByClass('day-nav'), 'a day-nav bar is mounted');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('mountApp returns undefined and does not throw when called without a root element', () => {
+  // Silence the expected warn from the guard.
+  const warned = captureWarnings(() => {
+    assert.equal(mountApp(null), undefined);
+    assert.equal(mountApp(undefined), undefined);
+  });
+  assert.ok(warned >= 2, 'guard warns for each missing root');
+});
+
+test('mountApp clamps PREV at index 0 (Prev disabled on the first window day, no underflow)', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        // Land on the first window day (Jun 16) by pinning now to it.
+        setNow(() => localDate(2026, 5, 16, 12, 0));
+        const root = makeRoot();
+        const ctl = mountApp(root);
+        const prev = root.firstByClass('day-nav-prev');
+        assert.equal(prev.disabled, true, 'Prev is disabled at index 0');
+        const pos = root.firstByClass('day-nav-pos').textContent;
+        assert.equal(pos, 'Day 1', 'position label shows Day 1 at the window start');
+        // Clicking the (disabled) Prev / navigating below 0 is a clamped no-op:
+        // still on Day 1, still no crash.
+        ctl.go(-5);
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 1', 'clamped to Day 1, no underflow');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('mountApp clamps NEXT at the last index (Next disabled on the final window day, no overflow)', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        // Land on the last window day (Jul 3, Day 18).
+        setNow(() => localDate(2026, 6, 3, 12, 0));
+        const root = makeRoot();
+        const ctl = mountApp(root);
+        const next = root.firstByClass('day-nav-next');
+        assert.equal(next.disabled, true, 'Next is disabled at the last index');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 18');
+        // Navigating beyond the end is a clamped no-op.
+        ctl.go(999);
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 18', 'clamped to Day 18, no overflow');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('mountApp Next button advances one day; Prev is enabled once off the first day', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 16, 12, 0)); // start on Day 1
+        const root = makeRoot();
+        mountApp(root);
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 1');
+        // Fire the Next button's click listener (drives navigate(index+1)).
+        root.firstByClass('day-nav-next')._fire('click');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 2', 'advanced to Day 2');
+        assert.equal(root.firstByClass('day-nav-prev').disabled, false, 'Prev enabled once off Day 1');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('mountApp does NOT leak slideshow intervals across navigations (prior view stop() is called)', () => {
+  withDom(() => {
+    withTimerSpies((live) => {
+      try {
+        // Pin to an authored, multi-photo day so the slideshow actually starts a
+        // timer (Jun 24 has 2 photos). Cycling requires >1 photo + no reduce-motion.
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        const ctl = mountApp(root);
+        // One live interval after the initial mount (the active day-view's slideshow).
+        assert.equal(live.size, 1, 'initial mount starts exactly one slideshow interval');
+        // Navigate to several other authored days; each re-render must stop the
+        // previous slideshow before starting the next → never more than one live.
+        ctl.toIso('2026-06-25');
+        assert.equal(live.size, 1, 'after nav, prior interval cleared (no leak)');
+        ctl.toIso('2026-06-26');
+        assert.equal(live.size, 1, 'still exactly one live interval');
+        // destroy() must clear the last remaining interval.
+        ctl.destroy();
+        assert.equal(live.size, 0, 'destroy() stops the active slideshow');
+        assert.equal(root.children.length, 0, 'destroy() clears the root');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('mountApp on a multi-photo day with reduce-motion starts NO interval (nothing to leak)', () => {
+  withDom(() => {
+    withTimerSpies((live) => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root);
+        assert.equal(live.size, 0, 'reduce-motion: a single static image, no slideshow timer');
+      } finally {
+        setNow(null);
+      }
+    });
+  }, { reduceMotion: true });
+});
+
+test('mountApp BEFORE the trip mounts the overview (countdown), not a day view', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 4, 24, 12, 0)); // before the trip
+        const root = makeRoot();
+        mountApp(root);
+        assert.ok(root.firstByClass('overview-view'), 'overview is mounted before the trip');
+        assert.equal(root.firstByClass('day-nav'), null, 'no day-nav chrome on the overview');
+        // The countdown reflects pickLandingView.daysUntil (23 on 2026-05-24).
+        assert.equal(root.firstByClass('overview-count-num').textContent, '23');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('mountApp shows the evening "Prep for tomorrow" CTA inside the evening window only', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        // 22:00 on Jun 24 → inside the 21:00–04:00 window → prep CTA present.
+        setNow(() => localDate(2026, 5, 24, 22, 0));
+        const evening = makeRoot();
+        mountApp(evening);
+        assert.ok(evening.firstByClass('evening-prep'), 'evening window → prep section shown');
+
+        // 14:00 on Jun 24 → outside the window → no prep CTA.
+        setNow(() => localDate(2026, 5, 24, 14, 0));
+        const midday = makeRoot();
+        mountApp(midday);
+        assert.equal(midday.firstByClass('evening-prep'), null, 'midday → no prep section');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('mountApp evening "Prep for tomorrow" CTA NAVIGATES to the next day when clicked', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        // 22:00 on Jun 24 (Day 9) → in the evening window → prep CTA points at Jun 25.
+        setNow(() => localDate(2026, 5, 24, 22, 0));
+        const root = makeRoot();
+        mountApp(root);
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 9', 'starts on Jun 24');
+        const cta = root.firstByClass('evening-prep-cta');
+        assert.ok(cta, 'evening prep CTA present');
+        // Clicking the CTA must move the day view to tomorrow (Day 10 / Jun 25).
+        cta._fire('click');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 10', 'CTA navigated to the next day');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('mountApp evening prep surfaces TOMORROW\'s prep list (next day\'s notes, not today\'s)', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        // On Jun 24 in-window, the prep section should reflect Jun 25's content.
+        setNow(() => localDate(2026, 5, 24, 22, 0));
+        const root = makeRoot();
+        mountApp(root);
+        const dayLabel = root.firstByClass('evening-prep-day');
+        assert.ok(dayLabel, 'prep section names tomorrow');
+        assert.equal(dayLabel.textContent, getDay('2026-06-25').title,
+          'prep section shows the NEXT day\'s title');
+        // Tomorrow (Jun 25) is authored with a non-empty prep list → list rendered, not the empty note.
+        assert.ok(root.firstByClass('evening-prep-list'), 'tomorrow\'s prep list is rendered');
+        assert.equal(root.firstByClass('evening-prep-empty'), null, 'no "nothing to prep" note when tomorrow has prep');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('mountApp on the LAST day (Jul 3) in the evening window shows NO prep CTA (no tomorrow in-window)', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        // 22:00 on Jul 3 (Day 18, the final window day) → in the evening window,
+        // but there is no day after it → buildEveningPrep returns null → no section.
+        setNow(() => localDate(2026, 6, 3, 22, 0));
+        const root = makeRoot();
+        mountApp(root);
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 18', 'on the last window day');
+        assert.equal(root.firstByClass('day-nav-next').disabled, true, 'Next clamped at the last day');
+        assert.equal(root.firstByClass('evening-prep'), null,
+          'no prep section on the last day — there is no tomorrow to prep for');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('mountApp evening prep CTA is suppressed once you navigate OFF today (tomorrow is meaningful only vs the real current day)', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        // 22:00 on Jun 24 (Day 9 = today) → CTA shows on the landing (today) view.
+        setNow(() => localDate(2026, 5, 24, 22, 0));
+        const root = makeRoot();
+        const ctrl = mountApp(root);
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 9', 'lands on today');
+        assert.ok(root.firstByClass('evening-prep'), 'CTA present on today in the evening window');
+
+        // Page forward to a FUTURE day (still 22:00) → "tomorrow" no longer means
+        // the day after this one, so the CTA must be gone.
+        ctrl.toIso('2026-06-26'); // Day 11
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 11', 'navigated to a future day');
+        assert.equal(root.firstByClass('evening-prep'), null,
+          'no prep CTA when viewing a non-today day in the evening window');
+
+        // And back to today → CTA returns.
+        ctrl.toIso('2026-06-24'); // back to today (Day 9)
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 9', 'back on today');
+        assert.ok(root.firstByClass('evening-prep'), 'CTA reappears on today');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('frameForDay frames an ABSENT day (unauthored Jun 16–23 leg) purely by its calendar date', () => {
+  // 2026-06-18 has no authored data (getDay → null), but frameForDay works off
+  // the ISO date alone, so the lifecycle framing is still correct relative to now.
+  assert.equal(getDay('2026-06-18'), null, 'precondition: Jun 18 is unauthored');
+  assert.equal(frameForDay('2026-06-18', localDate(2026, 5, 17, 12, 0)), 'anticipation', 'before that calendar day');
+  assert.equal(frameForDay('2026-06-18', localDate(2026, 5, 18, 12, 0)), 'plan', 'on that calendar day');
+  assert.equal(frameForDay('2026-06-18', localDate(2026, 5, 19, 12, 0)), 'reminisce', 'after that calendar day');
 });

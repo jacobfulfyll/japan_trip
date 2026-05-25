@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← 97 tests for the data/API layer (node --test).
+app.test.js    ← 138 tests for the data/API/nav layer (node --test; 168 with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -141,16 +141,51 @@ screens import them.
 | `getDay(iso)`           | The day matching ISO date `iso`, or `null` if absent. Frozen. |
 | `getDayByNumber(n)`     | The day whose derived `dayNumber === n`, or `null` if absent (also `null` for non-finite `n`). Frozen. |
 | `renderDay(day, framing?)` | Returns `{ node, start, stop }`. `node` is the day-view DOM element (hero + plan + lodging + recommendations). `framing` is `'anticipation'`, `'plan'` (default), or `'reminisce'`. Call `start()` after mounting `node` to begin the hero slideshow; call `stop()` before discarding to avoid orphaned intervals. Null/absent `day` renders a graceful placeholder. |
-| `renderInto(rootEl, day?, framing?)` | Mounts a day view into `rootEl` (defaults to Jun 24, `'plan'` framing). Stops any prior view's slideshow before mounting. No-ops (warns) if `rootEl` is falsy. Backward compatible: `renderInto(root)` still works. |
+| `renderInto(rootEl, day?, framing?)` | Mounts a day view into `rootEl` (defaults to Jun 24, `'plan'` framing). Stops any prior view's slideshow before mounting. No-ops (warns) if `rootEl` is falsy. Backward compatible: `renderInto(root)` still works. Retained for standalone/testing use — `mountApp` is now what the bootstrap calls. |
 | `buildValidatedDays(days?, trip?)` | The validation core, exported for tests. Returns a frozen, sorted, validated array. You won't normally call this. |
 | `haversineMeters(a, b)` | Returns the great-circle distance in meters between two `{ lat, lng }` points. Exported for tests. |
 | `formatWalk(meters)`    | Returns a human-readable walking estimate string (e.g. `"~3 min walk"`). Exported for tests. |
 | `safeUrl(url)`          | Returns the URL if its scheme is in the allow-list (`https`, `http`, `maps`), otherwise `null`. Strips tab/LF/CR before checking. Exported for tests. |
 | `nearestPrecedingCoords(plan, index, lodging)` | Returns the `{ lat, lng }` of the nearest preceding plan item with coords, falling back to `lodging.coords`, or `null`. Used to compute walking distances to recommendations. Exported for tests. |
 
+**Date/time-aware navigation** — the following exports power the smart landing, lifecycle framing, and nav bar:
+
+| Function                | Returns / effect                                              |
+|-------------------------|--------------------------------------------------------------|
+| `mountApp(rootEl)`      | **Primary mount entry point** (what the bootstrap calls). Boots the date/time-aware controller: picks a landing view, renders it, and wires a prev/next nav bar that pages across the full 18-day trip window (Jun 16 – Jul 3). Absent days (the Jun 16–23 gap) render placeholder screens, not crashes. Returns `{ go(index), toIso(iso), destroy() }`. |
+| `pickLandingView(now?)` | Decides what to show on open. Before the trip: `{ view: 'overview', day: null, daysUntil }`. During: `{ view: 'day', day, framing }` for today's day in its lifecycle framing. After: `{ view: 'day', day, framing: 'reminisce' }` for the last day (overview fallback if no days authored). Defaults `now` to `getNow()`. |
+| `frameForDay(day, now?)` | Returns `'anticipation'` (future day), `'plan'` (today), or `'reminisce'` (past day), comparing calendar dates in local time. Accepts a day object or an ISO string. Bad input returns `'plan'`. Defaults `now` to `getNow()`. |
+| `isEveningWindow(now, window?)` | Returns `true` during the evening window defined by `TRIP.eveningWindow` (default 9 pm – 4 am, midnight-wrapping). Defaults `window` to `getTrip().eveningWindow`. |
+| `tripWindowDates(trip?)` | Returns an ordered ISO array of every date in the trip window (18 dates for Jun 16 – Jul 3). Returns `[]` if the window is inverted or unparseable. Defaults `trip` to `getTrip()`. |
+| `getNow()`              | Returns the current `Date` from the active clock provider. Degrades to `new Date()` if the provider throws or returns a non-Date. |
+| `setNow(fn\|null)`      | Overrides the clock: pass a zero-argument function that returns a `Date` to substitute a fixed or simulated time. Pass `null` to restore the wall clock. Intended for the upcoming time-travel test mode — do not call in production paths. |
+
 **Immutability / copy-safety:** everything the API hands back is deeply frozen,
 so callers can't accidentally corrupt the shared data. `getDays()` additionally
 returns a new array each call, so you can sort/filter the result freely.
+
+### How the smart landing works
+
+When the page loads, `mountApp` calls `pickLandingView` to choose the opening screen:
+
+- **Before Jun 16** (pre-trip): a self-contained countdown overview showing days until departure. This is an intentional interim; the `trip-overview-home` backlog task will later replace it.
+- **Jun 16 – Jul 3** (during the trip): today's day view in its lifecycle framing — `'anticipation'` in the morning, `'plan'` through the day, `'reminisce'` once the day has passed.
+- **After Jul 3** (post-trip): the last authored day in `'reminisce'` framing.
+
+The nav bar's prev/next arrows page through all 18 dates regardless of which days are authored. Absent days (Jun 16–23 as of now) show a placeholder rather than crashing.
+
+#### Evening "Prep for tomorrow" button
+
+While viewing today's day during the evening window (9 pm – 4 am, configured in `TRIP.eveningWindow`), a "Prep for tomorrow →" button appears. Tapping it navigates to tomorrow's day and surfaces the `prep[]` checklist. The button is hidden when viewing any other day, on the last day of the trip, and outside the evening window.
+
+#### Previewing time-dependent behavior locally
+
+Today's real date is before the trip, so `mountApp` will land on the countdown overview. To preview in-trip behavior:
+
+1. Open DevTools console.
+2. Override the clock: `import('/japan_trip/app.js').then(m => m.setNow(() => new Date('2026-06-24T22:00')))` — or call `setNow` if the module is already on `window`.
+3. Reload the page. The app will now treat Jun 24 at 10 pm as "now": the day view opens in `'plan'` framing, and the evening-prep button is visible.
+4. Restore: `setNow(null)`, then reload.
 
 ## PWA — install to your phone and use offline
 
@@ -216,10 +251,12 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-97 tests cover the data validation, `dayNumber` derivation, the null-on-absent
-lookups, the immutability guarantees, and the day-view render layer (haversine
-math, `safeUrl` scheme gating, framing variants, recommendation expansion, and
-the sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub).
+The `app.test.js` suite (138 cases; 168 total alongside `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+lookups, the immutability guarantees, the day-view render layer (haversine
+math, `safeUrl` scheme gating, framing variants, recommendation expansion,
+sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),
+and the date/time-aware navigation layer (`frameForDay`, `pickLandingView`,
+`isEveningWindow`, `tripWindowDates`, `mountApp`, and the `getNow`/`setNow` clock seam).
 
 ## Deploy
 

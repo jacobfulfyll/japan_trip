@@ -606,6 +606,163 @@
             background: linear-gradient(180deg, rgba(138, 79, 31, 0.2) 0%, rgba(8, 37, 61, 0) 45%, rgba(8, 37, 61, 0.34) 100%);
         }
 
+        /* --- Day navigation (prev / position / next) --------------------- */
+        .day-screen { display: flex; flex-direction: column; gap: 14px; }
+
+        .day-nav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 14px;
+            background: var(--paper-nav);
+            border: 1px solid var(--line);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-md);
+            backdrop-filter: blur(6px);
+        }
+
+        .day-nav-btn {
+            font-family: inherit;
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--brand-deep);
+            background: var(--paper-btn);
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            padding: 8px 16px;
+            cursor: pointer;
+            transition: background 0.18s ease, transform 0.18s ease, opacity 0.18s ease;
+        }
+
+        .day-nav-btn:hover:not(:disabled) { background: var(--card-solid); transform: translateY(-1px); }
+        .day-nav-btn:focus-visible { outline: 2px solid var(--brand-mid); outline-offset: 2px; }
+        .day-nav-btn:disabled { opacity: 0.4; cursor: default; }
+
+        .day-nav-pos {
+            font-family: "Playfair Display", "Georgia", serif;
+            font-size: 1.05rem;
+            color: var(--ink);
+            letter-spacing: 0.02em;
+        }
+
+        /* --- Evening "Prep for tomorrow" -------------------------------- */
+        .evening-prep {
+            background:
+                linear-gradient(150deg, rgba(11, 61, 102, 0.14), rgba(243, 203, 114, 0.12));
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-md);
+            padding: 18px 20px 20px;
+            backdrop-filter: blur(6px);
+        }
+
+        .evening-prep-cta {
+            font-family: inherit;
+            font-size: 1.02rem;
+            font-weight: 700;
+            color: #fff;
+            background: var(--brand-deep);
+            border: none;
+            border-radius: 999px;
+            padding: 11px 20px;
+            cursor: pointer;
+            transition: background 0.18s ease, transform 0.18s ease;
+        }
+
+        .evening-prep-cta:hover { background: var(--brand-mid); transform: translateY(-1px); }
+        .evening-prep-cta:focus-visible { outline: 2px solid var(--brand-glow); outline-offset: 2px; }
+
+        .evening-prep-day {
+            font-family: "Playfair Display", "Georgia", serif;
+            font-size: 1.1rem;
+            color: var(--ink);
+            margin-top: 12px;
+        }
+
+        .evening-prep-list { list-style: none; margin-top: 10px; display: grid; gap: 8px; }
+
+        .evening-prep-item {
+            position: relative;
+            padding-left: 18px;
+            color: var(--ink-soft);
+            font-size: 0.95rem;
+            line-height: 1.45;
+        }
+
+        .evening-prep-item::before {
+            content: "•";
+            position: absolute;
+            left: 2px;
+            color: var(--brand-mid);
+        }
+
+        .evening-prep-empty { margin-top: 10px; color: var(--ink-soft); font-size: 0.95rem; }
+
+        /* --- Pre-trip overview / countdown (interim seam) --------------- */
+        .overview-view {
+            background: var(--paper-surface);
+            border: 1px solid rgba(13, 52, 81, 0.22);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-lg);
+            backdrop-filter: blur(8px);
+            padding: 40px 28px 36px;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 18px;
+        }
+
+        .overview-kicker {
+            text-transform: uppercase;
+            letter-spacing: 0.18em;
+            font-size: 0.78rem;
+            color: var(--brand-mid);
+            font-weight: 700;
+        }
+
+        .overview-title {
+            font-family: "Playfair Display", "Georgia", serif;
+            font-size: clamp(1.6rem, 5vw, 2.4rem);
+            color: var(--ink);
+            line-height: 1.15;
+        }
+
+        .overview-count { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+
+        .overview-count-num {
+            font-family: "Playfair Display", "Georgia", serif;
+            font-size: clamp(3rem, 14vw, 5rem);
+            line-height: 1;
+            color: var(--brand-deep);
+        }
+
+        .overview-count-label {
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            font-size: 0.85rem;
+            color: var(--ink-soft);
+        }
+
+        .overview-dates { color: var(--ink-soft); font-size: 0.95rem; }
+
+        .overview-enter {
+            font-family: inherit;
+            font-size: 1.02rem;
+            font-weight: 700;
+            color: #fff;
+            background: var(--brand-deep);
+            border: none;
+            border-radius: 999px;
+            padding: 12px 24px;
+            cursor: pointer;
+            transition: background 0.18s ease, transform 0.18s ease;
+        }
+
+        .overview-enter:hover { background: var(--brand-mid); transform: translateY(-1px); }
+        .overview-enter:focus-visible { outline: 2px solid var(--brand-glow); outline-offset: 2px; }
+
         /* --- Mobile tuning ----------------------------------------------- */
         @media (max-width: 760px) {
             body { padding: 8px; }
@@ -616,6 +773,11 @@
             .plan-list { padding: 0 16px; }
             .lodging-card { margin: 18px 16px 20px; }
             .reminisce-seam { margin: 16px 16px 0; }
+            .day-screen { gap: 10px; }
+            .day-nav { padding: 8px 10px; }
+            .day-nav-btn { padding: 7px 12px; font-size: 0.9rem; }
+            .evening-prep { padding: 16px; }
+            .overview-view { padding: 32px 18px; }
         }
     </style>
 </head>

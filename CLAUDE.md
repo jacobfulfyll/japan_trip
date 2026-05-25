@@ -22,11 +22,11 @@ The site renders from `data/days.js`. **10 days are authored (Jun 24 – Jul 3).
 | File | Purpose |
 |------|---------|
 | `data/days.js` | **Single source of trip content** — ES module exporting `TRIP` + `DAYS`. Editing the trip = editing this file. |
-| `app.js` | Render pipeline: imports `data/days.js`, validates (warn-and-skip), deep-freezes, derives `dayNumber`, exposes the day API + `renderDay` + `renderInto`. |
+| `app.js` | Render pipeline: imports `data/days.js`, validates (warn-and-skip), deep-freezes, derives `dayNumber`, exposes the day API + `renderDay` + the date/time-aware `mountApp` (clock-driven landing, prev/next nav, evening "Prep for tomorrow"). |
 | `index.html` | Slim shell — ukiyo-e theme CSS + `<main id="app-root">` + `<script type="module" src="app.js">` + PWA wiring (manifest link, iOS meta, SW registration). |
-| `sw.js` | Hand-written service worker (no build step) — precaches the app shell into `app-shell-v1`, runtime-caches photos/fonts into `runtime-v1`. Bump `CACHE_VERSION` when shell files change. |
+| `sw.js` | Hand-written service worker (no build step) — precaches the app shell into `app-shell-v<CACHE_VERSION>` (currently `v2`), runtime-caches photos/fonts into `runtime-v<CACHE_VERSION>`. Bump `CACHE_VERSION` when shell files change. |
 | `manifest.json` | Web app manifest (install-to-home-screen). Relative `start_url`/`scope` for the `/japan_trip/` Pages subpath. Icons live in `img/`. |
-| `app.test.js` | 97 `node:test` cases for the data and render layers. Run with `node --test`. |
+| `app.test.js` | 138 `node:test` cases for the data, render, and date/time-nav layers (168 total with `sw.test.js`). Run with `node --test`. |
 | `sw.test.js` | `node:test` cases for the service worker (vm-sandboxed) + manifest/index.html PWA wiring. |
 | `README.md` | How to edit the trip (schema + example), the `app.js` API, how to preview, deploy. |
 | `CHANGELOG.md` | Keep-a-Changelog history. |
@@ -56,7 +56,7 @@ Data-driven, single render pipeline:
 data/days.js   ← TRIP + DAYS (content; the only file you edit to change the trip)
      │ import
      ▼
-app.js         ← validate → deep-freeze → derive dayNumber → public API + renderInto()
+app.js         ← validate → deep-freeze → derive dayNumber → public API + mountApp() (clock-driven landing + nav)
      │ <script type="module">
      ▼
 index.html     ← slim shell: theme CSS + <main id="app-root"> (render target)
@@ -89,9 +89,18 @@ Conventions baked into the data: reservations are plan items with `reserved:true
 - `getDay(iso)` → the day for an ISO date, or `null` if absent (e.g. the Jun 16–23 gap).
 - `getDayByNumber(n)` → day by derived `dayNumber`, or `null` (non-finite input → `null`).
 - `renderDay(day, framingName = 'plan')` → returns `{ node, start, stop }`. Mount `node`, call `start()` to begin the hero slideshow, call `stop()` before discarding. Framings: `'anticipation'`, `'plan'`, `'reminisce'`. Null/absent day renders a placeholder.
-- `renderInto(rootEl, day?, framing?)` → mounts a day view (defaults to Jun 24, `'plan'`). Stops any prior view's slideshow before mounting. Backward compatible.
+- `mountApp(rootEl)` → **the bootstrap mount entry point.** Picks the landing view from the clock (`pickLandingView`), mounts it, and wires the prev/next nav bar + evening "Prep for tomorrow" button. Returns a controller `{ go(index), toIso(iso), destroy() }`. `go`/`toIso` are clamped to the trip window; `destroy()` stops the active slideshow and clears the root. This is what `index.html` boots — `renderInto` is no longer the bootstrap path.
+- `renderInto(rootEl, day?, framing?)` → mounts a *single* day view (defaults to Jun 24, `'plan'`). Stops any prior view's slideshow before mounting. **Retained for backward compatibility / standalone use**, but `mountApp` is the live entry point.
+- Date/time-aware navigation (date-time-aware-navigation task):
+  - `frameForDay(day, now = getNow())` → `'anticipation'` (future) / `'plan'` (today) / `'reminisce'` (past), by **local calendar day** (accepts a day object or ISO string; bad input → `'plan'`).
+  - `pickLandingView(now = getNow())` → `{ view:'overview', day:null, daysUntil }` before the trip, `{ view:'day', day, framing }` during/after.
+  - `isEveningWindow(now, window = getTrip().eveningWindow)` → boolean; the window **wraps midnight** (`hour >= startHour || hour < endHour`; default 21→4).
+  - `tripWindowDates(trip = getTrip())` → ordered ISO array of every trip day (18 days Jun 16–Jul 3); `[]` on an inverted/unparseable window.
+  - `getNow()` / `setNow(fn|null)` → the clock seam. **All "now" reads go through `getNow()`** so the clock is overridable (the time-travel-test-mode task swaps it; tests pin it). `getNow()` degrades to the wall clock if the provider throws or returns a non-Date. `setNow(null)` restores.
 - `buildValidatedDays(days, trip)` → exported for tests. (`deriveDayNumber` is internal — not exported.)
 - Pure helpers exported for testing: `haversineMeters(a, b)`, `formatWalk(meters)`, `safeUrl(url)`, `nearestPrecedingCoords(plan, index, lodging)`.
+
+The **pre-trip overview is an intentional interim** (`renderOverview` + the `{view:'overview'}` landing descriptor) — a self-contained countdown with a clean seam the backlog `trip-overview-home` task will replace/enhance. Don't mistake it for that task being done.
 
 Returns are **deeply frozen and copy-safe** — callers cannot corrupt shared module state.
 
@@ -103,6 +112,7 @@ Returns are **deeply frozen and copy-safe** — callers cannot corrupt shared mo
 - Render is **XSS-safe by construction**: data reaches the DOM via `textContent` / `createElement` only — never `innerHTML` with interpolated data. Preserve this in downstream screens.
 - When wiring data URLs (`photos[].url`, `mapUrl`) into `href`/`src` in screen tasks (and especially once v2 adds user-uploaded photos), validate the scheme through `safeUrl()` (rejects `javascript:`/`data:`/etc., allows http(s) + relative) and add `rel="noopener noreferrer"` on external links. **Gotcha:** `safeUrl` strips ASCII tab/LF/CR *before* the scheme check — the WHATWG URL parser strips those characters, so `java\tscript:` would otherwise re-form into a live `javascript:` href. Keep that stripping if you touch `safeUrl`.
 - Validation is non-fatal: malformed/absent days warn-and-skip; the site must always render whatever is valid (partial-trip safe).
+- **Read "now" only through `getNow()`** — never call `new Date()` directly in navigation/landing/time-of-day logic. The clock seam (`getNow`/`setNow`) is the single override point time-travel-test-mode and unit tests depend on; a stray `new Date()` silently bypasses pinned/overridden time. Compare days by **local calendar day** (via `localISODate`/`dayDelta`), not raw timestamps.
 - CSS classes use kebab-case; the ukiyo-e theme tokens live in `:root` in `index.html`.
 - Tests are dependency-free (`node:test` + `node:assert/strict`). Pure logic (e.g. `haversineMeters`, `safeUrl`) is unit-tested directly. Render functions (`renderDay`) are tested with a small hand-rolled DOM stub in `app.test.js` (no jsdom) — reuse that stub for downstream screens; real-browser behavior (crossfade, layout) is covered by the VERIFY-APP stage, not unit tests.
 
