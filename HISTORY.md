@@ -5,3 +5,4 @@
 - [x] offline-and-installable Service worker + manifest, install to home screen, asset + photo caches -- 2026-05-24
 - [x] day-view-screen Hype-photo hero + scroll-down practical plan, three lifecycle framings -- 2026-05-24
 - [x] date-time-aware-navigation Lifecycle framing, smart landing, forward/back nav, evening "Prep for tomorrow" button -- 2026-05-24
+- [x] time-travel-test-mode Fake the clock (override now) + test page to verify time-of-day behavior on a phone -- 2026-05-24

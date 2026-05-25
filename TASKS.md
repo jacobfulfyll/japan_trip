@@ -2,20 +2,6 @@
 
 ## Active Tasks
 
-### time-travel-test-mode
-**Task**: Fake the clock (override `now`) + a test page to verify time-of-day behavior on a phone
-**Pipeline**: code-workflow
-**Branch**: task/time-travel-test-mode
-**Worktree**: .worktree/time-travel-test-mode
-**Base**: main
-**Started**: 2026-05-24
-**Files**:
-- MOD: app.js
-- NEW: test.html
-- MOD: index.html
-
----
-
 ### trip-overview-home
 **Task**: Pre-trip home with countdown + tappable all-days index
 **Pipeline**: code-workflow
