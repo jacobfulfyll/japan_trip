@@ -2,17 +2,6 @@
 
 ## Active Tasks
 
-### date-time-aware-navigation
-**Task**: Lifecycle framing, smart landing, forward/back nav, evening "Prep for tomorrow" button
-**Pipeline**: code-workflow
-**Branch**: task/date-time-aware-navigation
-**Worktree**: .worktree/date-time-aware-navigation
-**Base**: main
-**Started**: 2026-05-24
-**Files**:
-- MOD: app.js
-- MOD: index.html
-
 ---
 
 ## Backlog
