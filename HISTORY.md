@@ -6,3 +6,5 @@
 - [x] day-view-screen Hype-photo hero + scroll-down practical plan, three lifecycle framings -- 2026-05-24
 - [x] date-time-aware-navigation Lifecycle framing, smart landing, forward/back nav, evening "Prep for tomorrow" button -- 2026-05-24
 - [x] time-travel-test-mode Fake the clock (override now) + test page to verify time-of-day behavior on a phone -- 2026-05-24
+- [x] trip-overview-home Pre-trip home: live countdown + tappable 18-day index (Planned/TBD), tap-to-open day view -- 2026-05-24
+- [x] sw-test-cache-version-coupling Derive sw.test.js cache-name literals from CACHE_VERSION (resolved within trip-overview-home) -- 2026-05-24
