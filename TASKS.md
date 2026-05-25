@@ -17,6 +17,9 @@
   files: app.js (MOD), index.html (MOD), sw.js (MOD)
 
 ### Ungroomed
+- [ ] need-a-way-to-get-back-to-home-while-viewing-the-days-of-the-trip: need a way to get back to home while viewing the days of the trip
+- [ ] the-recommendation-options-are-not-collapsible: the recommendation options are not collapsible
+- [ ] i-m-wondering-if-there-should-be-a-way-to-collapse-parts-of-the-day-as-well-morning-afternoon-evening: I’m wondering if there should be a way to collapse parts of the day as well, morning, afternoon, evening
 <!-- Real-world trip bookings & confirmations surfaced during grooming. Personal to-dos, not build tasks — to be tackled later. -->
 - [ ] reserve-jun24-dinner: Reserve Tousuiro Kiyamachi for 8pm — riverside terrace + Megan's vegetarian ROKUHARA course (state: no fish/bonito/dashi)
 - [ ] reserve-odawara-kyoto-shinkansen: Reserve Hikari seats Odawara→Kyoto (4 together; Hikari/Kodama only — not Nozomi)
