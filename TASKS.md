@@ -64,3 +64,5 @@
   > sw.js staleWhileRevalidate grows unbounded. Fine for the small Wikimedia hero set today, but a real device-storage concern once v2 adds user-uploaded photos. Revisit alongside reminisce-photo-gallery / photo-upload-flow.
 - [ ] upgrade-deploy-pages-actions: Bump deploy-pages.yml `upload-pages-artifact` and `deploy-pages` from @v1 to @v3 (discovered during offline-and-installable; also in CLAUDE.md Known Issues)
   > @v1 actions are deprecated. Low-risk mechanical bump; verify a Pages deploy still succeeds after.
+- [ ] sw-test-cache-version-coupling: Derive cache-name literals in sw.test.js from sw.js `CACHE_VERSION` instead of hardcoding (discovered during time-travel-test-mode)
+  > sw.test.js hardcodes `app-shell-v<N>`/`runtime-v<N>` (~lines 158–159); every mandated CACHE_VERSION bump silently breaks ~9 SW tests until the two literals are hand-updated in lockstep. Read CACHE_VERSION from the SW source in the vm sandbox so the bump is single-source.
