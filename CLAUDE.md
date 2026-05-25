@@ -22,11 +22,11 @@ The site renders from `data/days.js`. **10 days are authored (Jun 24 – Jul 3).
 | File | Purpose |
 |------|---------|
 | `data/days.js` | **Single source of trip content** — ES module exporting `TRIP` + `DAYS`. Editing the trip = editing this file. |
-| `app.js` | Render pipeline: imports `data/days.js`, validates (warn-and-skip), deep-freezes, derives `dayNumber`, exposes the day API + `renderDay` + the date/time-aware `mountApp` (clock-driven landing, prev/next nav, evening "Prep for tomorrow"). |
+| `app.js` | Render pipeline: imports `data/days.js`, validates (warn-and-skip), deep-freezes, derives `dayNumber`, exposes the day API + `renderDay` + the pre-trip home (`renderOverview`: countdown + tappable 18-day index) + the date/time-aware `mountApp` (clock-driven landing, prev/next nav, evening "Prep for tomorrow"). |
 | `index.html` | Slim shell — ukiyo-e theme CSS + `<main id="app-root">` + `<script type="module" src="app.js">` + PWA wiring (manifest link, iOS meta, SW registration). |
 | `sw.js` | Hand-written service worker (no build step) — precaches the app shell into `app-shell-v<CACHE_VERSION>` (currently `v3`), runtime-caches photos/fonts into `runtime-v<CACHE_VERSION>`. Bump `CACHE_VERSION` when shell files change. `test.html` is intentionally NOT precached (dev tool, network-only). |
 | `manifest.json` | Web app manifest (install-to-home-screen). Relative `start_url`/`scope` for the `/japan_trip/` Pages subpath. Icons live in `img/`. |
-| `app.test.js` | 160 `node:test` cases for the data, render, date/time-nav, and time-travel layers (190 total with `sw.test.js`). Run with `node --test`. |
+| `app.test.js` | 174 `node:test` cases for the data, render, date/time-nav, time-travel, and pre-trip-home layers (204 total with `sw.test.js`). Run with `node --test`. |
 | `sw.test.js` | `node:test` cases for the service worker (vm-sandboxed) + manifest/index.html PWA wiring. |
 | `test.html` | Standalone on-theme dev page for the time-travel test mode — datetime picker, 4 trip-scenario presets, "Launch app in this moment" (opens `index.html?now=…`), "Clear override". Served over HTTP (`http://localhost:8000/test.html`); NOT precached (dev tool only). |
 | `README.md` | How to edit the trip (schema + example), the `app.js` API, how to preview, deploy. |
@@ -101,10 +101,10 @@ Conventions baked into the data: reservations are plan items with `reserved:true
 - Time-travel test mode (time-travel-test-mode task):
   - `parseNowOverride(value)` → parses a datetime-local string (or any `new Date()`-parseable string) into a valid `Date`, or `null` if unparseable. Local-time parse is intentional.
   - `resolveNowOverride()` → reads the override from URL param `?now` (wins) then `localStorage` key `jt:now`, pins the clock via `setNow()` when one is valid, and returns the active override `Date` or `null`. **Inert by default** — no override means the real device clock is used. Clear tokens (`?now=clear`, `off`, `real`, `reset`, empty) wipe the stored override and restore the real clock. Node-safe (guarded on `typeof window`). Called once at module load; `buildTimeTravelBanner()` (internal) renders the active-override indicator in `index.html`.
+- Pre-trip home (trip-overview-home task):
+  - `renderOverview(daysUntil, onEnter)` → builds the pre-trip **home screen** and returns `{ node, start, stop }` (start/stop are no-ops — no slideshow). The `{view:'overview'}` landing descriptor maps here. It renders a **live countdown** with three states off `getNow()` (before: "N days until the trip"; during: "The adventure is underway."; after: "The adventure is complete.") plus a **tappable index of all 18 trip days** — each row shows Day#, date, city/region, and a "Planned"/"TBD" status pill; tapping a row calls `onEnter(iso)` (wired to `mountApp`'s `toIso`) to navigate into that day. The unauthored Jun 16–23 leg reads region hints from an in-app `UNAUTHORED_REGIONS` map (data/days.js is the authoritative source; once those days are authored, `day.base` wins and the map entries become dead — drop them then). Exported for tests.
 - `buildValidatedDays(days, trip)` → exported for tests. (`deriveDayNumber` is internal — not exported.)
 - Pure helpers exported for testing: `haversineMeters(a, b)`, `formatWalk(meters)`, `safeUrl(url)`, `nearestPrecedingCoords(plan, index, lodging)`.
-
-The **pre-trip overview is an intentional interim** (`renderOverview` + the `{view:'overview'}` landing descriptor) — a self-contained countdown with a clean seam the backlog `trip-overview-home` task will replace/enhance. Don't mistake it for that task being done.
 
 Returns are **deeply frozen and copy-safe** — callers cannot corrupt shared module state.
 

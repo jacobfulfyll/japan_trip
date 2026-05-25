@@ -154,9 +154,15 @@ function makeFetchEvent(request) {
   };
 }
 
+// Derive the cache version from sw.js's CACHE_VERSION literal rather than
+// hardcoding it, so a future CACHE_VERSION bump (the no-build cache-bust
+// mechanism) never silently breaks this suite. Falls back to 'v?' if the
+// literal can't be found, which would make the dependent assertions fail loudly.
+const CACHE_VERSION = (SW_SRC.match(/CACHE_VERSION\s*=\s*['"]([^'"]+)['"]/) || [, 'v?'])[1];
+
 // Shell URLs precached on install (relative paths resolve to these keys).
-const SHELL_CACHE = 'app-shell-v3';
-const RUNTIME_CACHE = 'runtime-v3';
+const SHELL_CACHE = `app-shell-${CACHE_VERSION}`;
+const RUNTIME_CACHE = `runtime-${CACHE_VERSION}`;
 const PRECACHE_URLS = [
   '.',
   'index.html',

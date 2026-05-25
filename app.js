@@ -933,50 +933,155 @@ export function tripWindowDates(trip = getTrip()) {
 }
 
 // ---------------------------------------------------------------------------
-// Interim overview / countdown (pre-trip landing). trip-overview-home will
-// REPLACE this later; until then this is the graceful interim the
-// {view:'overview'} descriptor maps to. Minimal, on-theme, no external deps.
+// Pre-trip home (trip-overview-home). The {view:'overview'} landing descriptor
+// maps here: a live countdown to Day 1 (with graceful during/after-trip states)
+// plus a scannable, tappable index of every trip day. Pure DOM construction
+// (XSS-safe via el()), no external deps.
 // ---------------------------------------------------------------------------
 
+// Region hint for the unauthored Jun 16–23 leg (not in data/days.js, which is
+// read-only here). Locked from project memory (trip-skeleton). Authored days
+// (Jun 24–Jul 3) read their region from the day object's `base` instead — that
+// branch always wins, so once the Jun 16–23 days land in data/days.js the
+// matching entries here become dead. TODO: drop this map once that leg is authored.
+const UNAUTHORED_REGIONS = {
+  '2026-06-16': 'Travel — NY → Tokyo',
+  '2026-06-17': 'Tokyo (arrive)',
+  '2026-06-18': 'Tokyo',
+  '2026-06-19': 'Tokyo',
+  '2026-06-20': 'Tokyo',
+  '2026-06-21': 'Tokyo',
+  '2026-06-22': 'Hakone',
+  '2026-06-23': 'Hakone',
+};
+
+const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTH_NAMES = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
 /**
- * Build the pre-trip overview: a countdown to Day 1 plus a button into the
- * first day. Pure DOM construction (XSS-safe via el()). `onEnter` is invoked
- * with the first trip ISO date when the user taps "Preview the trip".
- * @param {number|null} daysUntil whole days until TRIP.start (null = unknown)
+ * Human-readable "Wed · Jun 24" label for an ISO date. Reads the UTC components
+ * of parseISODate's UTC-midnight Date so the label never drifts by a timezone.
+ * @param {string} iso
+ * @returns {string} the formatted label, or the raw iso if unparseable
+ */
+function formatIndexDate(iso) {
+  const d = parseISODate(iso);
+  if (!d) return iso;
+  return `${WEEKDAY_NAMES[d.getUTCDay()]} · ${MONTH_NAMES[d.getUTCMonth()]} ${d.getUTCDate()}`;
+}
+
+/**
+ * Build one tappable row in the all-days index.
+ * @param {string} iso
+ * @param {Date} now current time (for the "today" highlight)
+ * @param {(iso:string)=>void} onTap
+ */
+function buildDayIndexRow(iso, now, onTap) {
+  const day = getDay(iso); // null for the unauthored Jun 16–23 leg
+  const authored = day != null;
+  const num = day?.dayNumber ?? deriveDayNumber(iso);
+  const region = authored
+    ? (day.base ?? 'TBD')
+    : (UNAUTHORED_REGIONS[iso] ?? 'TBD');
+  const isToday = iso === localISODate(now);
+
+  const row = el('button', 'day-index-row');
+  row.type = 'button';
+  if (!authored) row.classList.add('day-index-row-tbd');
+  if (isToday) row.classList.add('day-index-row-today');
+  row.setAttribute(
+    'aria-label',
+    `Day ${num ?? '?'}, ${formatIndexDate(iso)}, ${region}` +
+      (authored ? '' : ' — to be planned'),
+  );
+
+  const left = el('div', 'day-index-left');
+  left.appendChild(el('span', 'day-index-num', num != null ? `Day ${num}` : '—'));
+  left.appendChild(el('span', 'day-index-date', formatIndexDate(iso)));
+  row.appendChild(left);
+
+  const mid = el('div', 'day-index-mid');
+  mid.appendChild(el('span', 'day-index-region', region));
+  row.appendChild(mid);
+
+  const status = el('span',
+    `day-index-status ${authored ? 'is-locked' : 'is-tbd'}`,
+    authored ? 'Planned' : 'TBD');
+  row.appendChild(status);
+
+  row.addEventListener('click', () => {
+    if (typeof onTap === 'function') onTap(iso);
+  });
+  return row;
+}
+
+/**
+ * Build the pre-trip home: a countdown header (graceful before/during/after the
+ * trip) plus a tappable index of every trip day. Tapping a row calls `onEnter`
+ * with that day's ISO date, which the mount controller routes into a day view.
+ * @param {number|null} daysUntil whole days until TRIP.start (null = during/after/unknown)
  * @param {(iso:string)=>void} onEnter
  * @returns {{node: HTMLElement, start: () => void, stop: () => void}}
+ *
+ * Exported for tests: the during-trip countdown branch is unreachable through
+ * mountApp (pickLandingView never returns the overview descriptor mid-trip), so
+ * direct unit tests are the only way to cover all three countdown states. This
+ * matches the existing "export internals for testing" pattern (buildValidatedDays,
+ * haversineMeters, safeUrl, nearestPrecedingCoords).
  */
-function renderOverview(daysUntil, onEnter) {
+export function renderOverview(daysUntil, onEnter) {
   const trip = getTrip();
+  const now = getNow();
+  const dates = tripWindowDates(trip);
   const view = el('article', 'overview-view framing-anticipation');
 
+  // --- Countdown header (before / during / after the trip) -----------------
   const head = el('header', 'overview-header');
-  head.appendChild(el('p', 'overview-kicker', 'Counting down'));
+  const todayIso = localISODate(now);
+  const afterEnd = dayDelta(trip.end, todayIso); // >0 ⇒ trip is over
+  const beforeTrip = Number.isFinite(daysUntil) && daysUntil > 0;
+  const tripOver = afterEnd != null && afterEnd > 0;
+
+  head.appendChild(el('p', 'overview-kicker',
+    beforeTrip ? 'Counting down' : tripOver ? 'Looking back' : 'In Japan now'));
   head.appendChild(el('h1', 'overview-title', trip.title ?? 'Our trip'));
 
   const count = el('div', 'overview-count');
-  if (Number.isFinite(daysUntil) && daysUntil > 0) {
+  if (beforeTrip) {
     count.appendChild(el('span', 'overview-count-num', String(daysUntil)));
     count.appendChild(el('span', 'overview-count-label',
       daysUntil === 1 ? 'day until the trip' : 'days until the trip'));
+  } else if (tripOver) {
+    count.appendChild(el('span', 'overview-count-label', 'The adventure is complete.'));
   } else {
-    count.appendChild(el('span', 'overview-count-label', 'The adventure is near.'));
+    count.appendChild(el('span', 'overview-count-label', 'The adventure is underway.'));
   }
   head.appendChild(count);
 
   if (trip.start) {
-    head.appendChild(el('p', 'overview-dates',
-      `${trip.start} — ${trip.end}`));
+    head.appendChild(el('p', 'overview-dates', `${trip.start} — ${trip.end}`));
   }
   view.appendChild(head);
 
-  const enter = el('button', 'overview-enter', 'Preview the trip →');
-  enter.type = 'button';
-  const firstIso = tripWindowDates(trip)[0];
-  enter.addEventListener('click', () => {
-    if (typeof onEnter === 'function' && firstIso) onEnter(firstIso);
-  });
-  view.appendChild(enter);
+  // --- All-days index ------------------------------------------------------
+  if (dates.length) {
+    const index = el('section', 'day-index');
+    index.setAttribute('aria-label', 'All trip days');
+    index.appendChild(el('h2', 'day-index-heading', 'The whole trip'));
+
+    const list = el('div', 'day-index-list');
+    list.setAttribute('role', 'list');
+    dates.forEach((iso) => {
+      const row = buildDayIndexRow(iso, now, onEnter);
+      row.setAttribute('role', 'listitem');
+      list.appendChild(row);
+    });
+    index.appendChild(list);
+    view.appendChild(index);
+  }
 
   return { node: view, start() {}, stop() {} };
 }

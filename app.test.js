@@ -35,6 +35,7 @@ import {
   pickLandingView,
   tripWindowDates,
   mountApp,
+  renderOverview,
   parseNowOverride,
   resolveNowOverride,
 } from './app.js';
@@ -1782,6 +1783,263 @@ test('frameForDay frames an ABSENT day (unauthored Jun 16–23 leg) purely by it
   assert.equal(frameForDay('2026-06-18', localDate(2026, 5, 17, 12, 0)), 'anticipation', 'before that calendar day');
   assert.equal(frameForDay('2026-06-18', localDate(2026, 5, 18, 12, 0)), 'plan', 'on that calendar day');
   assert.equal(frameForDay('2026-06-18', localDate(2026, 5, 19, 12, 0)), 'reminisce', 'after that calendar day');
+});
+
+// ===========================================================================
+// trip-overview-home — the pre-trip home (countdown header + tappable 18-day
+// index). renderOverview is exported for tests so all three countdown states
+// (before / during / after) can be exercised directly — the during-trip branch
+// is unreachable through mountApp (pickLandingView never lands on the overview
+// mid-trip). The reachable before-trip path is also driven end-to-end through
+// mountApp + the DOM stub. Determinism: every test pins `now` via setNow and
+// restores the wall clock in a finally.
+// ===========================================================================
+
+// --- Countdown header: three states (driven by daysUntil + getNow) ----------
+
+test('renderOverview BEFORE the trip shows an "N days until the trip" countdown', () => {
+  withDom(() => {
+    try {
+      setNow(() => localDate(2026, 4, 24, 12, 0)); // 2026-05-24, before the trip
+      const { node } = renderOverview(23, () => {});
+      assert.equal(node.firstByClass('overview-count-num').textContent, '23');
+      assert.equal(node.firstByClass('overview-count-label').textContent, 'days until the trip');
+      // No "underway"/"complete" copy on the before-trip header.
+      assert.equal(node.firstByClass('overview-kicker').textContent, 'Counting down');
+    } finally {
+      setNow(null);
+    }
+  });
+});
+
+test('renderOverview pluralizes the countdown label: "day" at 1, "days" otherwise', () => {
+  withDom(() => {
+    try {
+      setNow(() => localDate(2026, 5, 15, 9, 0)); // eve of the trip
+      const one = renderOverview(1, () => {}).node;
+      assert.equal(one.firstByClass('overview-count-num').textContent, '1');
+      assert.equal(one.firstByClass('overview-count-label').textContent, 'day until the trip');
+    } finally {
+      setNow(null);
+    }
+  });
+});
+
+test('renderOverview DURING the trip shows "The adventure is underway." (no number)', () => {
+  withDom(() => {
+    try {
+      // 2026-06-24 is within [start, end]; daysUntil is null mid-trip.
+      setNow(() => localDate(2026, 5, 24, 12, 0));
+      const { node } = renderOverview(null, () => {});
+      assert.equal(node.firstByClass('overview-count-num'), null, 'no countdown number mid-trip');
+      assert.equal(node.firstByClass('overview-count-label').textContent, 'The adventure is underway.');
+      assert.equal(node.firstByClass('overview-kicker').textContent, 'In Japan now');
+    } finally {
+      setNow(null);
+    }
+  });
+});
+
+test('renderOverview AFTER the trip shows "The adventure is complete." (no number)', () => {
+  withDom(() => {
+    try {
+      // 2026-07-10 is past TRIP.end (2026-07-03): dayDelta(end, today) > 0.
+      setNow(() => localDate(2026, 6, 10, 12, 0));
+      const { node } = renderOverview(null, () => {});
+      assert.equal(node.firstByClass('overview-count-num'), null, 'no countdown number after the trip');
+      assert.equal(node.firstByClass('overview-count-label').textContent, 'The adventure is complete.');
+      assert.equal(node.firstByClass('overview-kicker').textContent, 'Looking back');
+    } finally {
+      setNow(null);
+    }
+  });
+});
+
+// --- The 18-day index -------------------------------------------------------
+
+test('renderOverview renders exactly one button row per trip-window day (18)', () => {
+  withDom(() => {
+    try {
+      setNow(() => localDate(2026, 4, 24, 12, 0));
+      const { node } = renderOverview(23, () => {});
+      const rows = node.byClass('day-index-row');
+      assert.equal(rows.length, tripWindowDates().length, 'one row per window day');
+      assert.equal(rows.length, 18, 'Jun 16 … Jul 3 inclusive = 18 rows');
+    } finally {
+      setNow(null);
+    }
+  });
+});
+
+test('renderOverview index rows are real focusable <button type="button"> with aria-labels', () => {
+  withDom(() => {
+    try {
+      setNow(() => localDate(2026, 4, 24, 12, 0));
+      const rows = renderOverview(23, () => {}).node.byClass('day-index-row');
+      // Native <button type="button"> rows are keyboard-focusable by default and
+      // carry an aria-label describing the day. app.js sets row.type as a property.
+      assert.ok(rows.every((r) => r.tagName === 'BUTTON'), 'rows are native buttons');
+      assert.ok(rows.every((r) => r.type === 'button'), 'every row is type="button"');
+      assert.ok(rows.every((r) => (r.getAttribute('aria-label') || '').length > 0),
+        'every row carries a non-empty aria-label');
+    } finally {
+      setNow(null);
+    }
+  });
+});
+
+test('renderOverview AUTHORED rows show day.base + "Planned" status; UNAUTHORED rows show region + "TBD"', () => {
+  withDom(() => {
+    try {
+      setNow(() => localDate(2026, 4, 24, 12, 0));
+      const rows = renderOverview(23, () => {}).node.byClass('day-index-row');
+
+      // Jun 16 (index 0) is unauthored → region from UNAUTHORED_REGIONS + TBD.
+      const first = rows[0];
+      assert.ok(first.classList.contains('day-index-row-tbd'), 'unauthored row gets the tbd class');
+      assert.equal(first.firstByClass('day-index-region').textContent, 'Travel — NY → Tokyo');
+      assert.equal(first.firstByClass('day-index-status').textContent, 'TBD');
+
+      // Jun 24 (index 8) is authored (Kyoto, Day 9) → base + Planned, no tbd class.
+      const authored = rows[8];
+      assert.equal(authored.classList.contains('day-index-row-tbd'), false, 'authored row has no tbd class');
+      assert.equal(authored.firstByClass('day-index-region').textContent, getDay('2026-06-24').base);
+      assert.equal(authored.firstByClass('day-index-status').textContent, 'Planned');
+    } finally {
+      setNow(null);
+    }
+  });
+});
+
+test('renderOverview row shows the derived "Day N" number (incl. unauthored leg) and a tz-safe date label', () => {
+  withDom(() => {
+    try {
+      setNow(() => localDate(2026, 4, 24, 12, 0));
+      const rows = renderOverview(23, () => {}).node.byClass('day-index-row');
+
+      // Jun 16 (index 0) is unauthored — its "Day 1" number comes from
+      // deriveDayNumber(iso) (the day-object fallback), a path no other test
+      // exercises by value. Off-by-one numbering would surface here.
+      const first = rows[0];
+      assert.equal(first.firstByClass('day-index-num').textContent, 'Day 1');
+      assert.equal(first.firstByClass('day-index-date').textContent, 'Tue · Jun 16');
+
+      // Jun 24 (index 8) is authored — Day 9, Wed. formatIndexDate reads UTC
+      // components, so the label must not drift regardless of the test tz.
+      const authored = rows[8];
+      assert.equal(authored.firstByClass('day-index-num').textContent, 'Day 9');
+      assert.equal(authored.firstByClass('day-index-date').textContent, 'Wed · Jun 24');
+    } finally {
+      setNow(null);
+    }
+  });
+});
+
+test('renderOverview marks ONLY the row matching today with the day-index-row-today class', () => {
+  withDom(() => {
+    try {
+      // Pin "now" inside the window so one row is today (Jun 24).
+      setNow(() => localDate(2026, 5, 24, 12, 0));
+      const rows = renderOverview(null, () => {}).node.byClass('day-index-row');
+      const todays = rows.filter((r) => r.classList.contains('day-index-row-today'));
+      assert.equal(todays.length, 1, 'exactly one row is marked today');
+      // It is the Jun 24 row (Day 9, region Kyoto).
+      assert.equal(todays[0].firstByClass('day-index-region').textContent, getDay('2026-06-24').base);
+    } finally {
+      setNow(null);
+    }
+  });
+});
+
+test('renderOverview marks NO row as today when now is outside the trip window', () => {
+  withDom(() => {
+    try {
+      setNow(() => localDate(2026, 4, 24, 12, 0)); // before the trip
+      const rows = renderOverview(23, () => {}).node.byClass('day-index-row');
+      assert.equal(rows.filter((r) => r.classList.contains('day-index-row-today')).length, 0);
+    } finally {
+      setNow(null);
+    }
+  });
+});
+
+test('renderOverview tapping a row invokes onEnter with that row\'s ISO date', () => {
+  withDom(() => {
+    try {
+      setNow(() => localDate(2026, 4, 24, 12, 0));
+      const entered = [];
+      const rows = renderOverview(23, (iso) => entered.push(iso)).node.byClass('day-index-row');
+
+      rows[0]._fire('click');   // Jun 16 (first window day)
+      rows[8]._fire('click');   // Jun 24 (authored)
+      assert.deepEqual(entered, ['2026-06-16', '2026-06-24'],
+        'each tapped row passes its own ISO date to onEnter');
+    } finally {
+      setNow(null);
+    }
+  });
+});
+
+test('renderOverview does not throw when a row is tapped without an onEnter handler', () => {
+  withDom(() => {
+    try {
+      setNow(() => localDate(2026, 4, 24, 12, 0));
+      const rows = renderOverview(23, undefined).node.byClass('day-index-row');
+      assert.doesNotThrow(() => rows[0]._fire('click'), 'missing handler is a safe no-op');
+    } finally {
+      setNow(null);
+    }
+  });
+});
+
+// --- XSS-safety invariant ---------------------------------------------------
+
+test('renderOverview builds the index via element nodes / textContent (no innerHTML)', () => {
+  withDom(() => {
+    try {
+      setNow(() => localDate(2026, 4, 24, 12, 0));
+      const { node } = renderOverview(23, () => {});
+      // The stub has no innerHTML setter; the tree exists purely as appended
+      // StubElement children with textContent. Asserting structure proves the
+      // content reached the DOM through createElement/textContent, not HTML strings.
+      const region = node.firstByClass('day-index-region');
+      assert.ok(region instanceof StubElement, 'region is a real element node, not raw HTML');
+      assert.equal(typeof region._textContent, 'string', 'text set via textContent, not innerHTML');
+      // The countdown number is likewise a textContent leaf, not interpolated markup.
+      const num = node.firstByClass('overview-count-num');
+      assert.ok(num instanceof StubElement && num.children.length === 0,
+        'countdown number is a text-only element node');
+    } finally {
+      setNow(null);
+    }
+  });
+});
+
+// --- End-to-end through the public mountApp seam (before-trip path) ----------
+
+test('mountApp BEFORE the trip mounts the overview with the full 18-day index and a working row tap', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 4, 24, 12, 0)); // before the trip
+        const root = makeRoot();
+        const ctl = mountApp(root);
+        // Overview chrome, not day chrome.
+        assert.ok(root.firstByClass('overview-view'), 'overview mounted pre-trip');
+        assert.equal(root.firstByClass('day-nav'), null, 'no day-nav on the overview');
+        // The full index renders.
+        assert.equal(root.byClass('day-index-row').length, 18, 'all 18 day rows present');
+        // Tapping a row routes through the controller's toIso → swaps to a day view.
+        root.byClass('day-index-row')[8]._fire('click'); // Jun 24 (Day 9)
+        assert.equal(root.firstByClass('overview-view'), null, 'overview replaced after tapping a row');
+        assert.ok(root.firstByClass('day-nav'), 'a day view (with nav) is now mounted');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 9', 'tapped Jun 24 → Day 9');
+        ctl.destroy();
+      } finally {
+        setNow(null);
+      }
+    });
+  });
 });
 
 // ===========================================================================

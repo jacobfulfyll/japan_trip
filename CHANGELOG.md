@@ -6,6 +6,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Pre-trip home screen** — the countdown overview is now a real home screen, replacing the interim placeholder.
+  - **Live countdown** with three graceful states: before the trip ("N days until the trip"), during ("The adventure is underway."), after ("The adventure is complete.").
+  - **Tappable 18-day index** listing every trip day (Jun 16 – Jul 3). Each row shows Day #, date ("Wed · Jun 24"), city/region, and a status pill — "Planned" for authored days (Jun 24–Jul 3), "TBD" (dimmed) for the unauthored Jun 16–23 leg. Today's row is highlighted. Tapping any row navigates directly into that day's view.
+  - `renderOverview` is now a **named export** from `app.js` (was internal), making it directly testable.
+  - Added `.day-index*` CSS to `index.html`; removed dead `.overview-enter` CSS.
+  - `CACHE_VERSION` bumped to `v3` in `sw.js` (shell files changed). `sw.test.js` now derives cache-name literals from the constant rather than hardcoding them.
+  - Added tests covering the home screen render, countdown states, day-index rows, today-highlighting, and the `renderOverview` export.
 - **Time-travel test mode** — fake the current date+time to verify time-of-day behavior on demand. **Inert by default**: with no override set, the app uses the real device clock.
   - Override resolution wires into the existing `getNow`/`setNow` clock seam at module load. Precedence: URL param `?now=<datetime-local>` (e.g. `?now=2026-06-25T22:00`) wins, then localStorage key `jt:now`. A `datetime-local` value is parsed as LOCAL time (the traveler's wall clock). Invalid input is ignored (never throws at load); a URL override is mirrored into localStorage so it survives the app's own internal day-to-day navigation.
   - Clearing: `?now=clear` (also `off`/`real`/`reset`/empty) wipes the stored override and restores the real clock.

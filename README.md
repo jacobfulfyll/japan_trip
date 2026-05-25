@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← 160 tests for the data/API/nav layer (node --test; 190 with sw.test.js).
+app.test.js    ← 174 tests for the data/API/nav layer (node --test; 204 with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -142,6 +142,7 @@ screens import them.
 | `getDayByNumber(n)`     | The day whose derived `dayNumber === n`, or `null` if absent (also `null` for non-finite `n`). Frozen. |
 | `renderDay(day, framing?)` | Returns `{ node, start, stop }`. `node` is the day-view DOM element (hero + plan + lodging + recommendations). `framing` is `'anticipation'`, `'plan'` (default), or `'reminisce'`. Call `start()` after mounting `node` to begin the hero slideshow; call `stop()` before discarding to avoid orphaned intervals. Null/absent `day` renders a graceful placeholder. |
 | `renderInto(rootEl, day?, framing?)` | Mounts a day view into `rootEl` (defaults to Jun 24, `'plan'` framing). Stops any prior view's slideshow before mounting. No-ops (warns) if `rootEl` is falsy. Backward compatible: `renderInto(root)` still works. Retained for standalone/testing use — `mountApp` is now what the bootstrap calls. |
+| `renderOverview(daysUntil, onEnter)` | Returns `{ node, start, stop }` for the pre-trip home screen. `daysUntil` is a number (days before departure), `0` (trip underway), or `null` (trip over). `node` is the home screen element — a live countdown header + tappable 18-day index where each row navigates to that day via `onEnter(iso)`. Call `start()` after mounting; call `stop()` before discarding. `mountApp` calls this automatically for the `{view:'overview'}` landing; you can also call it directly. |
 | `buildValidatedDays(days?, trip?)` | The validation core, exported for tests. Returns a frozen, sorted, validated array. You won't normally call this. |
 | `haversineMeters(a, b)` | Returns the great-circle distance in meters between two `{ lat, lng }` points. Exported for tests. |
 | `formatWalk(meters)`    | Returns a human-readable walking estimate string (e.g. `"~3 min walk"`). Exported for tests. |
@@ -168,7 +169,7 @@ returns a new array each call, so you can sort/filter the result freely.
 
 When the page loads, `mountApp` calls `pickLandingView` to choose the opening screen:
 
-- **Before Jun 16** (pre-trip): a self-contained countdown overview showing days until departure. This is an intentional interim; the `trip-overview-home` backlog task will later replace it.
+- **Before Jun 16** (pre-trip): the pre-trip home screen — a live countdown showing days until departure and a tappable index of all 18 trip days. Rows with authored content are marked "Planned"; the Jun 16–23 leg shows "TBD" (dimmed). Tapping any row navigates to that day's view. Today's row is highlighted when the trip is active.
 - **Jun 16 – Jul 3** (during the trip): today's day view in its lifecycle framing — `'anticipation'` in the morning, `'plan'` through the day, `'reminisce'` once the day has passed.
 - **After Jul 3** (post-trip): the last authored day in `'reminisce'` framing.
 
@@ -288,12 +289,13 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The `app.test.js` suite (160 cases; 190 total alongside `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The `app.test.js` suite (174 cases; 204 total alongside `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),
 the date/time-aware navigation layer (`frameForDay`, `pickLandingView`,
 `isEveningWindow`, `tripWindowDates`, `mountApp`, and the `getNow`/`setNow` clock seam),
+the pre-trip home screen (`renderOverview` countdown states, day-index rows, today-highlighting),
 and the time-travel override layer (`parseNowOverride`, `resolveNowOverride`, precedence, clear tokens).
 
 ## Deploy
