@@ -2,6 +2,18 @@
 
 ## Active Tasks
 
+### time-travel-test-mode
+**Task**: Fake the clock (override `now`) + a test page to verify time-of-day behavior on a phone
+**Pipeline**: code-workflow
+**Branch**: task/time-travel-test-mode
+**Worktree**: .worktree/time-travel-test-mode
+**Base**: main
+**Started**: 2026-05-24
+**Files**:
+- MOD: app.js
+- NEW: test.html
+- MOD: index.html
+
 ---
 
 ## Backlog
@@ -9,8 +21,6 @@
 ### Static Companion (v1 — ship before Jun 16)
 - [ ] trip-overview-home: Pre-trip home with countdown + tappable all-days index [P2] [moderate] [tier: opus:medium] [depends: data-model-and-scaffold] [conflicts: day-view-screen, date-time-aware-navigation] [code] [planned]
   files: index.html (MOD), app.js (MOD)
-- [ ] time-travel-test-mode: Fake the clock (override `now`) + a test page to verify time-of-day behavior on a phone [P2] [moderate] [tier: opus:medium] [depends: date-time-aware-navigation] [code] [planned]
-  files: app.js (MOD), test.html (NEW), index.html (MOD)
 
 ### Firebase Photo Journal (v2 — after v1)
 - [ ] firebase-project-setup: Console setup — project, Storage/Firestore/Auth, shared account, Blaze + budget [P2] [simple] [tier: sonnet:medium] [depends: data-model-and-scaffold] [manual] [planned]
