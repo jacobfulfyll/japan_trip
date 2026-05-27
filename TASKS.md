@@ -2,13 +2,22 @@
 
 ## Active Tasks
 
+### map-button-icon-only
+**Task**: Reduce the map button to a muted icon in the bottom-right of each card
+**Pipeline**: code-workflow
+**Branch**: task/map-button-icon-only
+**Worktree**: .worktree/map-button-icon-only
+**Base**: main
+**Started**: 2026-05-27
+**Files**:
+- MOD: app.js
+- MOD: index.html
+
 ---
 
 ## Backlog
 
 ### Day-View Polish (v1 follow-ups)
-- [ ] map-button-icon-only: Reduce the map button to a muted icon in the bottom-right of each card [P2] [simple] [tier: opus:medium] [conflicts: fix-rec-collapse, nav-back-to-home, collapsible-day-parts] [code] [planned]
-  files: app.js (MOD), index.html (MOD)
 - [ ] nav-back-to-home: Add a Home button to the day navigation bar [P2] [moderate] [tier: opus:medium] [conflicts: fix-rec-collapse, map-button-icon-only, collapsible-day-parts] [code] [planned]
   files: app.js (MOD), index.html (MOD)
 - [ ] collapsible-day-parts: Group day plan into collapsed Morning/Afternoon/Evening sections with authored summaries [P2] [depends: fix-rec-collapse] [conflicts: fix-rec-collapse, map-button-icon-only, nav-back-to-home] [complex] [tier: opus:high] [code] [planned]
