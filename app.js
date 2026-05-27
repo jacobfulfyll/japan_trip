@@ -547,22 +547,6 @@ export function haversineMeters(a, b) {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-/**
- * Format a metre distance as a short human label, plus a rough walking time at
- * ~80 m/min (a relaxed sightseeing pace). Returns null for null/non-finite
- * input so callers can omit it.
- * @param {number|null} meters
- * @returns {string | null}
- */
-export function formatWalk(meters) {
-  if (meters == null || !Number.isFinite(meters)) return null;
-  const mins = Math.max(1, Math.round(meters / 80));
-  const dist = meters < 950
-    ? `${Math.round(meters / 10) * 10} m`
-    : `${(meters / 1000).toFixed(1)} km`;
-  return `~${dist} · ${mins} min walk`;
-}
-
 // ---------------------------------------------------------------------------
 // Rendering (day-view-screen) — builds one day's DOM from a day object.
 //
@@ -990,12 +974,11 @@ function buildPlanItem(item, index, plan, lodging) {
             walk.appendChild(buildRecTransitSpan(rec.transit));
             card.appendChild(walk);
           } else {
-            const dist = formatWalk(meters);
-            if (dist) {
-              const walk = el('p', 'rec-walk', dist);
-              walk.appendChild(el('span', 'rec-walk-from', ` from ${origin.label}`));
-              card.appendChild(walk);
-            }
+            const walkMin = Math.max(1, Math.round(meters / 80));
+            const walk = el('p', 'rec-walk', `${walkMin} min`);
+            walk.appendChild(el('span', 'rec-walk-sep', ' · '));
+            walk.appendChild(el('span', 'rec-walk-from', `from ${origin.label}`));
+            card.appendChild(walk);
           }
         }
       }

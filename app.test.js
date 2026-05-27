@@ -26,7 +26,6 @@ import {
   haversineMeters,
   safeUrl,
   nearestPrecedingCoords,
-  formatWalk,
   renderDay,
   getNow,
   setNow,
@@ -525,10 +524,10 @@ test('deep-freeze reaches nested arrays inside plan items, not just one level', 
 // day-view-screen — pure helpers (no DOM required).
 //
 // These functions are exported from app.js so the distance math, URL scheme
-// gate, walk-origin selection, and walk-label formatting can be unit-tested
-// directly, WITHOUT a DOM. (safeUrl / nearestPrecedingCoords / formatWalk were
-// given a one-line `export` purely for testability; their behavior also surfaces
-// through renderDay's DOM, asserted further below.)
+// gate, and walk-origin selection can be unit-tested directly, WITHOUT a DOM.
+// (safeUrl / nearestPrecedingCoords were given a one-line `export` purely for
+// testability; their behavior also surfaces through renderDay's DOM, asserted
+// further below.)
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
@@ -711,33 +710,6 @@ test('nearestPrecedingCoords falls back to a generic label when the preceding st
   const result = nearestPrecedingCoords(plan, 1, null);
   assert.deepEqual(result.from, { lat: 35.0, lng: 135.7 });
   assert.equal(result.label, 'the previous stop'); // never literal "undefined"
-});
-
-// ---------------------------------------------------------------------------
-// formatWalk — distance → human walk label (supports item 6's walk line).
-// ---------------------------------------------------------------------------
-
-test('formatWalk returns null for null / non-finite input', () => {
-  assert.equal(formatWalk(null), null);
-  assert.equal(formatWalk(undefined), null);
-  assert.equal(formatWalk(NaN), null);
-  assert.equal(formatWalk(Infinity), null);
-});
-
-test('formatWalk renders short distances in metres with a minute estimate', () => {
-  const label = formatWalk(240); // 240 m / 80 m·min⁻¹ = 3 min
-  assert.match(label, /m/);
-  assert.match(label, /min walk/);
-  assert.match(label, /3 min/);
-});
-
-test('formatWalk renders longer distances in kilometres', () => {
-  const label = formatWalk(2435); // ≥ 950 m → km form
-  assert.match(label, /2\.4 km/);
-});
-
-test('formatWalk clamps the walking time to a minimum of 1 minute', () => {
-  assert.match(formatWalk(10), /1 min/); // 10 m would round to 0 min; clamped to 1
 });
 
 // ===========================================================================
@@ -1157,14 +1129,16 @@ test('renderDay renders each recommendation card with name, pros, and con', () =
   });
 });
 
-test('renderDay shows a walking-distance line when both origin and recommendation have coords (item 6)', () => {
+test('renderDay shows a walking-time line when both origin and recommendation have coords (item 6)', () => {
   withDom(() => {
     // Fixture: plan[0] Yasaka has coords (origin), rec[0] Tousuiro has coords.
     const node = renderDay(fullDayFixture(), 'plan').node;
     const walks = node.byClass('rec-walk');
     assert.ok(walks.length >= 1, 'expected a walk line for the coord-bearing recommendation');
     const walk = walks[0];
-    assert.match(walk.textContent, /min walk/);
+    assert.match(walk.textContent, /\d+ min/, 'walk line shows a minute estimate');
+    assert.doesNotMatch(walk.textContent, /walk/, 'walk line no longer carries the word "walk"');
+    assert.doesNotMatch(walk.textContent, /\bm\b|km/, 'walk line no longer shows the metres/km distance');
     // The "from <origin label>" suffix names the preceding stop with coords.
     assert.match(walk.textContent, /from Yasaka Shrine/);
   });
@@ -1250,9 +1224,8 @@ test('renderDay falls back to the legacy walk pill when rec.transit is present b
     const node = renderDay(day, 'plan').node;
     const walks = node.byClass('rec-walk');
     assert.equal(walks.length, 1, 'exactly one walk line');
-    assert.match(walks[0].textContent, /min walk/, 'legacy walk wording preserved when from/to are missing');
+    assert.match(walks[0].textContent, /\d+ min · from /, 'falls back to the no-transit walk format when from/to are missing');
     assert.equal(node.byClass('rec-transit').length, 0, 'no rec-transit span when transit is incomplete');
-    assert.equal(node.byClass('rec-walk-sep').length, 0, 'no separator when transit half is absent');
   });
 });
 
@@ -1284,14 +1257,15 @@ test('renderDay concatenates emojis and chains stops for a 2-leg transit rec (tr
   });
 });
 
-test('renderDay leaves recs without a transit field rendering the legacy walk pill', () => {
+test('renderDay renders the minutes-only walk pill for recs without a transit field', () => {
   withDom(() => {
     // The default fixture's Tousuiro rec has coords but NO transit field — it
-    // should render the legacy "~Xm · N min walk" format unchanged.
+    // should render the "N min · from <origin>" format (no metres, no "walk").
     const node = renderDay(fullDayFixture(), 'plan').node;
     const walks = node.byClass('rec-walk');
     assert.equal(walks.length, 1);
-    assert.match(walks[0].textContent, /min walk/, 'legacy walk wording preserved when transit absent');
+    assert.match(walks[0].textContent, /^\d+ min · from /, 'minutes-only walk format');
+    assert.doesNotMatch(walks[0].textContent, /walk/, 'no "walk" wording');
     assert.equal(node.byClass('rec-transit').length, 0, 'no rec-transit span when rec.transit is absent');
   });
 });
