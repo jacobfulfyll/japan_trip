@@ -16,16 +16,6 @@
 - MOD: index.html
 - MOD: README.md
 
-### kyoto-tokyo-data-fixes
-**Task**: four targeted content edits — konbini recs (Jun 25), I.A.S.S. lounge plan item (Jul 3), Funaoka onsen note, tea-ceremony meeting point
-**Pipeline**: code-workflow
-**Branch**: task/kyoto-tokyo-data-fixes
-**Worktree**: .worktree/kyoto-tokyo-data-fixes
-**Base**: main
-**Started**: 2026-05-27
-**Files**:
-- MOD: data/days.js
-
 ---
 
 ## Backlog
