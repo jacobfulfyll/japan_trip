@@ -799,7 +799,13 @@
             letter-spacing: 0.02em;
             line-height: 1.2;
             text-align: center;
+            white-space: nowrap;
         }
+
+        .day-nav-btn .day-nav-arrow { display: inline; }
+        .day-nav-btn .day-nav-text { display: inline; }
+        .day-nav-prev .day-nav-arrow { margin-right: 6px; }
+        .day-nav-next .day-nav-arrow { margin-left: 6px; }
 
         /* --- Evening "Prep for tomorrow" -------------------------------- */
         .evening-prep {
@@ -1037,10 +1043,20 @@
             .lodging-card { margin: 18px 16px 20px; }
             .reminisce-seam { margin: 16px 16px 0; }
             .day-screen { gap: 10px; }
-            .day-nav { padding: 12px 12px; gap: 10px; }
-            .day-nav-group { gap: 12px; }
-            .day-nav-btn { padding: 7px 12px; font-size: 0.9rem; }
-            .day-nav-pos { font-size: 1.2rem; }
+            .day-nav {
+                padding: 10px;
+                gap: 8px;
+                grid-template-columns: auto auto 1fr auto;
+            }
+            .day-nav-group { display: contents; }
+            .day-nav-home { grid-column: 1; min-width: 40px; min-height: 40px; padding: 6px 10px; font-size: 1.05rem; }
+            .day-nav-prev { grid-column: 2; justify-self: start; }
+            .day-nav-pos { grid-column: 3; font-size: 1.1rem; }
+            .day-nav-next { grid-column: 4; justify-self: end; }
+            .day-nav-btn { padding: 8px 12px; font-size: 1rem; font-weight: 700; }
+            .day-nav-btn .day-nav-text { display: none; }
+            .day-nav-prev .day-nav-arrow,
+            .day-nav-next .day-nav-arrow { margin: 0; }
             .evening-prep { padding: 16px; }
             .overview-view { padding: 32px 18px; }
             .day-index-row { padding: 11px 12px; gap: 10px; grid-template-columns: minmax(68px, auto) 1fr auto; }

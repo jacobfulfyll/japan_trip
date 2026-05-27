@@ -1419,16 +1419,20 @@ function buildNavBar(dates, index, onGo, onHome) {
     home.addEventListener('click', () => onHome());
   }
 
-  const prev = el('button', 'day-nav-btn day-nav-prev', '← Prev');
+  const prev = el('button', 'day-nav-btn day-nav-prev');
   prev.type = 'button';
   prev.disabled = index <= 0;
   prev.setAttribute('aria-label', 'Previous day');
+  prev.appendChild(el('span', 'day-nav-arrow', '←'));
+  prev.appendChild(el('span', 'day-nav-text', 'Prev'));
   prev.addEventListener('click', () => onGo(index - 1));
 
-  const next = el('button', 'day-nav-btn day-nav-next', 'Next →');
+  const next = el('button', 'day-nav-btn day-nav-next');
   next.type = 'button';
   next.disabled = index >= dates.length - 1;
   next.setAttribute('aria-label', 'Next day');
+  next.appendChild(el('span', 'day-nav-text', 'Next'));
+  next.appendChild(el('span', 'day-nav-arrow', '→'));
   next.addEventListener('click', () => onGo(index + 1));
 
   // Position label (e.g. "June 24th - Day 9") — derived, never authored.
@@ -1482,6 +1486,17 @@ function buildEveningPrep(dates, index, onGo) {
   return box;
 }
 
+/** Scroll the viewport to the top on a screen change. Guarded for non-browser
+ *  test envs (where window.scrollTo is absent). */
+function scrollToTop() {
+  if (typeof window === 'undefined' || typeof window.scrollTo !== 'function') return;
+  try {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  } catch {
+    window.scrollTo(0, 0);
+  }
+}
+
 /**
  * Mount the day-and-nav UI for `index` within `dates` into `rootEl`. Clears the
  * previous render + stops its slideshow first. Framing is derived from the
@@ -1493,6 +1508,7 @@ function buildEveningPrep(dates, index, onGo) {
 function mountDayAt(rootEl, dates, index, navigate, onHome) {
   stopActiveDayView();
   rootEl.textContent = ''; // clear without innerHTML
+  scrollToTop();
 
   const iso = dates[index];
   const day = getDay(iso); // null for the unauthored leg → placeholder
@@ -1545,6 +1561,7 @@ export function mountApp(rootEl) {
   function mountOverview() {
     stopActiveDayView();
     rootEl.textContent = '';
+    scrollToTop();
     // daysUntil is only set on the pre-trip 'overview' landing; mid/post-trip
     // it is absent (re-mounts from the Home button), and renderOverview's
     // countdown branch is gated by Number.isFinite — null passes through cleanly.
