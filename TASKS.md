@@ -2,6 +2,16 @@
 
 ## Active Tasks
 
+### add-coord-graph
+**Task**: Populate coords across 48 recs + 21 plan items + 6 lodging entries so day-view walking distances render
+**Pipeline**: code-workflow
+**Branch**: task/add-coord-graph
+**Worktree**: .worktree/add-coord-graph
+**Base**: main
+**Started**: 2026-05-27
+**Files**:
+- MOD: data/days.js
+
 ---
 
 ## Backlog
@@ -9,10 +19,6 @@
 ### Transit & coordinate data model
 - [ ] add-transit-alternative-to-recs: add transit-alternative pill to ~25 rec cards whose walk exceeds 1.5km, reusing TransitLeg shape [P2] [complex] [tier: opus:high] [code] [planned] [depends: add-coord-graph, enrich-transit-data-model] [conflicts: add-coord-graph, enrich-transit-data-model, kyoto-tokyo-data-fixes]
   files: data/days.js (MOD), app.js (MOD), app.test.js (MOD), README.md (MOD)
-
-### Trip content authoring
-- [ ] add-coord-graph: populate coords across 48 recs + 21 plan items + 6 lodging entries so day-view walking distances render [P2] [complex] [tier: opus:high] [code] [planned] [conflicts: enrich-transit-data-model, add-transit-alternative-to-recs, kyoto-tokyo-data-fixes]
-  files: data/days.js (MOD)
 
 ### Firebase Photo Journal (v2 — after v1)
 - [ ] firebase-project-setup: Console setup — project, Storage/Firestore/Auth, shared account, Blaze + budget [P2] [simple] [tier: sonnet:medium] [depends: data-model-and-scaffold] [manual] [planned]
