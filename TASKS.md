@@ -16,6 +16,16 @@
 - MOD: index.html
 - MOD: README.md
 
+### kyoto-tokyo-data-fixes
+**Task**: four targeted content edits — konbini recs (Jun 25), I.A.S.S. lounge plan item (Jul 3), Funaoka onsen note, tea-ceremony meeting point
+**Pipeline**: code-workflow
+**Branch**: task/kyoto-tokyo-data-fixes
+**Worktree**: .worktree/kyoto-tokyo-data-fixes
+**Base**: main
+**Started**: 2026-05-27
+**Files**:
+- MOD: data/days.js
+
 ---
 
 ## Backlog
@@ -26,8 +36,6 @@
 
 ### Trip content authoring
 - [ ] add-coord-graph: populate coords across 48 recs + 21 plan items + 6 lodging entries so day-view walking distances render [P2] [complex] [tier: opus:high] [code] [planned] [conflicts: enrich-transit-data-model, add-transit-alternative-to-recs, kyoto-tokyo-data-fixes]
-  files: data/days.js (MOD)
-- [ ] kyoto-tokyo-data-fixes: four targeted content edits — konbini recs (Jun 25), I.A.S.S. lounge plan item (Jul 3), Funaoka onsen note, tea-ceremony meeting point [P2] [moderate] [tier: opus:high] [code] [planned] [conflicts: add-coord-graph, enrich-transit-data-model, add-transit-alternative-to-recs]
   files: data/days.js (MOD)
 
 ### Firebase Photo Journal (v2 — after v1)
