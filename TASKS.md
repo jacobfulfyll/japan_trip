@@ -14,13 +14,21 @@
 - MOD: app.js
 - MOD: sw.js
 
+### remove-rec-walk-meters
+**Task**: Drop meters distance from rec walk lines (render `N min · from <origin>`)
+**Pipeline**: code-workflow
+**Branch**: task/remove-rec-walk-meters
+**Worktree**: .worktree/remove-rec-walk-meters
+**Base**: main
+**Started**: 2026-05-27
+**Files**:
+- MOD: app.js
+- MOD: app.test.js
+- MOD: sw.js
+
 ---
 
 ## Backlog
-
-### UI Polish
-- [ ] remove-rec-walk-meters: Drop meters distance from rec walk lines (render `N min · from <origin>`) [P2] [simple] [tier: sonnet:medium] [code] [planned]
-  files: app.js (MOD), app.test.js (MOD), sw.js (MOD)
 
 ### Firebase Photo Journal (v2 — after v1)
 - [ ] firebase-project-setup: Console setup — project, Storage/Firestore/Auth, shared account, Blaze + budget [P2] [simple] [tier: sonnet:medium] [depends: data-model-and-scaffold] [manual] [planned]
