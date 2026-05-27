@@ -11,3 +11,4 @@
 - [x] fix-rec-collapse Make the recommendation collapse toggle actually collapse -- 2026-05-27
 - [x] map-button-icon-only Reduce the map button to a muted icon in the bottom-right of each card -- 2026-05-27
 - [x] nav-back-to-home Add a Home button to the day navigation bar -- 2026-05-27
+- [x] collapsible-day-parts Group day plan into collapsed Morning/Afternoon/Evening sections with authored summaries -- 2026-05-27
