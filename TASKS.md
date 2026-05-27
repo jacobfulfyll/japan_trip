@@ -2,13 +2,22 @@
 
 ## Active Tasks
 
+### nav-back-to-home
+**Task**: Add a Home button to the day navigation bar
+**Pipeline**: code-workflow
+**Branch**: task/nav-back-to-home
+**Worktree**: .worktree/nav-back-to-home
+**Base**: main
+**Started**: 2026-05-27
+**Files**:
+- MOD: app.js
+- MOD: index.html
+
 ---
 
 ## Backlog
 
 ### Day-View Polish (v1 follow-ups)
-- [ ] nav-back-to-home: Add a Home button to the day navigation bar [P2] [moderate] [tier: opus:medium] [conflicts: fix-rec-collapse, map-button-icon-only, collapsible-day-parts] [code] [planned]
-  files: app.js (MOD), index.html (MOD)
 - [ ] collapsible-day-parts: Group day plan into collapsed Morning/Afternoon/Evening sections with authored summaries [P2] [depends: fix-rec-collapse] [conflicts: fix-rec-collapse, map-button-icon-only, nav-back-to-home] [complex] [tier: opus:high] [code] [planned]
   files: app.js (MOD), data/days.js (MOD), index.html (MOD)
 
