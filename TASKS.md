@@ -2,20 +2,6 @@
 
 ## Active Tasks
 
-### enrich-transit-data-model
-**Task**: extend transit plan items with shared TransitLeg shape, author 15 transit objects, add checkout tag + render block + mode-aware pill
-**Pipeline**: code-workflow
-**Branch**: task/enrich-transit-data-model
-**Worktree**: .worktree/enrich-transit-data-model
-**Base**: main
-**Started**: 2026-05-27
-**Files**:
-- MOD: data/days.js
-- MOD: app.js
-- MOD: app.test.js
-- MOD: index.html
-- MOD: README.md
-
 ---
 
 ## Backlog
