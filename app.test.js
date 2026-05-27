@@ -1190,6 +1190,112 @@ test('renderDay omits ALL walk lines when there is no usable origin (no precedin
   });
 });
 
+// --- Rec transit-alternative pill (add-transit-alternative-to-recs) ---------
+
+/**
+ * When a rec carries a `transit` field, the .rec-walk paragraph renders the
+ * walk segment WITHOUT the "min walk" / distance wording (emoji + mode emoji
+ * convey it), then a " · " separator, then an inline .rec-transit span with
+ * the mode emoji(s), total minutes, and the stop chain.
+ */
+test('renderDay renders an inline transit-alternative pill when a rec has a transit field (single-leg)', () => {
+  withDom(() => {
+    const day = fullDayFixture();
+    // Anchor coords on plan[0] (Yasaka). Synthesize a far-away rec with a
+    // single-leg bus transit field.
+    day.plan[1].recommendations = [
+      {
+        name: 'Faraway izakaya',
+        pros: ['Worth the trip'],
+        con: 'Far on foot.',
+        mapUrl: 'https://maps.google.com/?q=Faraway',
+        coords: { lat: 35.0500, lng: 135.8000 },
+        transit: { mode: 'bus', line: 'Kyoto City Bus 207', from: 'Higashiyama-Yasui', to: 'Shijo-Kawaramachi', minutes: 18 },
+      },
+    ];
+    const node = renderDay(day, 'plan').node;
+    const walks = node.byClass('rec-walk');
+    assert.equal(walks.length, 1, 'exactly one walk line for the lone rec');
+    const walk = walks[0];
+    // Walk half: stripped of "min walk" / distance label — just "<n> min from <anchor>".
+    assert.doesNotMatch(walk.textContent, /min walk/, 'transit-bearing rec drops the "min walk" wording');
+    assert.match(walk.textContent, /from Yasaka Shrine/, 'walk half names the anchor');
+    // Separator + transit span present.
+    const seps = node.byClass('rec-walk-sep');
+    assert.equal(seps.length, 1, 'a .rec-walk-sep separator span is rendered between the walk and transit halves');
+    assert.equal(seps[0].textContent, ' · ', 'separator carries the " · " glyph');
+    assert.equal(node.byClass('rec-transit').length, 1, 'rec-transit span rendered');
+    const transit = node.firstByClass('rec-transit');
+    assert.match(transit.textContent, /🚌/, 'bus emoji rendered');
+    assert.match(transit.textContent, /18 min/, 'transit minutes rendered');
+    assert.match(transit.textContent, /Higashiyama-Yasui → Shijo-Kawaramachi/, 'stop chain rendered');
+  });
+});
+
+test('renderDay falls back to the legacy walk pill when rec.transit is present but missing from/to', () => {
+  withDom(() => {
+    // Defensive branch in buildPlanItem: `hasTransit` requires BOTH from and to
+    // on the transit object. A half-authored transit field (e.g. mode only)
+    // should NOT trigger the transit-pill path — render the legacy walk line.
+    const day = fullDayFixture();
+    day.plan[1].recommendations = [
+      {
+        name: 'Half-authored transit rec',
+        pros: ['Worth it'],
+        con: 'Far.',
+        coords: { lat: 35.0500, lng: 135.8000 },
+        transit: { mode: 'bus', minutes: 18 }, // no from/to
+      },
+    ];
+    const node = renderDay(day, 'plan').node;
+    const walks = node.byClass('rec-walk');
+    assert.equal(walks.length, 1, 'exactly one walk line');
+    assert.match(walks[0].textContent, /min walk/, 'legacy walk wording preserved when from/to are missing');
+    assert.equal(node.byClass('rec-transit').length, 0, 'no rec-transit span when transit is incomplete');
+    assert.equal(node.byClass('rec-walk-sep').length, 0, 'no separator when transit half is absent');
+  });
+});
+
+test('renderDay concatenates emojis and chains stops for a 2-leg transit rec (transfer)', () => {
+  withDom(() => {
+    const day = fullDayFixture();
+    day.plan[1].recommendations = [
+      {
+        name: 'Multi-leg rec',
+        pros: ['Worth it'],
+        con: 'Far.',
+        coords: { lat: 35.0500, lng: 135.8000 },
+        transit: {
+          mode: 'train', line: 'Kintetsu Limited Express', from: 'Kintetsu-Nara', to: 'Kyoto', minutes: 38,
+          transfer: { mode: 'subway', line: 'Karasuma Line', from: 'Kyoto', to: 'Shijo', minutes: 7 },
+        },
+      },
+    ];
+    const node = renderDay(day, 'plan').node;
+    const transit = node.firstByClass('rec-transit');
+    assert.ok(transit, 'rec-transit span rendered');
+    // Both emojis appear (train + subway), concatenated.
+    assert.match(transit.textContent, /🚆/, 'train emoji');
+    assert.match(transit.textContent, /Ⓜ️/, 'subway emoji');
+    // Total minutes = 38 + 7 = 45.
+    assert.match(transit.textContent, /45 min/, 'sums primary + transfer minutes');
+    // Stop chain includes all three endpoints.
+    assert.match(transit.textContent, /Kintetsu-Nara → Kyoto → Shijo/, 'chained 3-stop sequence');
+  });
+});
+
+test('renderDay leaves recs without a transit field rendering the legacy walk pill', () => {
+  withDom(() => {
+    // The default fixture's Tousuiro rec has coords but NO transit field — it
+    // should render the legacy "~Xm · N min walk" format unchanged.
+    const node = renderDay(fullDayFixture(), 'plan').node;
+    const walks = node.byClass('rec-walk');
+    assert.equal(walks.length, 1);
+    assert.match(walks[0].textContent, /min walk/, 'legacy walk wording preserved when transit absent');
+    assert.equal(node.byClass('rec-transit').length, 0, 'no rec-transit span when rec.transit is absent');
+  });
+});
+
 // --- Item 2 / 8: slideshow + reduced-motion ----------------------------------
 
 test('renderDay (motion allowed) renders all valid hero slides and a start()/stop() that cycle without throwing', () => {

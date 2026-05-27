@@ -26,7 +26,7 @@ The site renders from `data/days.js`. **10 days are authored (Jun 24 – Jul 3).
 | `index.html` | Slim shell — ukiyo-e theme CSS + `<main id="app-root">` + `<script type="module" src="app.js">` + PWA wiring (manifest link, iOS meta, SW registration). |
 | `sw.js` | Hand-written service worker (no build step) — precaches the app shell into `app-shell-v<CACHE_VERSION>` (currently `v7`), runtime-caches photos/fonts into `runtime-v<CACHE_VERSION>`. Bump `CACHE_VERSION` when shell files change. `test.html` is intentionally NOT precached (dev tool, network-only). |
 | `manifest.json` | Web app manifest (install-to-home-screen). Relative `start_url`/`scope` for the `/japan_trip/` Pages subpath. Icons live in `img/`. |
-| `app.test.js` | 205 `node:test` cases for the data, render, date/time-nav, time-travel, pre-trip-home, and collapsible day-parts layers (235 total with `sw.test.js`). Run with `node --test`. |
+| `app.test.js` | 251 `node:test` cases for the data, render, date/time-nav, time-travel, pre-trip-home, collapsible day-parts, structured-transit, and rec transit-alternative pill layers (281 total with `sw.test.js`). Run with `node --test`. |
 | `sw.test.js` | `node:test` cases for the service worker (vm-sandboxed) + manifest/index.html PWA wiring. |
 | `test.html` | Standalone on-theme dev page for the time-travel test mode — datetime picker, 4 trip-scenario presets, "Launch app in this moment" (opens `index.html?now=…`), "Clear override". Served over HTTP (`http://localhost:8000/test.html`); NOT precached (dev tool only). |
 | `README.md` | How to edit the trip (schema + example), the `app.js` API, how to preview, deploy. |
@@ -78,7 +78,8 @@ export const DAYS = [{
   plan: [{
     time?, tag, title, note?, mapUrl?, coords?, reserved?,   // reservations = reserved:true
     transit?: TransitLeg & { minutes?, transfer?: TransitLeg },  // optional; only for tag:'transit' items — renders a structured line / stops / minutes block
-    recommendations: [{ name, pros: [".."], con, mapUrl?, coords?, address? }],  // MAX 4 per item
+    recommendations: [{ name, pros: [".."], con, mapUrl?, coords?, address?,
+                        transit?: TransitLeg & { minutes, transfer?: TransitLeg } }], // MAX 4; transit? for recs whose walk from anchor exceeds 1.5km
   }],
 }];
 // TransitLeg = { mode: 'bus'|'train'|'subway', line?, from, to }

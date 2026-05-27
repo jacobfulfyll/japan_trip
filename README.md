@@ -75,7 +75,7 @@ Each plan entry is one moment in the day:
 | `coords`          | object   | Optional `{ lat, lng }`.                                          |
 | `reserved`        | boolean  | `true` marks a booked reservation (a reservation is just a plan item with `reserved: true`). |
 | `transit`         | object   | Optional. On `tag:'transit'` items: a `TransitLeg` (see below) `& { minutes?, transfer? }`. Renders a small structured block below the title and makes the tag pill mode-aware ("Bus" / "Train" / "Subway"). |
-| `recommendations` | array    | Optional dining/activity options. **At most 4.** Each: `{ name, pros: [..], con, mapUrl?, coords?, address? }`. |
+| `recommendations` | array    | Optional dining/activity options. **At most 4.** Each: `{ name, pros: [..], con, mapUrl?, coords?, address?, transit? }`. The optional `transit` reuses the shared `TransitLeg` shape (see below) extended with `{ minutes, transfer? }` — populated for any rec whose computed walk from its anchor exceeds **1.5 km**, so the card shows a transit-alternative pill alongside the walk. |
 
 #### Transit items — the `transit` field
 
@@ -104,8 +104,20 @@ line(s), `from → to` (chained `→ transfer.to` for multi-leg), and total
 minutes. Hand-authored prose stays in `note` for context (luggage tips,
 "sit on the right for Mt Fuji", etc.).
 
-The same `TransitLeg` shape is reused on the recommendation surface (sibling
-task). Edit the schema header in `data/days.js` if you change it.
+The same `TransitLeg` shape is reused on the **recommendation** surface. Author
+a `transit` field on any rec whose `nearestPrecedingCoords`-computed walk
+exceeds 1.5 km, using `TransitLeg & { minutes, transfer? }`. On recs `minutes`
+is **required** (the inline pill needs a single door-to-door number); on plan
+items it's optional. The rec card renders the pill inline within its
+`.rec-walk` paragraph:
+
+```
+🚶 <walk-min> min from <anchor> · <mode-emoji[+transfer-emoji]> <total-min> min (<from> → <to>[ → <transfer.to>])
+```
+
+Multi-leg recs concatenate the mode emojis (no `+` separator) and sum the
+minutes across primary + transfer. Edit the schema header in `data/days.js`
+if you change the shape.
 
 #### Tag `checkout`
 

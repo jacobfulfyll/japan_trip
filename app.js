@@ -887,6 +887,44 @@ function buildTransitBlock(transit) {
   return block;
 }
 
+/**
+ * Build the inline transit-alternative span for a recommendation card. Unlike
+ * `buildTransitBlock` (the stacked 3-row block for plan items), this is a
+ * single-line render appended to `.rec-walk`:
+ *
+ *   <mode-emoji[+transfer-emoji]> <total-min> min (<from> → <to>[ → <transfer.to>])
+ *
+ * `minutes` on each leg sums to the door-to-door total. Returns a span; caller
+ * is responsible for the leading separator (" · ").
+ */
+function buildRecTransitSpan(transit) {
+  const { mode, from, to, minutes, transfer } = transit;
+  const xfer = transfer && typeof transfer === 'object' ? transfer : null;
+  const span = el('span', 'rec-transit');
+
+  const emojiPrimary = TRANSIT_MODE_EMOJI[mode] ?? '';
+  const emojiTransfer = xfer?.mode ? (TRANSIT_MODE_EMOJI[xfer.mode] ?? '') : '';
+  const emoji = emojiPrimary + emojiTransfer;
+  if (emoji) {
+    const e = el('span', 'rec-transit-emoji', emoji + ' ');
+    e.setAttribute('aria-hidden', 'true');
+    span.appendChild(e);
+  }
+
+  const m1 = Number.isFinite(minutes) ? Number(minutes) : null;
+  const m2 = xfer && Number.isFinite(xfer.minutes) ? Number(xfer.minutes) : null;
+  const total = m1 != null && m2 != null ? m1 + m2 : (m1 ?? m2);
+  if (total != null) {
+    span.appendChild(el('span', 'rec-transit-min', `${total} min `));
+  }
+
+  const stops = [String(from), String(to)];
+  if (xfer?.to) stops.push(String(xfer.to));
+  span.appendChild(el('span', 'rec-transit-stops', `(${stops.join(' → ')})`));
+
+  return span;
+}
+
 /** Build one plan item (timeline row), wiring recommendation expansion. */
 function buildPlanItem(item, index, plan, lodging) {
   const isReserved = item.reserved === true;
@@ -939,11 +977,26 @@ function buildPlanItem(item, index, plan, lodging) {
       card.appendChild(el('h4', 'rec-name', rec?.name ?? ''));
 
       if (origin) {
-        const dist = formatWalk(haversineMeters(origin.from, rec?.coords));
-        if (dist) {
-          const walk = el('p', 'rec-walk', dist);
-          walk.appendChild(el('span', 'rec-walk-from', ` from ${origin.label}`));
-          card.appendChild(walk);
+        const meters = haversineMeters(origin.from, rec?.coords);
+        if (Number.isFinite(meters)) {
+          const hasTransit = rec?.transit && typeof rec.transit === 'object' && rec.transit.from && rec.transit.to;
+          if (hasTransit) {
+            // Inline transit-alternative pill: drop the distance label + "walk"
+            // word from the walk half (the 🚶 prefix + mode emoji convey it).
+            const walkMin = Math.max(1, Math.round(meters / 80));
+            const walk = el('p', 'rec-walk', `${walkMin} min`);
+            walk.appendChild(el('span', 'rec-walk-from', ` from ${origin.label}`));
+            walk.appendChild(el('span', 'rec-walk-sep', ' · '));
+            walk.appendChild(buildRecTransitSpan(rec.transit));
+            card.appendChild(walk);
+          } else {
+            const dist = formatWalk(meters);
+            if (dist) {
+              const walk = el('p', 'rec-walk', dist);
+              walk.appendChild(el('span', 'rec-walk-from', ` from ${origin.label}`));
+              card.appendChild(walk);
+            }
+          }
         }
       }
 
