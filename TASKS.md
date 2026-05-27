@@ -12,13 +12,25 @@
 **Files**:
 - MOD: index.html
 
+### enrich-transit-data-model
+**Task**: extend transit plan items with shared TransitLeg shape, author 15 transit objects, add checkout tag + render block + mode-aware pill
+**Pipeline**: code-workflow
+**Branch**: task/enrich-transit-data-model
+**Worktree**: .worktree/enrich-transit-data-model
+**Base**: main
+**Started**: 2026-05-27
+**Files**:
+- MOD: data/days.js
+- MOD: app.js
+- MOD: app.test.js
+- MOD: index.html
+- MOD: README.md
+
 ---
 
 ## Backlog
 
 ### Transit & coordinate data model
-- [ ] enrich-transit-data-model: extend transit plan items with shared TransitLeg shape, author 15 transit objects, add checkout tag + render block + mode-aware pill [P2] [complex] [tier: opus:high] [code] [planned] [conflicts: add-coord-graph, add-transit-alternative-to-recs, kyoto-tokyo-data-fixes]
-  files: data/days.js (MOD), app.js (MOD), app.test.js (MOD), index.html (MOD), README.md (MOD)
 - [ ] add-transit-alternative-to-recs: add transit-alternative pill to ~25 rec cards whose walk exceeds 1.5km, reusing TransitLeg shape [P2] [complex] [tier: opus:high] [code] [planned] [depends: add-coord-graph, enrich-transit-data-model] [conflicts: add-coord-graph, enrich-transit-data-model, kyoto-tokyo-data-fixes]
   files: data/days.js (MOD), app.js (MOD), app.test.js (MOD), README.md (MOD)
 
