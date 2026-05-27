@@ -2,16 +2,6 @@
 
 ## Active Tasks
 
-### wrap-day-part-summary
-**Task**: Remove nowrap+ellipsis from .day-part-summary so summary text wraps on narrow viewports
-**Pipeline**: code-workflow
-**Branch**: task/wrap-day-part-summary
-**Worktree**: .worktree/wrap-day-part-summary
-**Base**: main
-**Started**: 2026-05-27
-**Files**:
-- MOD: index.html
-
 ### enrich-transit-data-model
 **Task**: extend transit plan items with shared TransitLeg shape, author 15 transit objects, add checkout tag + render block + mode-aware pill
 **Pipeline**: code-workflow
