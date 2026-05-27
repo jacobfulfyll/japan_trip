@@ -2,17 +2,6 @@
 
 ## Active Tasks
 
-### nav-back-to-home
-**Task**: Add a Home button to the day navigation bar
-**Pipeline**: code-workflow
-**Branch**: task/nav-back-to-home
-**Worktree**: .worktree/nav-back-to-home
-**Base**: main
-**Started**: 2026-05-27
-**Files**:
-- MOD: app.js
-- MOD: index.html
-
 ---
 
 ## Backlog
