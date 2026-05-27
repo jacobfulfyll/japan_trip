@@ -2,6 +2,16 @@
 
 ## Active Tasks
 
+### wrap-day-part-summary
+**Task**: Remove nowrap+ellipsis from .day-part-summary so summary text wraps on narrow viewports
+**Pipeline**: code-workflow
+**Branch**: task/wrap-day-part-summary
+**Worktree**: .worktree/wrap-day-part-summary
+**Base**: main
+**Started**: 2026-05-27
+**Files**:
+- MOD: index.html
+
 ---
 
 ## Backlog
@@ -27,10 +37,6 @@
   files: index.html (MOD), app.js (MOD)
 - [ ] reminisce-photo-gallery: Reminisce shows all travelers' photos per day, live + offline-cached [P2] [moderate] [tier: opus:medium] [depends: photo-upload-flow, day-view-screen] [code] [planned]
   files: app.js (MOD), index.html (MOD), sw.js (MOD)
-
-### Other
-- [ ] wrap-day-part-summary: remove white-space:nowrap + text-overflow:ellipsis from .day-part-summary so summary text wraps on narrow viewports [P3] [simple] [tier: opus:high] [code] [planned]
-  files: index.html (MOD)
 
 ### Ungroomed
 <!-- Real-world trip bookings & confirmations surfaced during grooming. Personal to-dos, not build tasks — to be tackled later. -->
