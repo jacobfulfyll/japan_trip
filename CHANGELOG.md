@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Recommendation panel collapse toggle** — the "N options — tap to compare" toggle now actually hides/shows the options panel. The panel's `display: grid` rule was overriding the UA `[hidden]` rule; added `.rec-panel[hidden] { display: none; }` to restore the expected behavior. `CACHE_VERSION` bumped to `v4`.
+
 ### Added
 - **Pre-trip home screen** — the countdown overview is now a real home screen, replacing the interim placeholder.
   - **Live countdown** with three graceful states: before the trip ("N days until the trip"), during ("The adventure is underway."), after ("The adventure is complete.").
