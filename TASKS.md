@@ -6,6 +6,18 @@
 
 ## Backlog
 
+### Transit & coordinate data model
+- [ ] enrich-transit-data-model: extend transit plan items with shared TransitLeg shape, author 15 transit objects, add checkout tag + render block + mode-aware pill [P2] [complex] [tier: opus:high] [code] [planned] [conflicts: add-coord-graph, add-transit-alternative-to-recs, kyoto-tokyo-data-fixes]
+  files: data/days.js (MOD), app.js (MOD), app.test.js (MOD), index.html (MOD), README.md (MOD)
+- [ ] add-transit-alternative-to-recs: add transit-alternative pill to ~25 rec cards whose walk exceeds 1.5km, reusing TransitLeg shape [P2] [complex] [tier: opus:high] [code] [planned] [depends: add-coord-graph, enrich-transit-data-model] [conflicts: add-coord-graph, enrich-transit-data-model, kyoto-tokyo-data-fixes]
+  files: data/days.js (MOD), app.js (MOD), app.test.js (MOD), README.md (MOD)
+
+### Trip content authoring
+- [ ] add-coord-graph: populate coords across 48 recs + 21 plan items + 6 lodging entries so day-view walking distances render [P2] [complex] [tier: opus:high] [code] [planned] [conflicts: enrich-transit-data-model, add-transit-alternative-to-recs, kyoto-tokyo-data-fixes]
+  files: data/days.js (MOD)
+- [ ] kyoto-tokyo-data-fixes: four targeted content edits — konbini recs (Jun 25), I.A.S.S. lounge plan item (Jul 3), Funaoka onsen note, tea-ceremony meeting point [P2] [moderate] [tier: opus:high] [code] [planned] [conflicts: add-coord-graph, enrich-transit-data-model, add-transit-alternative-to-recs]
+  files: data/days.js (MOD)
+
 ### Firebase Photo Journal (v2 — after v1)
 - [ ] firebase-project-setup: Console setup — project, Storage/Firestore/Auth, shared account, Blaze + budget [P2] [simple] [tier: sonnet:medium] [depends: data-model-and-scaffold] [manual] [planned]
   files: external (Firebase console)
@@ -15,6 +27,10 @@
   files: index.html (MOD), app.js (MOD)
 - [ ] reminisce-photo-gallery: Reminisce shows all travelers' photos per day, live + offline-cached [P2] [moderate] [tier: opus:medium] [depends: photo-upload-flow, day-view-screen] [code] [planned]
   files: app.js (MOD), index.html (MOD), sw.js (MOD)
+
+### Other
+- [ ] wrap-day-part-summary: remove white-space:nowrap + text-overflow:ellipsis from .day-part-summary so summary text wraps on narrow viewports [P3] [simple] [tier: opus:high] [code] [planned]
+  files: index.html (MOD)
 
 ### Ungroomed
 <!-- Real-world trip bookings & confirmations surfaced during grooming. Personal to-dos, not build tasks — to be tackled later. -->
@@ -32,8 +48,6 @@
 - [ ] reserve-jul2-couples-massage: Book the couples massage at SPA KIOI by Swiss Perfection (30F, Prince Gallery) for Jul 2 — phone/email, ahead
 - [ ] reserve-jul3-narita-express: Reserve Narita Express (N'EX) seats Tokyo Station → Narita for Jul 3 (~1 PM, for the 5:35 PM flight)
 - [ ] (optional) reserve-jul2-farewell-dinner: IF you want a special farewell dinner Jul 2 (Ningyocho Imahan or Sushi Fukunaga) — reserve ~2–4 weeks ahead
-- [ ] add-recommendation-coords: Populate `recommendations[].coords` in data/days.js so day-view walking distances appear (discovered during IMPLEMENT of day-view-screen)
-  > 0 of 49 recommendations across all 10 days have `coords`. The schema allows it and day-view computes a haversine walking distance per option, but with no rec coords every distance is gracefully omitted — the feature is invisible against current data. Pure data-authoring task (add `coords:{lat,lng}` to rec objects); the render path is already built + verified with synthetic coords.
 - [ ] sw-runtime-cache-cap: Add an eviction cap (count/age) to the service worker `runtime-v1` photo cache (discovered during offline-and-installable)
   > sw.js staleWhileRevalidate grows unbounded. Fine for the small Wikimedia hero set today, but a real device-storage concern once v2 adds user-uploaded photos. Revisit alongside reminisce-photo-gallery / photo-upload-flow.
 - [ ] upgrade-deploy-pages-actions: Bump deploy-pages.yml `upload-pages-artifact` and `deploy-pages` from @v1 to @v3 (discovered during offline-and-installable; also in CLAUDE.md Known Issues)
