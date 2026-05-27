@@ -2,13 +2,24 @@
 
 ## Active Tasks
 
+### add-transit-alternative-to-recs
+**Task**: add transit-alternative pill to ~25 rec cards whose walk exceeds 1.5km, reusing TransitLeg shape
+**Pipeline**: code-workflow
+**Branch**: task/add-transit-alternative-to-recs
+**Worktree**: .worktree/add-transit-alternative-to-recs
+**Base**: main
+**Started**: 2026-05-27
+**Files**:
+- MOD: data/days.js
+- MOD: app.js
+- MOD: app.test.js
+- MOD: README.md
+
 ---
 
 ## Backlog
 
 ### Transit & coordinate data model
-- [ ] add-transit-alternative-to-recs: add transit-alternative pill to ~25 rec cards whose walk exceeds 1.5km, reusing TransitLeg shape [P2] [complex] [tier: opus:high] [code] [planned] [depends: add-coord-graph, enrich-transit-data-model] [conflicts: add-coord-graph, enrich-transit-data-model, kyoto-tokyo-data-fixes]
-  files: data/days.js (MOD), app.js (MOD), app.test.js (MOD), README.md (MOD)
 
 ### Firebase Photo Journal (v2 — after v1)
 - [ ] firebase-project-setup: Console setup — project, Storage/Firestore/Auth, shared account, Blaze + budget [P2] [simple] [tier: sonnet:medium] [depends: data-model-and-scaffold] [manual] [planned]
