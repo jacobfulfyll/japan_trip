@@ -1047,6 +1047,19 @@ test('renderDay map links carry target=_blank and rel=noopener noreferrer', () =
   });
 });
 
+test('map links are icon-only: no visible label text, but aria-label preserved', () => {
+  withDom(() => {
+    const node = renderDay(fullDayFixture(), 'plan').node;
+    const links = node.byClass('map-link');
+    assert.ok(links.length > 0, 'expected at least one map link');
+    for (const a of links) {
+      assert.equal(a.textContent, '', 'map link must have no body text (icon comes from CSS ::before)');
+      const aria = a.getAttribute('aria-label');
+      assert.ok(aria && aria.length > 0, 'map link must carry an aria-label for screen readers');
+    }
+  });
+});
+
 test('renderDay omits a map link whose URL has a dangerous scheme (safeUrl gate via DOM)', () => {
   withDom(() => {
     const day = fullDayFixture();

@@ -569,14 +569,15 @@ export function safeUrl(url) {
   return /^https?:/i.test(trimmed) ? trimmed : null;
 }
 
-/** Build a safe external link (map link), or null if the URL is unusable. */
+/** Build a safe external map link as an icon-only button, or null if the URL is unusable. */
 function mapLink(url, label) {
   const safe = safeUrl(url);
   if (!safe) return null;
-  const a = el('a', 'map-link', label ?? 'Open in Google Maps');
+  const a = el('a', 'map-link');
   a.href = safe;
   a.target = '_blank';
   a.rel = 'noopener noreferrer';
+  a.setAttribute('aria-label', label ?? 'Open in Google Maps');
   return a;
 }
 
@@ -718,18 +719,21 @@ function buildPlanItem(item, index, plan, lodging) {
 
   const body = el('div', 'plan-body');
 
+  const content = el('div', 'plan-content');
   const head = el('div', 'plan-head');
   if (item.time) head.appendChild(el('span', 'plan-time', item.time));
   const tagLabel = TAG_LABELS[item.tag] ?? item.tag;
   if (tagLabel) head.appendChild(el('span', 'plan-tag tag-' + (item.tag ?? 'other'), tagLabel));
   if (isReserved) head.appendChild(el('span', 'plan-reserved-badge', 'Reserved'));
-  body.appendChild(head);
+  content.appendChild(head);
 
-  body.appendChild(el('h3', 'plan-title', item.title ?? ''));
-  if (item.note) body.appendChild(el('p', 'plan-note', item.note));
+  content.appendChild(el('h3', 'plan-title', item.title ?? ''));
+  if (item.note) content.appendChild(el('p', 'plan-note', item.note));
 
   const link = mapLink(item.mapUrl, 'Open in Google Maps');
-  if (link) body.appendChild(link);
+  if (link) content.appendChild(link);
+
+  body.appendChild(content);
 
   const recs = Array.isArray(item.recommendations) ? item.recommendations : [];
   if (recs.length > 0) {

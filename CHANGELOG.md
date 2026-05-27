@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Map button reduced to a muted icon** — the chunky "Open in Google Maps" / "Map" text+icon chip on each plan item, recommendation card, and lodging card is now a small, low-opacity pin glyph anchored to the card's bottom-right. The text is gone from the rendered DOM; the link still announces as "Open in Google Maps" to screen readers via `aria-label`. Hit target stays at 44×44 (HIG). For plan items with expandable recommendations, the icon anchors to a new `.plan-content` wrapper so it sits with the plan's own title/note rather than overlaying an expanded rec panel. `CACHE_VERSION` bumped to `v5`.
+
 ### Fixed
 - **Recommendation panel collapse toggle** — the "N options — tap to compare" toggle now actually hides/shows the options panel. The panel's `display: grid` rule was overriding the UA `[hidden]` rule; added `.rec-panel[hidden] { display: none; }` to restore the expected behavior. `CACHE_VERSION` bumped to `v4`.
 

@@ -303,10 +303,20 @@
             background: var(--card);
             border: 1px solid rgba(13, 57, 89, 0.14);
             border-radius: var(--radius-md);
-            padding: 12px 14px;
+            padding: 12px 14px 12px;
             margin-bottom: 12px;
             box-shadow: var(--shadow-md);
         }
+
+        .plan-content {
+            position: relative;
+        }
+
+        /* Carve a corner for the icon so text doesn't run under it.
+           Only applied when the plan item actually has a map link. */
+        .plan-content:has(.map-link) { padding-bottom: 36px; }
+        .rec-card:has(.map-link) { padding-bottom: 38px; }
+        .lodging-card:has(.map-link) { padding-bottom: 44px; }
 
         .plan-item-reserved .plan-body {
             border-color: rgba(173, 132, 44, 0.5);
@@ -375,30 +385,33 @@
             line-height: 1.46;
         }
 
-        /* --- Map links (large tap targets) ------------------------------- */
+        /* --- Map links (icon-only, muted, anchored bottom-right) --------- */
         .map-link {
+            position: absolute;
+            bottom: 6px;
+            right: 6px;
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            margin-top: 9px;
-            min-height: 40px;
-            padding: 8px 14px;
+            justify-content: center;
+            width: 44px;
+            height: 44px;
             border-radius: 999px;
-            border: 1px solid rgba(16, 75, 115, 0.32);
-            background: var(--paper-btn);
+            background: transparent;
             color: var(--brand-deep);
-            font-size: 0.82rem;
-            font-weight: 700;
             text-decoration: none;
+            opacity: 0.5;
+            transition: opacity 0.15s ease, background 0.15s ease;
         }
 
         .map-link::before {
             content: "📍";
-            font-size: 0.9rem;
+            font-size: 1.05rem;
+            line-height: 1;
+            filter: grayscale(45%);
         }
 
-        .map-link:hover { background: #fff; }
-        .map-link:focus-visible { outline: 2px solid var(--brand-mid); outline-offset: 2px; }
+        .map-link:hover { opacity: 1; background: rgba(13, 57, 89, 0.08); }
+        .map-link:focus-visible { opacity: 1; outline: 2px solid var(--brand-mid); outline-offset: 2px; }
 
         /* --- Recommendation expansion ------------------------------------ */
         .rec-toggle {
@@ -434,10 +447,11 @@
         .rec-panel[hidden] { display: none; }
 
         .rec-card {
+            position: relative;
             border: 1px solid rgba(13, 57, 89, 0.16);
             border-radius: var(--radius-md);
             background: var(--card-solid);
-            padding: 11px 13px;
+            padding: 11px 13px 13px;
         }
 
         .rec-name {
@@ -496,13 +510,14 @@
 
         /* --- Lodging card ------------------------------------------------ */
         .lodging-card {
+            position: relative;
             margin: 20px 20px 22px;
             border: 1px solid rgba(13, 65, 101, 0.2);
             border-radius: var(--radius-lg);
             background:
                 radial-gradient(circle at 88% 12%, rgba(191, 166, 136, 0.22) 0%, rgba(191, 166, 136, 0) 55%),
                 linear-gradient(150deg, var(--paper-panel), var(--paper-panel-alt));
-            padding: 16px 18px;
+            padding: 16px 18px 18px;
             box-shadow: var(--shadow-md);
         }
 
