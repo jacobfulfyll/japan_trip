@@ -1117,10 +1117,19 @@ function stopActiveDayView() {
 /**
  * Build the prev/next navigation bar for the day at `index` in `dates`.
  * Buttons are clamped to the window ends. `onGo(index)` navigates.
+ * `onHome()` returns to the trip overview; if omitted, the Home button is not rendered.
  */
-function buildNavBar(dates, index, onGo) {
+function buildNavBar(dates, index, onGo, onHome) {
   const nav = el('nav', 'day-nav');
   nav.setAttribute('aria-label', 'Day navigation');
+
+  let home = null;
+  if (typeof onHome === 'function') {
+    home = el('button', 'day-nav-btn day-nav-home', '🏠');
+    home.type = 'button';
+    home.setAttribute('aria-label', 'Trip overview');
+    home.addEventListener('click', () => onHome());
+  }
 
   const prev = el('button', 'day-nav-btn day-nav-prev', '← Prev');
   prev.type = 'button';
@@ -1141,6 +1150,7 @@ function buildNavBar(dates, index, onGo) {
   const label = el('span', 'day-nav-pos',
     num != null ? `Day ${num}` : iso);
 
+  if (home) nav.appendChild(home);
   nav.appendChild(prev);
   nav.appendChild(label);
   nav.appendChild(next);
@@ -1190,7 +1200,7 @@ function buildEveningPrep(dates, index, onGo) {
  * today's day — "tomorrow" is meaningful only relative to the actual current
  * day, so paging to a past/future day (or previewing pre-trip) hides it.
  */
-function mountDayAt(rootEl, dates, index, navigate) {
+function mountDayAt(rootEl, dates, index, navigate, onHome) {
   stopActiveDayView();
   rootEl.textContent = ''; // clear without innerHTML
 
@@ -1201,7 +1211,7 @@ function mountDayAt(rootEl, dates, index, navigate) {
 
   const shell = el('div', 'day-screen');
 
-  shell.appendChild(buildNavBar(dates, index, navigate));
+  shell.appendChild(buildNavBar(dates, index, navigate, onHome));
 
   const view = renderDay(day, framing);
   shell.appendChild(view.node);
@@ -1218,10 +1228,10 @@ function mountDayAt(rootEl, dates, index, navigate) {
 
 /**
  * Boot the navigation controller into a root element, choosing the landing view
- * from the clock. Returns a small controller ({ go, toIso, destroy }) so the
- * UI is testable and a future caller can drive it.
+ * from the clock. Returns a small controller ({ go, toIso, toOverview, destroy })
+ * so the UI is testable and a future caller can drive it.
  * @param {HTMLElement} rootEl
- * @returns {{go:(i:number)=>void, toIso:(iso:string)=>void, destroy:()=>void} | undefined}
+ * @returns {{go:(i:number)=>void, toIso:(iso:string)=>void, toOverview:()=>void, destroy:()=>void} | undefined}
  */
 export function mountApp(rootEl) {
   if (!rootEl) {
@@ -1232,20 +1242,32 @@ export function mountApp(rootEl) {
   const dates = tripWindowDates();
 
   const clampIndex = (i) => Math.max(0, Math.min(dates.length - 1, i));
-  const navigate = (i) => mountDayAt(rootEl, dates, clampIndex(i), navigate);
+  // Forward declarations so the inner navigators can reference each other.
+  const navigate = (i) =>
+    mountDayAt(rootEl, dates, clampIndex(i), navigate, mountOverview);
   const toIso = (iso) => {
     const i = dates.indexOf(iso);
     if (i >= 0) navigate(i);
   };
+  // Mount the overview screen. Called at boot when pickLandingView picks 'overview'
+  // and on every Home-button tap. Recomputes daysUntil each call so the countdown
+  // reflects "now" rather than whatever it was at boot.
+  function mountOverview() {
+    stopActiveDayView();
+    rootEl.textContent = '';
+    // daysUntil is only set on the pre-trip 'overview' landing; mid/post-trip
+    // it is absent (re-mounts from the Home button), and renderOverview's
+    // countdown branch is gated by Number.isFinite — null passes through cleanly.
+    const { daysUntil } = pickLandingView(getNow());
+    const overview = renderOverview(daysUntil ?? null, toIso);
+    rootEl.appendChild(overview.node);
+    overview.start();
+  }
 
   const landing = pickLandingView(getNow());
 
   if (landing.view === 'overview') {
-    stopActiveDayView();
-    rootEl.textContent = '';
-    const overview = renderOverview(landing.daysUntil, toIso);
-    rootEl.appendChild(overview.node);
-    overview.start();
+    mountOverview();
   } else {
     // Find the index of the landing day; fall back to the first window day.
     const landingIso = landing.day?.date ?? localISODate(getNow());
@@ -1256,6 +1278,7 @@ export function mountApp(rootEl) {
   return {
     go: navigate,
     toIso,
+    toOverview: mountOverview,
     destroy: () => {
       stopActiveDayView();
       rootEl.textContent = '';

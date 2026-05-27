@@ -1789,6 +1789,195 @@ test('mountApp evening prep CTA is suppressed once you navigate OFF today (tomor
   });
 });
 
+// --- nav-back-to-home: Home button + toOverview controller method ----------
+
+test('mountApp controller exposes toOverview() alongside go/toIso/destroy', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0)); // mid-trip → day view landing
+        const root = makeRoot();
+        const ctl = mountApp(root);
+        assert.ok(ctl, 'controller returned');
+        assert.equal(typeof ctl.toOverview, 'function', 'toOverview is a function');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('day-nav bar renders a Home button (🏠) with the "Trip overview" aria-label', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root);
+        const home = root.firstByClass('day-nav-home');
+        assert.ok(home, 'home button rendered in the day-nav bar');
+        assert.equal(home.textContent, '🏠', 'home button shows the 🏠 icon');
+        assert.equal(home.getAttribute('aria-label'), 'Trip overview',
+          'home button is labeled for screen readers');
+        assert.equal(home.type, 'button', 'home button has type="button" (no form submit)');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('Home button is the LEADING child of the day-nav bar (before Prev)', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root);
+        const nav = root.firstByClass('day-nav');
+        // Children order: home, prev, position label, next.
+        assert.ok(nav.children[0]._classList.contains('day-nav-home'),
+          'first nav child is the Home button');
+        assert.ok(nav.children[1]._classList.contains('day-nav-prev'),
+          'second nav child is the Prev button');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('Home button click replaces the day view with the overview (no day-nav chrome remains)', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0)); // lands on Jun 24 (Day 9)
+        const root = makeRoot();
+        mountApp(root);
+        assert.ok(root.firstByClass('day-nav'), 'precondition: day-nav present');
+        // Click Home → overview takes over.
+        root.firstByClass('day-nav-home')._fire('click');
+        assert.equal(root.firstByClass('day-nav'), null, 'day-nav removed');
+        assert.ok(root.firstByClass('overview-view'), 'overview mounted');
+        // Mid-trip overview shows "The adventure is underway." (no countdown num).
+        assert.equal(root.firstByClass('overview-count-num'), null,
+          'no countdown number mid-trip — pickLandingView gives no daysUntil');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('round-trip: Home → overview → tap a day-index row → that day view loads', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0)); // start on Day 9
+        const root = makeRoot();
+        mountApp(root);
+        // Go home.
+        root.firstByClass('day-nav-home')._fire('click');
+        assert.ok(root.firstByClass('overview-view'), 'on overview');
+        // Tap a day-index row (rows are appended in tripWindowDates order:
+        // 18 rows, Jun 16 → Jul 3 → Jun 25 = index 9 = Day 10).
+        const rows = root.byClass('day-index-row');
+        assert.equal(rows.length, 18, 'overview rendered all 18 trip-window rows');
+        rows[9]._fire('click');
+        assert.ok(root.firstByClass('day-nav'), 'day view re-mounted after tapping overview row');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 10',
+          'navigated to the tapped day (Jun 25 = Day 10)');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('toOverview() is callable as a programmatic API (same effect as the Home button)', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        const ctl = mountApp(root);
+        assert.ok(root.firstByClass('day-nav'), 'precondition: day-nav present');
+        ctl.toOverview();
+        assert.equal(root.firstByClass('day-nav'), null, 'day-nav gone after toOverview()');
+        assert.ok(root.firstByClass('overview-view'), 'overview mounted');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('Home button works on the unauthored leg (Jun 18, sparse day-view placeholder)', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0)); // land mid-trip so day-view shows
+        const root = makeRoot();
+        const ctl = mountApp(root);
+        ctl.toIso('2026-06-18'); // unauthored day → placeholder day-view
+        assert.ok(root.firstByClass('day-nav'), 'day-nav present even on unauthored day');
+        const home = root.firstByClass('day-nav-home');
+        assert.ok(home, 'home button present on unauthored day');
+        home._fire('click');
+        assert.ok(root.firstByClass('overview-view'), 'overview reachable from unauthored day');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('Home button is rendered on EVERY framing (anticipation / plan / reminisce)', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        // anticipation: day in the future relative to now
+        setNow(() => localDate(2026, 5, 24, 12, 0)); // Jun 24 = today
+        let root = makeRoot();
+        let ctl = mountApp(root);
+        ctl.toIso('2026-06-27'); // future
+        assert.ok(root.firstByClass('day-nav-home'), 'home button present in anticipation framing');
+
+        // plan: today
+        root = makeRoot();
+        mountApp(root);
+        assert.ok(root.firstByClass('day-nav-home'), 'home button present in plan framing');
+
+        // reminisce: past
+        ctl = mountApp(makeRoot()); // throwaway
+        root = makeRoot();
+        ctl = mountApp(root);
+        ctl.toIso('2026-06-20'); // before today
+        assert.ok(root.firstByClass('day-nav-home'), 'home button present in reminisce framing');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('pre-trip overview (boot-time) has no day-nav and no Home button (overview IS home)', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 4, 24, 12, 0)); // before the trip
+        const root = makeRoot();
+        mountApp(root);
+        assert.ok(root.firstByClass('overview-view'), 'overview mounted');
+        assert.equal(root.firstByClass('day-nav'), null, 'no day-nav on the overview');
+        assert.equal(root.firstByClass('day-nav-home'), null, 'no Home button on the overview itself');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
 test('frameForDay frames an ABSENT day (unauthored Jun 16–23 leg) purely by its calendar date', () => {
   // 2026-06-18 has no authored data (getDay → null), but frameForDay works off
   // the ISO date alone, so the lifecycle framing is still correct relative to now.

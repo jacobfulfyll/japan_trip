@@ -655,6 +655,17 @@
         .day-nav-btn:focus-visible { outline: 2px solid var(--brand-mid); outline-offset: 2px; }
         .day-nav-btn:disabled { opacity: 0.4; cursor: default; }
 
+        /* Icon-only Home button — 44pt minimum tap target (HIG). Sits leading
+           of Prev with a subtle separator gap so it reads as a distinct action. */
+        .day-nav-home {
+            min-width: 44px;
+            min-height: 44px;
+            padding: 8px 12px;
+            font-size: 1.1rem;
+            line-height: 1;
+            margin-right: 2px;
+        }
+
         .day-nav-pos {
             font-family: "Playfair Display", "Georgia", serif;
             font-size: 1.05rem;

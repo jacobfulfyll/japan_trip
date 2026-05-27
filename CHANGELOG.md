@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Home button in the day navigation bar** — every day view now shows a 🏠 button (leading position, aria-label "Trip overview") that returns to the 18-day index overview. Before this you could only get back by reloading. The overview re-mount uses the same code path as the initial pre-trip overview (now factored into a `mountOverview()` closure in `mountApp`); mid-trip it renders the in-trip kicker ("IN JAPAN NOW" / "THE ADVENTURE IS UNDERWAY.") without a numeric countdown. `mountApp`'s controller gained a `toOverview()` method alongside `go`/`toIso`/`destroy` for programmatic navigation. 44pt minimum tap target (HIG). `CACHE_VERSION` bumped to `v6`.
+
 ### Changed
 - **Map button reduced to a muted icon** — the chunky "Open in Google Maps" / "Map" text+icon chip on each plan item, recommendation card, and lodging card is now a small, low-opacity pin glyph anchored to the card's bottom-right. The text is gone from the rendered DOM; the link still announces as "Open in Google Maps" to screen readers via `aria-label`. Hit target stays at 44×44 (HIG). For plan items with expandable recommendations, the icon anchors to a new `.plan-content` wrapper so it sits with the plan's own title/note rather than overlaying an expanded rec panel. `CACHE_VERSION` bumped to `v5`.
 
