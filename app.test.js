@@ -2831,3 +2831,238 @@ test('renderDay: sparse day (empty plan) still renders the placeholder and NO .d
       'no plan-section wrapper either');
   });
 });
+
+// ===========================================================================
+// enrich-transit-data-model — mode-aware pill, .plan-transit block, checkout
+// ===========================================================================
+//
+// These tests exercise:
+//   (1) resolveTagLabel: the pill label is mode-aware for transit items with a
+//       structured transit.mode, and falls back to 'Transit' otherwise.
+//   (2) buildTransitBlock: a .plan-transit element is rendered under the title
+//       with the line name(s), the chained stops, and the (possibly summed)
+//       minutes. Items without a transit object render no .plan-transit block.
+//   (3) Multi-leg journeys: a `transfer` chains both line names (with ' + '),
+//       both stops (with ' → '), and sums the minutes.
+//   (4) The new 'checkout' tag renders a pill labeled 'Checkout' with the
+//       `tag-checkout` class.
+//   (5) Data integrity: every authored transit item with a structured transit
+//       object has a valid mode + populated from/to strings.
+
+// Tiny single-day fixture seeded with one plan item — caller can override the
+// item to focus each assertion. dayPart bucketing puts a 09:00 item into the
+// Morning bucket; that bucket auto-expands in the DOM stub since the
+// click-to-open behavior is irrelevant here (the items always exist in the
+// tree even when collapsed; `byClass` walks all descendants).
+function transitDayFixture(item) {
+  return {
+    date: '2026-06-24',
+    dayNumber: 9,
+    base: 'Kyoto',
+    title: 'Transit-fixture day',
+    intro: 'Just one plan item.',
+    photos: [],
+    lodging: null,
+    plan: [item],
+  };
+}
+
+test('resolveTagLabel: transit item with transit.mode="bus" renders pill text "Bus"', () => {
+  withDom(() => {
+    const item = {
+      time: '09:00', tag: 'transit', title: 'Hop the bus',
+      transit: { mode: 'bus', from: 'A', to: 'B' },
+    };
+    const node = renderDay(transitDayFixture(item), 'plan').node;
+    const pill = node.firstByClass('plan-tag');
+    assert.ok(pill, 'plan-tag pill should exist');
+    assert.equal(pill.textContent, 'Bus');
+  });
+});
+
+test('resolveTagLabel: transit item with transit.mode="train" renders pill text "Train"', () => {
+  withDom(() => {
+    const item = {
+      time: '09:00', tag: 'transit', title: 'Catch the train',
+      transit: { mode: 'train', from: 'A', to: 'B' },
+    };
+    const node = renderDay(transitDayFixture(item), 'plan').node;
+    const pill = node.firstByClass('plan-tag');
+    assert.equal(pill.textContent, 'Train');
+  });
+});
+
+test('resolveTagLabel: transit item with transit.mode="subway" renders pill text "Subway"', () => {
+  withDom(() => {
+    const item = {
+      time: '09:00', tag: 'transit', title: 'Take the subway',
+      transit: { mode: 'subway', from: 'A', to: 'B' },
+    };
+    const node = renderDay(transitDayFixture(item), 'plan').node;
+    const pill = node.firstByClass('plan-tag');
+    assert.equal(pill.textContent, 'Subway');
+  });
+});
+
+test('resolveTagLabel: transit item WITHOUT a transit object falls back to "Transit"', () => {
+  withDom(() => {
+    const item = { time: '09:00', tag: 'transit', title: 'Bare transit item' };
+    const node = renderDay(transitDayFixture(item), 'plan').node;
+    const pill = node.firstByClass('plan-tag');
+    assert.equal(pill.textContent, 'Transit');
+  });
+});
+
+test('renderDay: transit item with structured transit renders a .plan-transit block with line, stops, and minutes', () => {
+  withDom(() => {
+    const item = {
+      time: '09:00', tag: 'transit', title: 'Bus to the temple',
+      transit: { mode: 'bus', line: 'X-line', from: 'A', to: 'B', minutes: 20 },
+    };
+    const node = renderDay(transitDayFixture(item), 'plan').node;
+    const block = node.firstByClass('plan-transit');
+    assert.ok(block, 'a .plan-transit block should be rendered for structured transit data');
+    // Line row: the line name appears in textContent (emoji span is separate).
+    const lineRow = block.firstByClass('plan-transit-line-name');
+    assert.ok(lineRow, 'should render a .plan-transit-line-name span');
+    assert.equal(lineRow.textContent, 'X-line');
+    // Stops row: "A → B".
+    const stopsRow = block.firstByClass('plan-transit-stops');
+    assert.ok(stopsRow, 'should render a .plan-transit-stops row');
+    assert.equal(stopsRow.textContent, 'A → B');
+    // Minutes row: "20 min".
+    const minutesRow = block.firstByClass('plan-transit-minutes');
+    assert.ok(minutesRow, 'should render a .plan-transit-minutes row');
+    assert.equal(minutesRow.textContent, '20 min');
+  });
+});
+
+test('renderDay: transit item WITHOUT a transit object renders NO .plan-transit block', () => {
+  withDom(() => {
+    const item = { time: '09:00', tag: 'transit', title: 'Bare transit item' };
+    const node = renderDay(transitDayFixture(item), 'plan').node;
+    assert.equal(node.firstByClass('plan-transit'), null,
+      'no .plan-transit element should be rendered when transit data is absent');
+  });
+});
+
+test('renderDay: multi-leg transit chains stops "A → B → C", joins line names with " + ", and sums minutes', () => {
+  withDom(() => {
+    const item = {
+      time: '09:00', tag: 'transit', title: 'Subway then bus',
+      transit: {
+        mode: 'subway', line: 'L1', from: 'A', to: 'B', minutes: 10,
+        transfer: { mode: 'bus', line: 'L2', from: 'B', to: 'C', minutes: 15 },
+      },
+    };
+    const node = renderDay(transitDayFixture(item), 'plan').node;
+    const block = node.firstByClass('plan-transit');
+    assert.ok(block, 'multi-leg structured transit should still render a .plan-transit block');
+    // Line name joins both legs with " + ".
+    const lineRow = block.firstByClass('plan-transit-line-name');
+    assert.equal(lineRow.textContent, 'L1 + L2');
+    // Stops chain A → B → C.
+    const stopsRow = block.firstByClass('plan-transit-stops');
+    assert.equal(stopsRow.textContent, 'A → B → C');
+    // Minutes summed: 10 + 15 = 25.
+    const minutesRow = block.firstByClass('plan-transit-minutes');
+    assert.equal(minutesRow.textContent, '25 min');
+  });
+});
+
+test('renderDay: a plan item with tag="checkout" renders pill "Checkout" with class tag-checkout', () => {
+  withDom(() => {
+    const item = { time: '09:30', tag: 'checkout', title: 'Hotel checkout' };
+    const node = renderDay(transitDayFixture(item), 'plan').node;
+    const pill = node.firstByClass('plan-tag');
+    assert.ok(pill, 'checkout item should render a plan-tag pill');
+    assert.equal(pill.textContent, 'Checkout');
+    assert.ok(pill.classList.contains('tag-checkout'),
+      'checkout pill should carry the tag-checkout modifier class for theming');
+  });
+});
+
+test('data integrity: every authored transit plan item with a structured transit object has mode in {bus,train,subway} + populated from/to strings', () => {
+  const validModes = new Set(['bus', 'train', 'subway']);
+  let structuredCount = 0;
+  DAYS.forEach((day) => {
+    (day.plan ?? []).forEach((item, i) => {
+      if (item?.tag !== 'transit') return;
+      if (!item.transit) return; // intentional fallbacks (e.g. international flight) — OK.
+      structuredCount++;
+      const where = `${day.date} plan[${i}] "${item.title ?? ''}"`;
+      assert.equal(typeof item.transit.mode, 'string', `${where}: transit.mode must be a string`);
+      assert.ok(validModes.has(item.transit.mode),
+        `${where}: transit.mode must be one of bus|train|subway, got "${item.transit.mode}"`);
+      assert.equal(typeof item.transit.from, 'string', `${where}: transit.from must be a string`);
+      assert.ok(item.transit.from.length > 0, `${where}: transit.from must be non-empty`);
+      assert.equal(typeof item.transit.to, 'string', `${where}: transit.to must be a string`);
+      assert.ok(item.transit.to.length > 0, `${where}: transit.to must be non-empty`);
+    });
+  });
+  // Sanity check that we actually iterated authored structured transit items —
+  // the task says 15 of them exist; assert at least 10 so a future data
+  // regression that strips out the new field doesn't silently pass this test.
+  assert.ok(structuredCount >= 10,
+    `expected at least 10 structured transit items in DAYS, found ${structuredCount}`);
+});
+
+// ----- buildTransitBlock edge-case branches -----------------------------------
+// These guard the three conditional branches inside buildTransitBlock that the
+// happy-path tests above do not exercise:
+//   - line present but minutes omitted → no .plan-transit-minutes row
+//   - line omitted but minutes present → no .plan-transit-line row
+//   - missing endpoint (no `to`)       → no .plan-transit block at all
+
+test('renderDay: transit with line but no minutes omits the .plan-transit-minutes row', () => {
+  withDom(() => {
+    const item = {
+      time: '09:00', tag: 'transit', title: 'Bus, unknown duration',
+      transit: { mode: 'bus', line: 'L1', from: 'A', to: 'B' },
+    };
+    const node = renderDay(transitDayFixture(item), 'plan').node;
+    const block = node.firstByClass('plan-transit');
+    assert.ok(block, 'block should still render when line + endpoints are present');
+    // Line + stops rows present.
+    assert.ok(block.firstByClass('plan-transit-line'),
+      'line row should render when transit.line is present');
+    assert.ok(block.firstByClass('plan-transit-stops'),
+      'stops row should always render when block renders');
+    // Minutes row absent.
+    assert.equal(block.firstByClass('plan-transit-minutes'), null,
+      'minutes row should be skipped when transit.minutes is omitted');
+  });
+});
+
+test('renderDay: transit with minutes but no line omits the .plan-transit-line row', () => {
+  withDom(() => {
+    const item = {
+      time: '09:00', tag: 'transit', title: 'Unnamed bus',
+      transit: { mode: 'bus', from: 'A', to: 'B', minutes: 20 },
+    };
+    const node = renderDay(transitDayFixture(item), 'plan').node;
+    const block = node.firstByClass('plan-transit');
+    assert.ok(block, 'block should render when endpoints + minutes are present');
+    // Stops + minutes rows present.
+    assert.ok(block.firstByClass('plan-transit-stops'),
+      'stops row should always render when block renders');
+    const minutesRow = block.firstByClass('plan-transit-minutes');
+    assert.ok(minutesRow, 'minutes row should render when transit.minutes is present');
+    assert.equal(minutesRow.textContent, '20 min');
+    // Line row absent (no transit.line and no transfer.line).
+    assert.equal(block.firstByClass('plan-transit-line'), null,
+      'line row should be skipped when both transit.line and transfer.line are absent');
+  });
+});
+
+test('renderDay: transit missing an endpoint (no `to`) renders NO .plan-transit block', () => {
+  withDom(() => {
+    const item = {
+      time: '09:00', tag: 'transit', title: 'Incomplete transit data',
+      transit: { mode: 'bus', from: 'A' },
+    };
+    const node = renderDay(transitDayFixture(item), 'plan').node;
+    assert.equal(node.firstByClass('plan-transit'), null,
+      'buildTransitBlock should early-return null when from/to are not both populated');
+  });
+});

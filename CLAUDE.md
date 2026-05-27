@@ -77,9 +77,12 @@ export const DAYS = [{
   dayParts: { morning?, afternoon?, evening? },  // optional; one-line summaries for collapsible section headers (only non-empty buckets)
   plan: [{
     time?, tag, title, note?, mapUrl?, coords?, reserved?,   // reservations = reserved:true
+    transit?: TransitLeg & { minutes?, transfer?: TransitLeg },  // optional; only for tag:'transit' items — renders a structured line / stops / minutes block
     recommendations: [{ name, pros: [".."], con, mapUrl?, coords?, address? }],  // MAX 4 per item
   }],
 }];
+// TransitLeg = { mode: 'bus'|'train'|'subway', line?, from, to }
+// Tags: meal | transit | sight | checkin | reservation | rest | bar | spa | checkout
 ```
 
 Conventions baked into the data: reservations are plan items with `reserved:true` (no separate field); there is **no `status` field** — a sparse day = empty `plan`/`photos`. See `README.md` for an annotated example and field-by-field docs.

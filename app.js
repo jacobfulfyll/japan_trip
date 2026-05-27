@@ -616,11 +616,34 @@ const TAG_LABELS = {
   transit: 'Transit',
   sight: 'Sight',
   checkin: 'Check-in',
+  checkout: 'Checkout',
   reservation: 'Reservation',
   rest: 'Rest',
   bar: 'Drinks',
   spa: 'Spa',
 };
+
+// Emoji marker per transit mode. Used in the .plan-transit line row; for
+// multi-leg journeys, the primary leg's emoji is joined to the transfer's
+// emoji with a '+' (e.g. 'Ⓜ️+🚌').
+const TRANSIT_MODE_EMOJI = {
+  bus: '🚌',
+  train: '🚆',
+  subway: 'Ⓜ️',
+};
+
+/**
+ * Resolve the pill label for a plan item. Transit items become mode-aware
+ * when `item.transit?.mode` is authored (e.g. 'Bus' / 'Train' / 'Subway');
+ * everything else falls back to TAG_LABELS or the raw tag string.
+ */
+function resolveTagLabel(item) {
+  if (item?.tag === 'transit' && item.transit?.mode && typeof item.transit.mode === 'string') {
+    const m = item.transit.mode;
+    return m.charAt(0).toUpperCase() + m.slice(1);
+  }
+  return TAG_LABELS[item?.tag] ?? item?.tag;
+}
 
 const FRAMINGS = {
   anticipation: {
@@ -811,6 +834,59 @@ function deriveBucketSummary(bucketItems) {
   return head + '…';
 }
 
+/**
+ * Build the small `.plan-transit` block rendered under a transit item's title.
+ * Returns null when there's no usable structured data (caller skips appending).
+ * Shows three short rows when populated:
+ *   line:    [mode-emoji(+transfer-emoji)] Line name (and ' + ' transfer line name if present)
+ *   stops:   from → to (chained ' → transfer.to' if a transfer is set)
+ *   minutes: <total> min  (primary + transfer.minutes if both present)
+ *
+ * XSS-safe by construction: every text node goes through textContent / el().
+ */
+function buildTransitBlock(transit) {
+  if (!transit || typeof transit !== 'object') return null;
+  const { mode, line, from, to, minutes, transfer } = transit;
+  if (!from || !to) return null; // require endpoints
+
+  const xfer = transfer && typeof transfer === 'object' ? transfer : null;
+  const block = el('div', 'plan-transit');
+
+  // Line row — emoji prefix + line name(s). Render only when at least one
+  // line name is present (mode-only would be redundant with the pill).
+  if (line || xfer?.line) {
+    const lineRow = el('div', 'plan-transit-line');
+    const emojiPrimary = TRANSIT_MODE_EMOJI[mode] ?? '';
+    const emojiTransfer = xfer?.mode ? (TRANSIT_MODE_EMOJI[xfer.mode] ?? '') : '';
+    const emoji = emojiTransfer ? `${emojiPrimary}+${emojiTransfer}` : emojiPrimary;
+    if (emoji) {
+      const e = el('span', 'plan-transit-emoji', emoji);
+      e.setAttribute('aria-hidden', 'true');
+      lineRow.appendChild(e);
+    }
+    const labelParts = [];
+    if (line) labelParts.push(String(line));
+    if (xfer?.line) labelParts.push(String(xfer.line));
+    lineRow.appendChild(el('span', 'plan-transit-line-name', labelParts.join(' + ')));
+    block.appendChild(lineRow);
+  }
+
+  // Stops row — from → to (chained through transfer.to if present).
+  const stops = [String(from), String(to)];
+  if (xfer?.to) stops.push(String(xfer.to));
+  block.appendChild(el('div', 'plan-transit-stops', stops.join(' → ')));
+
+  // Minutes row — primary + transfer minutes if both present.
+  const m1 = Number.isFinite(minutes) ? Number(minutes) : null;
+  const m2 = xfer && Number.isFinite(xfer.minutes) ? Number(xfer.minutes) : null;
+  const total = m1 != null && m2 != null ? m1 + m2 : (m1 ?? m2);
+  if (total != null) {
+    block.appendChild(el('div', 'plan-transit-minutes', `${total} min`));
+  }
+
+  return block;
+}
+
 /** Build one plan item (timeline row), wiring recommendation expansion. */
 function buildPlanItem(item, index, plan, lodging) {
   const isReserved = item.reserved === true;
@@ -825,12 +901,16 @@ function buildPlanItem(item, index, plan, lodging) {
   const content = el('div', 'plan-content');
   const head = el('div', 'plan-head');
   if (item.time) head.appendChild(el('span', 'plan-time', item.time));
-  const tagLabel = TAG_LABELS[item.tag] ?? item.tag;
+  const tagLabel = resolveTagLabel(item);
   if (tagLabel) head.appendChild(el('span', 'plan-tag tag-' + (item.tag ?? 'other'), tagLabel));
   if (isReserved) head.appendChild(el('span', 'plan-reserved-badge', 'Reserved'));
   content.appendChild(head);
 
   content.appendChild(el('h3', 'plan-title', item.title ?? ''));
+
+  const transitBlock = buildTransitBlock(item.transit);
+  if (transitBlock) content.appendChild(transitBlock);
+
   if (item.note) content.appendChild(el('p', 'plan-note', item.note));
 
   const link = mapLink(item.mapUrl, 'Open in Google Maps');

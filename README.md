@@ -68,13 +68,49 @@ Each plan entry is one moment in the day:
 | Field             | Type     | Notes                                                              |
 |-------------------|----------|-------------------------------------------------------------------|
 | `time`            | string   | Optional `"HH:MM"` (24h).                                          |
-| `tag`             | string   | Kind of item, e.g. `meal`, `transit`, `sight`, `checkin`, `rest`, `bar`, `spa`, `reservation`. |
+| `tag`             | string   | Kind of item: `meal`, `transit`, `sight`, `checkin`, `checkout`, `rest`, `bar`, `spa`, `reservation`. |
 | `title`           | string   | Short label.                                                      |
 | `note`            | string   | Optional detail.                                                  |
 | `mapUrl`          | string   | Optional Google Maps link.                                        |
 | `coords`          | object   | Optional `{ lat, lng }`.                                          |
 | `reserved`        | boolean  | `true` marks a booked reservation (a reservation is just a plan item with `reserved: true`). |
+| `transit`         | object   | Optional. On `tag:'transit'` items: a `TransitLeg` (see below) `& { minutes?, transfer? }`. Renders a small structured block below the title and makes the tag pill mode-aware ("Bus" / "Train" / "Subway"). |
 | `recommendations` | array    | Optional dining/activity options. **At most 4.** Each: `{ name, pros: [..], con, mapUrl?, coords?, address? }`. |
+
+#### Transit items — the `transit` field
+
+When a plan item is a trip from one stop to another, populate `transit` with the
+shared **`TransitLeg`** shape:
+
+```js
+// TransitLeg
+{
+  mode: 'bus' | 'train' | 'subway',  // drives the pill label + emoji
+  line?: string,                      // e.g. "Hakone Tozan Bus", "Tokaido Shinkansen (Hikari)"
+  from: string,                       // boarding stop
+  to: string,                         // alighting stop
+}
+```
+
+On plan items, `transit` extends `TransitLeg` with two optionals:
+
+| Field      | Type              | Notes |
+|------------|-------------------|-------|
+| `minutes`  | number            | Single source of truth for duration. **Don't duplicate in the `note` prose.** |
+| `transfer` | `TransitLeg`      | One mid-trip transfer (multi-leg journey). 3+ legs are out of scope — split the plan item if needed. The transfer's `minutes` is summed into the rendered total. |
+
+The renderer draws a compact `.plan-transit` block under the title showing the
+line(s), `from → to` (chained `→ transfer.to` for multi-leg), and total
+minutes. Hand-authored prose stays in `note` for context (luggage tips,
+"sit on the right for Mt Fuji", etc.).
+
+The same `TransitLeg` shape is reused on the recommendation surface (sibling
+task). Edit the schema header in `data/days.js` if you change it.
+
+#### Tag `checkout`
+
+Use `tag: 'checkout'` for hotel/ryokan checkouts (not `transit`). Renders a
+muted slate pill — visually distinct from the trip-segment transits.
 
 ### Annotated example day
 

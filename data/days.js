@@ -11,9 +11,25 @@
 //     lodging: { name, address, mapUrl, coords?, breakfast? } | null,
 //     prep: [".."],               // free-text; powers the evening "Prep for tomorrow"
 //     plan: [{ time?, tag, title, note?, mapUrl?, coords?, reserved?,
+//              transit?,           // TransitLeg & { minutes?: number, transfer?: TransitLeg } — see below
 //              recommendations?: [{ name, pros: [".."], con, mapUrl?, coords?, address? }] }],
 //   RULE: a plan item carries AT MOST 4 recommendations.
 //   }
+//
+// Tag strings (plan[].tag): 'meal' | 'transit' | 'sight' | 'checkin' |
+//   'checkout' | 'reservation' | 'rest' | 'bar' | 'spa'.
+//
+// Shared sub-shape — TransitLeg (used by plan[].transit AND, in a sibling task,
+// by recommendations[].transit). Declared here so both surfaces stay aligned.
+//   TransitLeg: {
+//     mode: 'bus' | 'train' | 'subway',  // drives the mode-aware tag pill + emoji
+//     line?: string,                      // e.g. "Hakone Tozan Bus", "Tokaido Shinkansen (Hikari)"
+//     from: string,                       // boarding stop
+//     to: string,                         // alighting stop
+//   }
+// On plan items, `transit` extends TransitLeg with two optionals:
+//   minutes?: number                       // single source of truth for duration (strip from `note` prose)
+//   transfer?: TransitLeg                  // one mid-trip transfer (3+ legs out of scope)
 // NOTE: being authored incrementally during grooming. Kyoto first. Days other
 // than those groomed are not yet present; the build task fills the full 18.
 
@@ -73,11 +89,13 @@ export const DAYS = [
       { time: "08:00", tag: "meal", title: "Breakfast at Senkyoro",
         note: "Included ryokan breakfast — relaxed start before checkout." },
       { time: "11:00", tag: "transit", title: "Senkyoro → Odawara (Hakone Tozan bus)",
-        note: "From the Senkyoro-Mae stop, ~50 min. Covered by the Hakone Free Pass if still valid." },
+        transit: { mode: 'bus', line: 'Hakone Tozan Bus', from: 'Senkyoro-Mae', to: 'Odawara Station', minutes: 50 },
+        note: "From the Senkyoro-Mae stop. Covered by the Hakone Free Pass if still valid." },
       { time: "11:50", tag: "meal", title: "Buy ekiben + drinks at Odawara Station",
         note: "Lunch for the train (no onboard food service on this line) — eat it whenever you like en route. For Megan: inari-zushi, umeboshi/veg onigiri, or a veg bento; veg options are limited, so grab hers early (konbini backup if needed)." },
       { time: "12:00", tag: "transit", title: "Shinkansen Hikari: Odawara → Kyoto", reserved: true,
-        note: "~2h5m, reserved seats. Hikari or Kodama only — Nozomi does not stop at Odawara." },
+        transit: { mode: 'train', line: 'Tokaido Shinkansen (Hikari)', from: 'Odawara', to: 'Kyoto', minutes: 125 },
+        note: "Reserved seats. Hikari or Kodama only — Nozomi does not stop at Odawara." },
       { time: "15:00", tag: "checkin", title: "Check into Cross Hotel Kyoto",
         note: "~10 min from Kyoto Station. Drop bags, freshen up.",
         mapUrl: "https://maps.google.com/?q=Cross+Hotel+Kyoto" },
@@ -186,13 +204,15 @@ export const DAYS = [
             mapUrl: "https://maps.google.com/?q=7-Eleven+Kawaramachi+Kyoto" },
         ] },
       { time: "06:30", tag: "transit", title: "Keihan Main Line: Gion-Shijo → Fushimi-Inari",
-        note: "~7 min; Gion-Shijo station is a short walk from the hotel." },
+        transit: { mode: 'train', line: 'Keihan Main Line', from: 'Gion-Shijo', to: 'Fushimi-Inari', minutes: 7 },
+        note: "Gion-Shijo station is a short walk from the hotel." },
       { time: "07:00", tag: "sight", title: "Fushimi Inari Taisha — torii gates to Yotsutsuji",
         note: "Walk the Senbon Torii early to beat crowds and heat; partial hike to the Yotsutsuji viewpoint (Kyoto panorama) and back, ~1.5h. Free, open 24/7.",
         mapUrl: "https://maps.google.com/?q=Fushimi+Inari+Taisha",
         coords: { lat: 34.9671, lng: 135.7727 } },
       { time: "09:00", tag: "transit", title: "Back toward Higashiyama",
-        note: "Keihan to Kiyomizu-Gojo / Gion-Shijo for the café + Kiyomizu." },
+        transit: { mode: 'train', line: 'Keihan Main Line', from: 'Fushimi-Inari', to: 'Gion-Shijo', minutes: 7 },
+        note: "Keihan to Gion-Shijo for the café + Kiyomizu." },
       { time: "09:30", tag: "meal", title: "Café breakfast",
         note: "Proper sit-down breakfast now that cafés are open, before Kiyomizu.",
         recommendations: [
@@ -303,7 +323,8 @@ export const DAYS = [
       { time: "07:00", tag: "meal", title: "Breakfast at the hotel",
         note: "Cross Hotel breakfast opens 7 — fuel up before Arashiyama." },
       { time: "07:45", tag: "transit", title: "JR Sagano line: Kyoto → Saga-Arashiyama",
-        note: "~15 min; aim to reach the bamboo grove before the mid-morning crush." },
+        transit: { mode: 'train', line: 'JR Sagano Line', from: 'Kyoto', to: 'Saga-Arashiyama', minutes: 16 },
+        note: "Aim to reach the bamboo grove before the mid-morning crush." },
       { time: "08:30", tag: "sight", title: "Arashiyama Bamboo Grove + Nonomiya Shrine",
         note: "Go early — the grove is mobbed by ~9:30–10.",
         mapUrl: "https://maps.google.com/?q=Arashiyama+Bamboo+Grove",
@@ -322,7 +343,8 @@ export const DAYS = [
         note: "Buddhist vegetarian temple cuisine inside Tenryu-ji — fully veg (great for Megan), authentic for everyone. Lunch-only; reserve ahead.",
         mapUrl: "https://maps.google.com/?q=Shigetsu+Tenryuji" },
       { time: "13:30", tag: "transit", title: "Arashiyama → Kinkaku-ji",
-        note: "~40 min by bus (or Randen tram to Kitano-Hakubaicho + bus)." },
+        transit: { mode: 'bus', line: 'Kyoto City Bus 59', from: 'Yamagoe', to: 'Kinkakuji-michi', minutes: 30 },
+        note: "Kyoto City Bus 59 from Yamagoe (~10-min walk from Tenryu-ji to the stop). Alt: Randen tram to Kitano-Hakubaicho + bus." },
       { time: "14:30", tag: "sight", title: "Kinkaku-ji (Golden Pavilion)",
         note: "The gold-leaf pavilion over the mirror pond; ~45-min circuit. Closes 5pm.",
         mapUrl: "https://maps.google.com/?q=Kinkaku-ji",
@@ -335,7 +357,8 @@ export const DAYS = [
         note: "Walk-in (no booking). ~$3.70 (¥550) cash only, sauna included; or ~$6.35 (¥950) with towel + soap rentals at the desk. Opens 3pm Fri; closed Tuesdays. Cypress, herbal & electric baths, outdoor rotenburo, sauna — the perfect reset for tired temple legs. Bring your own towel + soap to skip the rentals. Tattoo-friendly; gender-separated. ~17 min walking from Kinkaku-ji.",
         mapUrl: "https://maps.google.com/?q=Funaoka+Onsen+Kyoto" },
       { time: "18:15", tag: "transit", title: "Back toward central Kyoto for dinner",
-        note: "Funaoka → central is ~15–20 min by bus/taxi." },
+        transit: { mode: 'bus', line: 'Kyoto City Bus 12', from: 'Senbon-Kuramaguchi', to: 'Kawaramachi-Sanjo', minutes: 20 },
+        note: "Funaoka → central by Kyoto City Bus 12 (or taxi)." },
       { time: "19:00", tag: "meal", title: "Dinner — central Kyoto",
         note: "Varied from earlier nights (wagyu teppan / okonomiyaki / tempura). Mostly choose day-of — but Tenamonya is reservation-only with a ~1-week booking window (reserve ~Jun 19) if you want it.",
         recommendations: [
@@ -393,7 +416,8 @@ export const DAYS = [
     plan: [
       { time: "07:30", tag: "meal", title: "Breakfast at the hotel" },
       { time: "08:15", tag: "transit", title: "Kyoto Station → Kintetsu-Nara",
-        note: "Kintetsu line, ~40 min; Kintetsu-Nara drops you right by Nara Park (closer than JR Nara)." },
+        transit: { mode: 'train', line: 'Kintetsu Kyoto Line (Limited Express)', from: 'Kyoto', to: 'Kintetsu-Nara', minutes: 35 },
+        note: "Kintetsu-Nara drops you right by Nara Park (closer than JR Nara)." },
       { time: "09:30", tag: "sight", title: "Kofuku-ji five-story pagoda + first deer",
         note: "A few minutes from the station; the deer start here.",
         mapUrl: "https://maps.google.com/?q=Kofuku-ji",
@@ -428,7 +452,8 @@ export const DAYS = [
         note: "Machiya lanes, cafés, and shops — a relaxed wander. (Or Isuien garden if you'd rather greenery.)",
         mapUrl: "https://maps.google.com/?q=Naramachi" },
       { time: "16:30", tag: "transit", title: "Back toward Kyoto",
-        note: "Kintetsu-Nara → Kyoto (~40 min)." },
+        transit: { mode: 'train', line: 'Kintetsu Kyoto Line (Limited Express)', from: 'Kintetsu-Nara', to: 'Kyoto', minutes: 35 },
+        note: "Kintetsu-Nara → Kyoto." },
       { time: "19:00", tag: "meal", title: "Dinner — central Kyoto",
         note: "Varied from earlier nights (shabu/sukiyaki / sushi / ramen). Choose day-of; reserve Gion Gyuzen ahead if you want its private room.",
         recommendations: [
@@ -502,7 +527,11 @@ export const DAYS = [
       { time: "14:00", tag: "sight", title: "Thrill rides + the rest",
         note: "Use your Express Pass 8 windows to skip lines (Minion Mayhem + the rest); fill gaps with standby rides, shows, and shopping as crowds thin near close." },
       { time: "18:30", tag: "transit", title: "USJ → Dotonbori / Namba",
-        note: "~20 min into central Osaka for the evening." },
+        transit: {
+          mode: 'train', line: 'JR Yumesaki Line', from: 'Universal-City', to: 'Nishikujo', minutes: 5,
+          transfer: { mode: 'train', line: 'Hanshin Namba Line', from: 'Nishikujo', to: 'Osaka-Namba', minutes: 10 },
+        },
+        note: "Into central Osaka for the evening." },
       { time: "19:30", tag: "meal", title: "Dotonbori dinner",
         note: "All walk-in (expect queues). Megan: takoyaki = octopus and most batters use fish dashi — stick to the confirmed-veg picks below, or the fully-vegan OKO Takoyaki.",
         coords: { lat: 34.6687, lng: 135.5013 },
@@ -548,7 +577,9 @@ export const DAYS = [
             mapUrl: "https://maps.google.com/?q=Bar36+Swissotel+Nankai+Osaka" },
         ] },
       { time: "22:45", tag: "transit", title: "Last train back to Kyoto",
-        note: "Hankyu Osaka-umeda → Kyoto-kawaramachi (closest to the hotel), last through-train ~23:45 — be on the platform by ~23:15. (JR Osaka→Kyoto Station also works.) Verify exact times day-of." },
+        // Hankyu chosen over JR (Kyoto-kawaramachi is closer to Cross Hotel than JR Kyoto Station).
+        transit: { mode: 'train', line: 'Hankyu Kyoto Line', from: 'Osaka-Umeda', to: 'Kyoto-Kawaramachi', minutes: 45 },
+        note: "Last through-train ~23:45 — be on the platform by ~23:15. (JR Osaka→Kyoto Station also works.) Verify exact times day-of." },
     ],
   },
 
@@ -592,7 +623,11 @@ export const DAYS = [
     plan: [
       { time: "10:00", tag: "meal", title: "Leisurely hotel breakfast (sleep in)" },
       { time: "10:45", tag: "transit", title: "Head to Ohara",
-        note: "~1 hr: Kyoto Bus 17 from Sanjo-Keihan/Demachiyanagi, or subway Karasuma to Kokusaikaikan + Kyoto Bus 19 (~50 min). Ohara is never crowded — no rush." },
+        transit: {
+          mode: 'subway', line: 'Karasuma Line', from: 'Karasuma-Oike', to: 'Kokusaikaikan', minutes: 18,
+          transfer: { mode: 'bus', line: 'Kyoto Bus 19', from: 'Kokusaikaikan', to: 'Ohara', minutes: 22 },
+        },
+        note: "~50 min: Karasuma subway to Kokusaikaikan, transfer to Kyoto Bus 19 to Ohara. Ohara is never crowded — no rush." },
       { time: "12:30", tag: "meal", title: "Lunch in Ohara",
         note: "Rural vegetable/yuba country — a good veg day. Walk-in; choose day-of.",
         recommendations: [
@@ -618,6 +653,10 @@ export const DAYS = [
       { time: "15:30", tag: "sight", title: "Wander Ohara",
         note: "Rice fields, the little river, and roadside stalls selling Ohara vegetables and shibazuke pickles." },
       { time: "16:30", tag: "transit", title: "Back to Kyoto",
+        transit: {
+          mode: 'bus', line: 'Kyoto Bus 19', from: 'Ohara', to: 'Kokusaikaikan', minutes: 22,
+          transfer: { mode: 'subway', line: 'Karasuma Line', from: 'Kokusaikaikan', to: 'Karasuma-Oike', minutes: 18 },
+        },
         note: "Then pack for tomorrow's move to Tokyo." },
       { time: "19:00", tag: "meal", title: "Final Kyoto dinner (relaxed — packing night)",
         note: "Last Kyoto night. Choose day-of; reserve Pontocho Robin ahead if you want the riverside send-off.",
@@ -674,10 +713,11 @@ export const DAYS = [
       evening: "A relaxed first dinner downstairs at the Tokyo Garden Terrace, and the city lights from the room.",
     },
     plan: [
-      { time: "09:30", tag: "transit", title: "Check out of Cross Hotel Kyoto",
+      { time: "09:30", tag: "checkout", title: "Check out of Cross Hotel Kyoto",
         note: "Checkout is noon, but an earlier checkout suits the morning Shinkansen." },
       { time: "10:30", tag: "transit", title: "Shinkansen Kyoto → Tokyo (Nozomi)", reserved: true,
-        note: "~2h15, reserved seats for 4 (with luggage). Sit on the right (seats E/D) for a chance at Mt Fuji ~45 min in — though late-June haze makes it a long shot." },
+        transit: { mode: 'train', line: 'Tokaido Shinkansen (Nozomi)', from: 'Kyoto', to: 'Tokyo', minutes: 135 },
+        note: "Reserved seats for 4 (with luggage). Sit on the right (seats E/D) for a chance at Mt Fuji ~45 min in — though late-June haze makes it a long shot." },
       { time: "12:45", tag: "meal", title: "Arrive Tokyo Station — quick lunch + goodbyes",
         note: "Grab a bite together (Tokyo Station has great options), then the group splits." },
       { time: "13:30", tag: "transit", title: "The split — airport vs hotel",
@@ -870,10 +910,11 @@ export const DAYS = [
       { time: "08:30", tag: "meal", title: "Final breakfast (Oasis Garden, 36F)" },
       { time: "10:00", tag: "rest", title: "Last stroll / pack",
         note: "A final wander near the hotel (Tokyo Garden Terrace, Benkei moat) or a morning soak in the bath, then pack. (East Gardens are closed Fridays.)" },
-      { time: "12:00", tag: "transit", title: "Checkout (noon) — bags + a light lunch",
+      { time: "12:00", tag: "checkout", title: "Checkout (noon) — bags + a light lunch",
         note: "Check out, store bags if needed, grab a light lunch nearby." },
       { time: "13:00", tag: "transit", title: "Head to Narita for the 5:35 PM flight", reserved: true,
-        note: "Tokyo Station → Narita via N'EX (~1h–1h20); aim to be at NRT ~3 PM (3h for an international departure)." },
+        transit: { mode: 'train', line: "Narita Express (N'EX)", from: 'Tokyo', to: 'Narita Airport', minutes: 60 },
+        note: "Tokyo Station → Narita via N'EX; aim to be at NRT ~3 PM (3h for an international departure)." },
       { time: "15:00", tag: "rest", title: "Lounge — I.A.S.S. Superior, NRT T1 (3F gate 26)",
         note: "Complimentary access via the flight's lounge benefit — 2-hour maximum stay, so plan to enter by ~15:30 to cover boarding for the 17:35 departure. Terminal 1, 3F, near gate 26. Drinks, light snacks, Wi-Fi, showers." },
       { time: "17:35", tag: "transit", title: "Flight: Tokyo (Narita) → Montréal → New York",
