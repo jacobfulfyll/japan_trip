@@ -2,13 +2,24 @@
 
 ## Active Tasks
 
+### collapsible-day-parts
+**Task**: Group day plan into collapsed Morning/Afternoon/Evening sections with authored summaries
+**Pipeline**: code-workflow
+**Branch**: task/collapsible-day-parts
+**Worktree**: .worktree/collapsible-day-parts
+**Base**: main
+**Started**: 2026-05-27
+**Files**:
+- MOD: app.js
+- MOD: data/days.js
+- MOD: index.html
+
 ---
 
 ## Backlog
 
 ### Day-View Polish (v1 follow-ups)
-- [ ] collapsible-day-parts: Group day plan into collapsed Morning/Afternoon/Evening sections with authored summaries [P2] [depends: fix-rec-collapse] [conflicts: fix-rec-collapse, map-button-icon-only, nav-back-to-home] [complex] [tier: opus:high] [code] [planned]
-  files: app.js (MOD), data/days.js (MOD), index.html (MOD)
+*(empty)*
 
 ### Firebase Photo Journal (v2 — after v1)
 - [ ] firebase-project-setup: Console setup — project, Storage/Firestore/Auth, shared account, Blaze + budget [P2] [simple] [tier: sonnet:medium] [depends: data-model-and-scaffold] [manual] [planned]
