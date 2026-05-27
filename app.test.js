@@ -1942,11 +1942,13 @@ test('Home button is the LEADING child of the day-nav bar (before Prev)', () => 
         const root = makeRoot();
         mountApp(root);
         const nav = root.firstByClass('day-nav');
-        // Children order: home, prev, position label, next.
+        // Children order: home, group(prev, label, next).
         assert.ok(nav.children[0]._classList.contains('day-nav-home'),
           'first nav child is the Home button');
-        assert.ok(nav.children[1]._classList.contains('day-nav-prev'),
-          'second nav child is the Prev button');
+        assert.ok(nav.children[1]._classList.contains('day-nav-group'),
+          'second nav child is the prev/label/next group');
+        assert.ok(nav.children[1].children[0]._classList.contains('day-nav-prev'),
+          'group leads with the Prev button');
       } finally {
         setNow(null);
       }

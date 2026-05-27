@@ -1426,10 +1426,13 @@ function buildNavBar(dates, index, onGo, onHome) {
   const label = el('span', 'day-nav-pos',
     num != null ? `Day ${num}` : iso);
 
+  const group = el('div', 'day-nav-group');
+  group.appendChild(prev);
+  group.appendChild(label);
+  group.appendChild(next);
+
   if (home) nav.appendChild(home);
-  nav.appendChild(prev);
-  nav.appendChild(label);
-  nav.appendChild(next);
+  nav.appendChild(group);
   return nav;
 }
 
