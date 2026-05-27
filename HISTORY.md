@@ -17,3 +17,4 @@
 - [x] enrich-transit-data-model Extend transit plan items with shared TransitLeg shape, author 15 transit objects, add checkout tag + render block + mode-aware pill -- 2026-05-27
 - [x] add-coord-graph populate coords across 48 recs + 21 plan items + 6 lodging entries so day-view walking distances render -- 2026-05-27
 - [x] add-transit-alternative-to-recs add transit-alternative pill to 25 long-walk rec cards reusing the shared TransitLeg shape -- 2026-05-27
+- [x] center-day-nav: Center the Prev/Day/Next cluster in the day-nav bar via 3-column grid -- 2026-05-27

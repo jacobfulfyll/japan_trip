@@ -2,18 +2,6 @@
 
 ## Active Tasks
 
-### center-day-nav
-**Task**: Center the Prev/Day/Next cluster in the day-nav bar via 3-column grid
-**Pipeline**: code-workflow
-**Branch**: task/center-day-nav
-**Worktree**: .worktree/center-day-nav
-**Base**: main
-**Started**: 2026-05-27
-**Files**:
-- MOD: index.html
-- MOD: app.js
-- MOD: sw.js
-
 ### remove-rec-walk-meters
 **Task**: Drop meters distance from rec walk lines (render `N min · from <origin>`)
 **Pipeline**: code-workflow
