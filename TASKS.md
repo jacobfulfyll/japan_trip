@@ -2,16 +2,6 @@
 
 ## Active Tasks
 
-### add-coord-graph
-**Task**: Populate coords across 48 recs + 21 plan items + 6 lodging entries so day-view walking distances render
-**Pipeline**: code-workflow
-**Branch**: task/add-coord-graph
-**Worktree**: .worktree/add-coord-graph
-**Base**: main
-**Started**: 2026-05-27
-**Files**:
-- MOD: data/days.js
-
 ---
 
 ## Backlog

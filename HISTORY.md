@@ -15,3 +15,4 @@
 - [x] wrap-day-part-summary remove nowrap+ellipsis from .day-part-summary so summary text wraps on narrow viewports -- 2026-05-27
 - [x] kyoto-tokyo-data-fixes Four targeted content edits — konbini recs (Jun 25), I.A.S.S. lounge plan item (Jul 3), Funaoka onsen note, tea-ceremony meeting point -- 2026-05-27
 - [x] enrich-transit-data-model Extend transit plan items with shared TransitLeg shape, author 15 transit objects, add checkout tag + render block + mode-aware pill -- 2026-05-27
+- [x] add-coord-graph populate coords across 48 recs + 21 plan items + 6 lodging entries so day-view walking distances render -- 2026-05-27
