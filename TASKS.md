@@ -2,18 +2,6 @@
 
 ## Active Tasks
 
-### remove-rec-walk-meters
-**Task**: Drop meters distance from rec walk lines (render `N min · from <origin>`)
-**Pipeline**: code-workflow
-**Branch**: task/remove-rec-walk-meters
-**Worktree**: .worktree/remove-rec-walk-meters
-**Base**: main
-**Started**: 2026-05-27
-**Files**:
-- MOD: app.js
-- MOD: app.test.js
-- MOD: sw.js
-
 ---
 
 ## Backlog
