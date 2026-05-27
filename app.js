@@ -322,9 +322,39 @@ export function buildValidatedDays(days = DAYS, trip = TRIP) {
       console.warn(`[app] ${day.date}: "photos" is not an array; treating as empty.`);
     }
 
+    // Optional dayParts: {morning?, afternoon?, evening?} — each value must be
+    // a string if present. Warn and strip on any shape violation; never reject
+    // the day. Matches the existing warn-and-skip ethos.
+    let dayParts;
+    if (day.dayParts != null) {
+      if (typeof day.dayParts !== 'object' || Array.isArray(day.dayParts)) {
+        console.warn(`[app] ${day.date}: "dayParts" is not an object; stripping.`);
+      } else {
+        const out = {};
+        for (const key of ['morning', 'afternoon', 'evening']) {
+          const v = day.dayParts[key];
+          if (v === undefined) continue;
+          if (typeof v === 'string' && v.length > 0) {
+            out[key] = v;
+          } else {
+            console.warn(`[app] ${day.date}: "dayParts.${key}" is not a non-empty string; stripping that field.`);
+          }
+        }
+        if (Object.keys(out).length > 0) dayParts = out;
+      }
+    }
+
+    const normalized = { ...day, dayNumber: deriveDayNumber(day.date, startIso) };
+    if (dayParts) {
+      normalized.dayParts = dayParts;
+    } else {
+      // Drop any malformed/empty dayParts so the rendered shape stays clean.
+      delete normalized.dayParts;
+    }
+
     valid.push({
       sortKey: parsed.getTime(), // cached for sorting; dropped before freezing
-      day: { ...day, dayNumber: deriveDayNumber(day.date, startIso) },
+      day: normalized,
     });
   });
 
@@ -614,6 +644,53 @@ const FRAMINGS = {
 };
 
 /**
+ * Bucket a day's plan items into Morning / Afternoon / Evening by parsing the
+ * hour from each item's `time` (e.g. "08:00"). Buckets:
+ *   Morning   → hour < 12
+ *   Afternoon → 12 ≤ hour ≤ 16
+ *   Evening   → hour ≥ 17
+ *
+ * Items missing `time` or with an unparseable hour are bucketed into Morning AND
+ * a `console.warn` is emitted (surface the data gap rather than silently degrade).
+ *
+ * Each returned item carries an `indexInPlan` matching its position in the input
+ * — this index is what `buildPlanItem` passes to `nearestPrecedingCoords` for
+ * walking-distance origin. Per-section reindexing would break walk distances.
+ *
+ * Always returns three buckets in order (Morning, Afternoon, Evening). Empty
+ * buckets are NOT omitted by the helper — the consumer (renderDay) drops them.
+ * Keeps the helper trivially testable.
+ *
+ * @param {Array<object>} plan
+ * @returns {Array<{name:'Morning'|'Afternoon'|'Evening', items:Array<{item:object,indexInPlan:number}>}>}
+ */
+export function bucketPlanByDayPart(plan) {
+  const morning = [];
+  const afternoon = [];
+  const evening = [];
+  const arr = Array.isArray(plan) ? plan : [];
+
+  arr.forEach((item, i) => {
+    const time = item && typeof item.time === 'string' ? item.time : '';
+    const hour = parseInt(time.slice(0, 2), 10);
+    if (!Number.isFinite(hour)) {
+      console.warn(`[app] plan item at index ${i} has no parseable time ("${time}"); bucketing into Morning.`);
+      morning.push({ item, indexInPlan: i });
+      return;
+    }
+    if (hour < 12) morning.push({ item, indexInPlan: i });
+    else if (hour <= 16) afternoon.push({ item, indexInPlan: i });
+    else evening.push({ item, indexInPlan: i });
+  });
+
+  return [
+    { name: 'Morning', items: morning },
+    { name: 'Afternoon', items: afternoon },
+    { name: 'Evening', items: evening },
+  ];
+}
+
+/**
  * Pick the coords to measure a recommendation walk FROM: the nearest preceding
  * plan item (scanning backwards) that has coords, falling back to the day's
  * lodging coords. Returns null when nothing usable precedes it.
@@ -707,6 +784,32 @@ function buildHero(photos, framing) {
 // Monotonic id source for rec-panel aria wiring — deterministic and
 // collision-free even if multiple day-views are ever mounted at once.
 let recPanelSeq = 0;
+
+// Same idea for day-part-body aria-controls ids: monotonic and unique even
+// across multiple day-view mounts in one document.
+let dayPartSeq = 0;
+
+const DAY_PART_KEYS = { Morning: 'morning', Afternoon: 'afternoon', Evening: 'evening' };
+
+/**
+ * Build a fallback one-line summary from a bucket's item titles, truncated to
+ * ~80 chars at a separator/word boundary. Used when `day.dayParts[bucketKey]`
+ * is absent (unauthored future days / defensive cover).
+ */
+function deriveBucketSummary(bucketItems) {
+  const titles = bucketItems
+    .map((b) => (b.item && typeof b.item.title === 'string') ? b.item.title : '')
+    .filter((t) => t.length > 0);
+  const joined = titles.join(' • ');
+  if (joined.length <= 80) return joined;
+  // Trim back to the last ' • ' or whitespace boundary inside the 80-char window.
+  const head = joined.slice(0, 80);
+  const sepIdx = head.lastIndexOf(' • ');
+  if (sepIdx > 0) return head.slice(0, sepIdx) + ' …';
+  const spaceIdx = head.lastIndexOf(' ');
+  if (spaceIdx > 0) return head.slice(0, spaceIdx) + ' …';
+  return head + '…';
+}
 
 /** Build one plan item (timeline row), wiring recommendation expansion. */
 function buildPlanItem(item, index, plan, lodging) {
@@ -890,15 +993,55 @@ export function renderDay(day, framingName = 'plan') {
     view.appendChild(seam);
   }
 
-  // The plan list.
+  // The plan list — split into Morning / Afternoon / Evening collapsible
+  // sections. Items keep their full-plan `indexInPlan` so `nearestPrecedingCoords`
+  // still measures walks from the correct preceding stop.
   if (plan.length) {
     const planSection = el('section', 'plan-section');
     planSection.appendChild(el('h2', 'section-heading', framing.planHeading));
-    const list = el('ol', 'plan-list');
-    plan.forEach((item, i) => {
-      list.appendChild(buildPlanItem(item, i, plan, day.lodging ?? null));
+
+    const buckets = bucketPlanByDayPart(plan);
+    buckets.forEach((bucket) => {
+      if (bucket.items.length === 0) return;
+
+      const bucketKey = DAY_PART_KEYS[bucket.name];
+      const authored = day.dayParts && typeof day.dayParts[bucketKey] === 'string'
+        ? day.dayParts[bucketKey]
+        : null;
+      const summaryText = authored ?? deriveBucketSummary(bucket.items);
+
+      const section = el('section', 'day-part');
+
+      const header = el('button', 'day-part-header');
+      header.type = 'button';
+      const panelId = `day-part-${dayPartSeq++}`;
+      header.setAttribute('aria-expanded', 'false');
+      header.setAttribute('aria-controls', panelId);
+      header.appendChild(el('span', 'day-part-name', bucket.name));
+      if (summaryText) header.appendChild(el('span', 'day-part-summary', summaryText));
+      header.appendChild(el('span', 'day-part-chev', '▾'));
+
+      const body = el('div', 'day-part-body');
+      body.id = panelId;
+      body.hidden = true;
+      const list = el('ol', 'plan-list');
+      bucket.items.forEach(({ item, indexInPlan }) => {
+        list.appendChild(buildPlanItem(item, indexInPlan, plan, day.lodging ?? null));
+      });
+      body.appendChild(list);
+
+      header.addEventListener('click', () => {
+        const open = body.hidden;
+        body.hidden = !open;
+        header.setAttribute('aria-expanded', String(open));
+        section.classList.toggle('is-open', open);
+      });
+
+      section.appendChild(header);
+      section.appendChild(body);
+      planSection.appendChild(section);
     });
-    planSection.appendChild(list);
+
     view.appendChild(planSection);
   }
 

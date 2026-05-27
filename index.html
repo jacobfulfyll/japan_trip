@@ -413,6 +413,77 @@
         .map-link:hover { opacity: 1; background: rgba(13, 57, 89, 0.08); }
         .map-link:focus-visible { opacity: 1; outline: 2px solid var(--brand-mid); outline-offset: 2px; }
 
+        /* --- Day-part sections (Morning / Afternoon / Evening) ----------- */
+        .day-part {
+            margin-bottom: 14px;
+        }
+
+        .day-part:last-child {
+            margin-bottom: 0;
+        }
+
+        .day-part-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            min-height: 44px;
+            padding: 12px 14px;
+            border: 1px solid rgba(13, 57, 89, 0.18);
+            border-radius: var(--radius-md);
+            background: var(--card-solid);
+            color: var(--brand-deep);
+            text-align: left;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        .day-part-header:hover {
+            background: rgba(244, 236, 221, 0.6);
+        }
+
+        .day-part-header:focus-visible {
+            outline: 2px solid var(--brand-mid);
+            outline-offset: 2px;
+        }
+
+        .day-part-name {
+            flex-shrink: 0;
+            font-weight: 700;
+            font-size: 0.92rem;
+            letter-spacing: 0.02em;
+        }
+
+        .day-part-summary {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 0.84rem;
+            color: var(--ink-soft);
+            font-weight: 500;
+        }
+
+        .day-part-chev {
+            flex-shrink: 0;
+            font-size: 0.9rem;
+            color: var(--brand-mid);
+            transition: transform 0.2s ease;
+        }
+
+        .day-part.is-open .day-part-chev {
+            transform: rotate(180deg);
+        }
+
+        .day-part-body {
+            margin-top: 10px;
+        }
+
+        .day-part-body[hidden] {
+            display: none;
+        }
+
         /* --- Recommendation expansion ------------------------------------ */
         .rec-toggle {
             display: flex;

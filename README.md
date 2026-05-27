@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← 174 tests for the data/API/nav layer (node --test; 204 with sw.test.js).
+app.test.js    ← 205 tests for the data/API/nav layer (node --test; 235 with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -56,6 +56,7 @@ omitted or empty on a sparse day):
 | `lodging`  | object \| null  | `{ name, address, mapUrl, coords?, breakfast? }`, or `null` if not staying anywhere (e.g. travel-home day). |
 | `prep`     | string[]        | Free-text to-dos; powers the evening "Prep for tomorrow".             |
 | `plan`     | array           | The timeline — see below. `[]` = a day with nothing scheduled yet.    |
+| `dayParts` | object          | Optional. One-line summaries for the collapsible day-part headers: `{ morning?, afternoon?, evening? }`. Only include keys for non-empty buckets. Omitting the field is fine — headers render without a summary line. |
 
 > **Don't author `dayNumber`** — it's derived automatically from `TRIP.start`
 > (start = Day 1). Just set `date` correctly.
@@ -148,6 +149,7 @@ screens import them.
 | `formatWalk(meters)`    | Returns a human-readable walking estimate string (e.g. `"~3 min walk"`). Exported for tests. |
 | `safeUrl(url)`          | Returns the URL if its scheme is in the allow-list (`https`, `http`, `maps`), otherwise `null`. Strips tab/LF/CR before checking. Exported for tests. |
 | `nearestPrecedingCoords(plan, index, lodging)` | Returns the `{ lat, lng }` of the nearest preceding plan item with coords, falling back to `lodging.coords`, or `null`. Used to compute walking distances to recommendations. Exported for tests. |
+| `bucketPlanByDayPart(plan)` | Partitions a `plan` array into `{ morning, afternoon, evening }` bucket arrays by `time` field. Morning: hour < 12; Afternoon: 12–16; Evening: hour ≥ 17. Items with missing/unparseable `time` fall into Morning. Each bucket item carries an `indexInPlan` property (its original index in the flat array) so walking-distance logic threads correctly across bucket boundaries. Exported for tests. |
 
 **Date/time-aware navigation** — the following exports power the smart landing, lifecycle framing, and nav bar:
 
@@ -256,7 +258,7 @@ at the top of `sw.js`:
 
 ```js
 // sw.js
-const CACHE_VERSION = 'v3';  // increment whenever shell files change
+const CACHE_VERSION = 'v7';  // increment whenever shell files change
 ```
 
 On the next visit the old caches are deleted and the fresh files install. Skip
@@ -289,14 +291,15 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The `app.test.js` suite (174 cases; 204 total alongside `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The `app.test.js` suite (205 cases; 235 total alongside `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),
 the date/time-aware navigation layer (`frameForDay`, `pickLandingView`,
 `isEveningWindow`, `tripWindowDates`, `mountApp`, and the `getNow`/`setNow` clock seam),
 the pre-trip home screen (`renderOverview` countdown states, day-index rows, today-highlighting),
-and the time-travel override layer (`parseNowOverride`, `resolveNowOverride`, precedence, clear tokens).
+the time-travel override layer (`parseNowOverride`, `resolveNowOverride`, precedence, clear tokens),
+and collapsible day-parts (`bucketPlanByDayPart` bucketing, `dayParts` validation, day-part section rendering).
 
 ## Deploy
 

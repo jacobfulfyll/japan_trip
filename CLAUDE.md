@@ -24,9 +24,9 @@ The site renders from `data/days.js`. **10 days are authored (Jun 24 – Jul 3).
 | `data/days.js` | **Single source of trip content** — ES module exporting `TRIP` + `DAYS`. Editing the trip = editing this file. |
 | `app.js` | Render pipeline: imports `data/days.js`, validates (warn-and-skip), deep-freezes, derives `dayNumber`, exposes the day API + `renderDay` + the pre-trip home (`renderOverview`: countdown + tappable 18-day index) + the date/time-aware `mountApp` (clock-driven landing, prev/next nav, evening "Prep for tomorrow"). |
 | `index.html` | Slim shell — ukiyo-e theme CSS + `<main id="app-root">` + `<script type="module" src="app.js">` + PWA wiring (manifest link, iOS meta, SW registration). |
-| `sw.js` | Hand-written service worker (no build step) — precaches the app shell into `app-shell-v<CACHE_VERSION>` (currently `v3`), runtime-caches photos/fonts into `runtime-v<CACHE_VERSION>`. Bump `CACHE_VERSION` when shell files change. `test.html` is intentionally NOT precached (dev tool, network-only). |
+| `sw.js` | Hand-written service worker (no build step) — precaches the app shell into `app-shell-v<CACHE_VERSION>` (currently `v7`), runtime-caches photos/fonts into `runtime-v<CACHE_VERSION>`. Bump `CACHE_VERSION` when shell files change. `test.html` is intentionally NOT precached (dev tool, network-only). |
 | `manifest.json` | Web app manifest (install-to-home-screen). Relative `start_url`/`scope` for the `/japan_trip/` Pages subpath. Icons live in `img/`. |
-| `app.test.js` | 174 `node:test` cases for the data, render, date/time-nav, time-travel, and pre-trip-home layers (204 total with `sw.test.js`). Run with `node --test`. |
+| `app.test.js` | 205 `node:test` cases for the data, render, date/time-nav, time-travel, pre-trip-home, and collapsible day-parts layers (235 total with `sw.test.js`). Run with `node --test`. |
 | `sw.test.js` | `node:test` cases for the service worker (vm-sandboxed) + manifest/index.html PWA wiring. |
 | `test.html` | Standalone on-theme dev page for the time-travel test mode — datetime picker, 4 trip-scenario presets, "Launch app in this moment" (opens `index.html?now=…`), "Clear override". Served over HTTP (`http://localhost:8000/test.html`); NOT precached (dev tool only). |
 | `README.md` | How to edit the trip (schema + example), the `app.js` API, how to preview, deploy. |
@@ -74,6 +74,7 @@ export const DAYS = [{
   photos: [{ url, alt, credit }],          // [] = none
   lodging: { name, address, mapUrl, coords?, breakfast? } | null,
   prep: [".."],               // free-text; powers the evening "Prep for tomorrow"
+  dayParts: { morning?, afternoon?, evening? },  // optional; one-line summaries for collapsible section headers (only non-empty buckets)
   plan: [{
     time?, tag, title, note?, mapUrl?, coords?, reserved?,   // reservations = reserved:true
     recommendations: [{ name, pros: [".."], con, mapUrl?, coords?, address? }],  // MAX 4 per item
@@ -89,7 +90,7 @@ Conventions baked into the data: reservations are plan items with `reserved:true
 - `getDays()` → fresh array of validated, date-sorted, deeply-frozen days (each with derived `dayNumber`).
 - `getDay(iso)` → the day for an ISO date, or `null` if absent (e.g. the Jun 16–23 gap).
 - `getDayByNumber(n)` → day by derived `dayNumber`, or `null` (non-finite input → `null`).
-- `renderDay(day, framingName = 'plan')` → returns `{ node, start, stop }`. Mount `node`, call `start()` to begin the hero slideshow, call `stop()` before discarding. Framings: `'anticipation'`, `'plan'`, `'reminisce'`. Null/absent day renders a placeholder.
+- `renderDay(day, framingName = 'plan')` → returns `{ node, start, stop }`. Mount `node`, call `start()` to begin the hero slideshow, call `stop()` before discarding. Framings: `'anticipation'`, `'plan'`, `'reminisce'`. Null/absent day renders a placeholder. The plan list is split into three collapsible `<section class="day-part">` blocks (Morning / Afternoon / Evening) — all collapsed by default; click a header to expand. Non-empty buckets only; `day.dayParts` summaries appear in the collapsed header.
 - `mountApp(rootEl)` → **the bootstrap mount entry point.** Picks the landing view from the clock (`pickLandingView`), mounts it, and wires the day-nav bar (Home / prev / position / next) + evening "Prep for tomorrow" button. Returns a controller `{ go(index), toIso(iso), toOverview(), destroy() }`. `go`/`toIso` are clamped to the trip window; `toOverview()` re-mounts the 18-day overview from any day view (same code path as the initial pre-trip overview, fresh `daysUntil` per call); `destroy()` stops the active slideshow and clears the root. This is what `index.html` boots — `renderInto` is no longer the bootstrap path.
 - `renderInto(rootEl, day?, framing?)` → mounts a *single* day view (defaults to Jun 24, `'plan'`). Stops any prior view's slideshow before mounting. **Retained for backward compatibility / standalone use**, but `mountApp` is the live entry point.
 - Date/time-aware navigation (date-time-aware-navigation task):
@@ -104,7 +105,7 @@ Conventions baked into the data: reservations are plan items with `reserved:true
 - Pre-trip home (trip-overview-home task):
   - `renderOverview(daysUntil, onEnter)` → builds the pre-trip **home screen** and returns `{ node, start, stop }` (start/stop are no-ops — no slideshow). The `{view:'overview'}` landing descriptor maps here. It renders a **live countdown** with three states off `getNow()` (before: "N days until the trip"; during: "The adventure is underway."; after: "The adventure is complete.") plus a **tappable index of all 18 trip days** — each row shows Day#, date, city/region, and a "Planned"/"TBD" status pill; tapping a row calls `onEnter(iso)` (wired to `mountApp`'s `toIso`) to navigate into that day. The unauthored Jun 16–23 leg reads region hints from an in-app `UNAUTHORED_REGIONS` map (data/days.js is the authoritative source; once those days are authored, `day.base` wins and the map entries become dead — drop them then). Exported for tests.
 - `buildValidatedDays(days, trip)` → exported for tests. (`deriveDayNumber` is internal — not exported.)
-- Pure helpers exported for testing: `haversineMeters(a, b)`, `formatWalk(meters)`, `safeUrl(url)`, `nearestPrecedingCoords(plan, index, lodging)`.
+- Pure helpers exported for testing: `haversineMeters(a, b)`, `formatWalk(meters)`, `safeUrl(url)`, `nearestPrecedingCoords(plan, index, lodging)`, `bucketPlanByDayPart(plan)` (partitions a plan array into `{ morning, afternoon, evening }` buckets; each item carries `indexInPlan` for cross-bucket walking-distance threading).
 
 Returns are **deeply frozen and copy-safe** — callers cannot corrupt shared module state.
 

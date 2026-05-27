@@ -64,6 +64,11 @@ export const DAYS = [
       "Confirm Senkyoro checkout time (ryokan typically 10–11am).",
       "Confirm Hakone Free Pass still covers Jun 24 (2-day vs 3-day) for the Odawara bus.",
     ],
+    dayParts: {
+      morning: "A slow ryokan breakfast at Senkyoro and the bus down to Odawara.",
+      afternoon: "The Shinkansen south, into Kyoto, and a first wander along the Kamogawa to the Shirakawa canal.",
+      evening: "A tea stop in Gion, lanterns at Yasaka, then Tousuiro on the river.",
+    },
     plan: [
       { time: "08:00", tag: "meal", title: "Breakfast at Senkyoro",
         note: "Included ryokan breakfast — relaxed start before checkout." },
@@ -158,6 +163,11 @@ export const DAYS = [
       "Optional: reserve Roji Usagi if you want the Gion machiya breakfast (cash only, breakfast L.O. 10:30).",
       "Pack comfortable shoes + water — lots of stairs and June humidity.",
     ],
+    dayParts: {
+      morning: "Vermilion torii at first light, a proper café breakfast, then up the hill to Kiyomizu.",
+      afternoon: "The stone lanes of Sannenzaka and Ninenzaka, a lunch break, and the calmer backstreets around Kodai-ji.",
+      evening: "Obanzai or soba in the Gion lanes after a free hour to rest.",
+    },
     plan: [
       { time: "06:15", tag: "meal", title: "Grab-and-go breakfast at a konbini",
         note: "Quick fuel before Fushimi (cafés aren't open this early). Megan: umeboshi/veg onigiri, egg sandwich, pastries; grab coffees." },
@@ -270,6 +280,11 @@ export const DAYS = [
       "Book Rie's tea ceremony for the 15:30 slot (byFood #760) — ~US$207 for 4.",
       "Comfortable shoes — a lot of walking across two areas.",
     ],
+    dayParts: {
+      morning: "Out early to the bamboo grove, Tenryu-ji's pond garden, and the hillside paths of Okochi Sanso.",
+      afternoon: "Shojin ryori at Shigetsu, then across to Kinkaku-ji's gold pavilion, a private tea ceremony, and a bathhouse soak at Funaoka.",
+      evening: "Back to central Kyoto for wagyu, okonomiyaki, or tempura.",
+    },
     plan: [
       { time: "07:00", tag: "meal", title: "Breakfast at the hotel",
         note: "Cross Hotel breakfast opens 7 — fuel up before Arashiyama." },
@@ -356,6 +371,11 @@ export const DAYS = [
       "Buy 'shika senbei' deer crackers in the park if you want to feed/bow with the deer.",
       "Comfortable shoes — lots of park walking; Todai-ji has a small admission.",
     ],
+    dayParts: {
+      morning: "Down to Nara, the Kofuku-ji pagoda, the colossal Daibutsu, and the viewpoint above Todai-ji.",
+      afternoon: "Lunch among the deer, the lantern corridors of Kasuga Taisha, a wander through Naramachi, and back north to Kyoto.",
+      evening: "Dinner in central Kyoto — shabu, sushi by the river, or a quick ramen close to home.",
+    },
     plan: [
       { time: "07:30", tag: "meal", title: "Breakfast at the hotel" },
       { time: "08:15", tag: "transit", title: "Kyoto Station → Kintetsu-Nara",
@@ -447,6 +467,11 @@ export const DAYS = [
       "Re-confirm Jun 28 park hours ~30 days out, then set the departure for ~60 min before open.",
       "Megan: pre-scan in-park veg menus (Kinopio's Cafe veg dishes, Shake Shack veggie burger) — plan a real meal in Osaka.",
     ],
+    dayParts: {
+      morning: "An early train to USJ — Super Nintendo World on your guaranteed window, then Hogsmeade and the Forbidden Journey.",
+      afternoon: "Lunch in the park, then Express-Pass thrill rides and standby loops as crowds thin.",
+      evening: "Into Dotonbori for a teppan dinner under the Glico sign, one disciplined nightcap, and the last train home.",
+    },
     plan: [
       { time: "06:45", tag: "meal", title: "Grab-and-go breakfast + early train to USJ",
         note: "Hotel breakfast (7am) is too late for the early start — grab konbini food. Kyoto → Osaka → Nishikujo → Universal City (~50–60 min)." },
@@ -545,6 +570,11 @@ export const DAYS = [
       "Pack tonight — Shinkansen to Tokyo tomorrow morning (checkout from Cross Hotel).",
       "If you want Pontocho Robin's vegetarian send-off course, book it ≥2 days ahead via the hotel concierge.",
     ],
+    dayParts: {
+      morning: "Sleep in, a slow hotel breakfast, then the country bus up to Ohara.",
+      afternoon: "Yuba in the village, the moss garden and little jizo at Sanzen-in, a 'framed' garden at Hosen-in, and rice fields back to the bus.",
+      evening: "A last Kyoto dinner — a riverside send-off at Pontocho Robin, or yakitori a block from the hotel.",
+    },
     plan: [
       { time: "10:00", tag: "meal", title: "Leisurely hotel breakfast (sleep in)" },
       { time: "10:45", tag: "transit", title: "Head to Ohara",
@@ -624,6 +654,11 @@ export const DAYS = [
       "At Prince Gallery check-in: mention it's your honeymoon + ask about a higher-floor / Tokyo-Tower-facing upgrade and early check-in (availability-permitting); confirm The Edit's $100 property credit + breakfast-for-2 are on the reservation (put the credit toward dinner).",
       "Confirm whether you booked via Chase's 'The Edit' (perks above) or Capital One's Premier Collection — the perks differ slightly.",
     ],
+    dayParts: {
+      morning: "Checkout from the Cross Hotel and the Nozomi north to Tokyo Station.",
+      afternoon: "A quick lunch and goodbyes at Tokyo Station, then the split — Haneda for two, the Prince Gallery's 36F lobby for two.",
+      evening: "A relaxed first dinner downstairs at the Tokyo Garden Terrace, and the city lights from the room.",
+    },
     plan: [
       { time: "09:30", tag: "transit", title: "Check out of Cross Hotel Kyoto",
         note: "Checkout is noon, but an earlier checkout suits the morning Shinkansen." },
@@ -691,6 +726,11 @@ export const DAYS = [
     prep: [
       "Imperial Palace East Gardens are free but closed Mon & Fri — today (Wed) is open.",
     ],
+    dayParts: {
+      morning: "Breakfast on the 36F, then the moat walls and old keep ruins of Edo Castle.",
+      afternoon: "Lunch in Marunouchi, optional Hamarikyu garden by the tidal pond, and a polished stroll through Ginza.",
+      evening: "A walkable dinner near the hotel — soba on-site, sushi in Akasaka, or a soba-kaiseki izakaya.",
+    },
     plan: [
       { time: "09:00", tag: "meal", title: "Breakfast at the hotel (Oasis Garden, 36F)",
         note: "Included via The Edit — a great morning view to start." },
@@ -751,6 +791,11 @@ export const DAYS = [
       "Book the couples massage at SPA KIOI by Swiss Perfection (30F) ahead — phone/email; couple's treatments 90–180 min.",
       "The 30F communal bath + sauna is free if you're upgraded to a suite/club room, else ¥3,300pp/night. No tattoos. (It's a city-view bath, not a natural onsen.)",
     ],
+    dayParts: {
+      morning: "A slow breakfast, then the sky-high pool, bath and sauna on the 30F.",
+      afternoon: "A couples massage at SPA KIOI, then a quiet wander through Hie Shrine's torii steps and the Akasaka moat.",
+      evening: "A farewell Tokyo dinner — wagyu sukiyaki downstairs, an omakase counter, or wagyu yakiniku — and the night view from above.",
+    },
     plan: [
       { time: "09:30", tag: "meal", title: "Slow breakfast (Oasis Garden, 36F)" },
       { time: "11:00", tag: "rest", title: "Pool, bath & sauna (30F)",
@@ -802,6 +847,11 @@ export const DAYS = [
       "Checkout is noon. For the 5:35 PM Narita flight, leave the hotel ~1 PM (Narita is ~1h–1h20; be at NRT ~3 PM for an international departure).",
       "Reserve Narita Express (N'EX) seats Tokyo Station → Narita.",
     ],
+    dayParts: {
+      morning: "A final breakfast on the 36F and one last stroll around the neighborhood while you pack.",
+      afternoon: "Checkout, a light lunch nearby, and the N'EX out to Narita.",
+      evening: "Wheels up — Tokyo to Montréal to New York. Sayonara, Japan.",
+    },
     plan: [
       { time: "08:30", tag: "meal", title: "Final breakfast (Oasis Garden, 36F)" },
       { time: "10:00", tag: "rest", title: "Last stroll / pack",

@@ -38,6 +38,7 @@ import {
   renderOverview,
   parseNowOverride,
   resolveNowOverride,
+  bucketPlanByDayPart,
 } from './app.js';
 import { TRIP, DAYS } from './data/days.js';
 
@@ -2481,4 +2482,352 @@ test('resolveNowOverride does NOT change the active clock when called under Node
   } finally {
     setNow(null);
   }
+});
+
+// ===========================================================================
+// collapsible-day-parts — bucketing helper, validator, render
+//
+// Covers:
+//   A. bucketPlanByDayPart pure helper (no DOM)
+//   B. buildValidatedDays accepting/sanitizing the optional `dayParts` field
+//   C. renderDay's per-bucket collapsible <section class="day-part"> rendering
+//
+// Boundaries (per spec): hour < 12 = Morning, 12 ≤ hour ≤ 16 = Afternoon,
+// hour ≥ 17 = Evening. Items lacking a parseable `time` bucket into Morning
+// AND emit a console.warn.
+// ===========================================================================
+
+// --- Group A: bucketPlanByDayPart pure helper -------------------------------
+
+test('bucketPlanByDayPart: empty plan returns three empty buckets in order', () => {
+  const buckets = bucketPlanByDayPart([]);
+  assert.equal(buckets.length, 3);
+  assert.deepEqual(buckets.map((b) => b.name), ['Morning', 'Afternoon', 'Evening']);
+  buckets.forEach((b) => assert.deepEqual(b.items, []));
+});
+
+test('bucketPlanByDayPart: all-Morning plan keeps order in Morning only', () => {
+  const plan = [
+    { time: '06:30', title: 'A' },
+    { time: '09:15', title: 'B' },
+    { time: '11:00', title: 'C' },
+  ];
+  const [morning, afternoon, evening] = bucketPlanByDayPart(plan);
+  assert.equal(morning.items.length, 3);
+  assert.deepEqual(morning.items.map((b) => b.item.title), ['A', 'B', 'C']);
+  assert.equal(afternoon.items.length, 0);
+  assert.equal(evening.items.length, 0);
+});
+
+test('bucketPlanByDayPart: items at 09:00 / 13:00 / 19:00 fan out one per bucket', () => {
+  const plan = [
+    { time: '09:00', title: 'Shrine' },
+    { time: '13:00', title: 'Lunch' },
+    { time: '19:00', title: 'Dinner' },
+  ];
+  const [morning, afternoon, evening] = bucketPlanByDayPart(plan);
+  assert.equal(morning.items.length, 1);
+  assert.equal(afternoon.items.length, 1);
+  assert.equal(evening.items.length, 1);
+  assert.equal(morning.items[0].item.title, 'Shrine');
+  assert.equal(afternoon.items[0].item.title, 'Lunch');
+  assert.equal(evening.items[0].item.title, 'Dinner');
+});
+
+test('bucketPlanByDayPart: boundary times 11:59, 12:00, 16:59, 17:00 land in the correct buckets', () => {
+  const plan = [
+    { time: '11:59', title: 'Late morning' },
+    { time: '12:00', title: 'Noon' },
+    { time: '16:59', title: 'Late afternoon' },
+    { time: '17:00', title: 'Early evening' },
+  ];
+  const [morning, afternoon, evening] = bucketPlanByDayPart(plan);
+  assert.deepEqual(morning.items.map((b) => b.item.title), ['Late morning']);
+  assert.deepEqual(afternoon.items.map((b) => b.item.title), ['Noon', 'Late afternoon']);
+  assert.deepEqual(evening.items.map((b) => b.item.title), ['Early evening']);
+});
+
+test('bucketPlanByDayPart: indexInPlan preserves each item’s ORIGINAL position across mixed buckets', () => {
+  // Mixed-bucket plan of 6 items; the helper must thread the full-plan index
+  // through so downstream walking-distance lookups still see preceding stops.
+  const plan = [
+    { time: '08:00', title: '0M' }, // index 0 → Morning
+    { time: '13:30', title: '1A' }, // index 1 → Afternoon
+    { time: '10:00', title: '2M' }, // index 2 → Morning
+    { time: '20:00', title: '3E' }, // index 3 → Evening
+    { time: '15:00', title: '4A' }, // index 4 → Afternoon
+    { time: '07:00', title: '5M' }, // index 5 → Morning
+  ];
+  const [morning, afternoon, evening] = bucketPlanByDayPart(plan);
+  // Morning gathers original indices 0, 2, 5 in input order.
+  assert.deepEqual(morning.items.map((b) => b.indexInPlan), [0, 2, 5]);
+  // Afternoon gathers original indices 1, 4 in input order.
+  assert.deepEqual(afternoon.items.map((b) => b.indexInPlan), [1, 4]);
+  // Evening gathers original index 3.
+  assert.deepEqual(evening.items.map((b) => b.indexInPlan), [3]);
+  // And every indexInPlan resolves back to the same item identity in the input.
+  [...morning.items, ...afternoon.items, ...evening.items].forEach(({ item, indexInPlan }) => {
+    assert.equal(item, plan[indexInPlan], 'indexInPlan must point to the same item ref in the input plan');
+  });
+});
+
+test('bucketPlanByDayPart: items with missing or unparseable time bucket into Morning AND warn', (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const plan = [
+    { title: 'No time field' },               // missing time
+    { time: 'not-a-time', title: 'Garbage' }, // unparseable time
+  ];
+  const [morning, afternoon, evening] = bucketPlanByDayPart(plan);
+  assert.equal(morning.items.length, 2, 'both unparseable items land in Morning');
+  assert.deepEqual(morning.items.map((b) => b.item.title), ['No time field', 'Garbage']);
+  assert.equal(afternoon.items.length, 0);
+  assert.equal(evening.items.length, 0);
+  // Both items must produce a warning (one each).
+  assert.ok(warn.mock.calls.length >= 2, 'expected at least one warning per unparseable item');
+});
+
+test('bucketPlanByDayPart: returned bucket order is Morning → Afternoon → Evening regardless of input order', () => {
+  // Feed Evening-first, then Morning, then Afternoon items; output order must
+  // still be the canonical Morning/Afternoon/Evening sequence.
+  const plan = [
+    { time: '21:00', title: 'late' },
+    { time: '07:00', title: 'early' },
+    { time: '14:00', title: 'mid' },
+  ];
+  const buckets = bucketPlanByDayPart(plan);
+  assert.deepEqual(buckets.map((b) => b.name), ['Morning', 'Afternoon', 'Evening']);
+});
+
+// --- Group B: buildValidatedDays accepts/sanitizes dayParts -----------------
+
+test('buildValidatedDays keeps a valid dayParts object verbatim on the validated day', () => {
+  const day = {
+    date: '2026-06-24', base: 'Kyoto', title: 't', plan: [], photos: [],
+    dayParts: { morning: 'M', afternoon: 'A', evening: 'E' },
+  };
+  const result = buildValidatedDays([day], TRIP_STUB);
+  assert.equal(result.length, 1);
+  assert.deepEqual(result[0].dayParts, { morning: 'M', afternoon: 'A', evening: 'E' });
+});
+
+test('buildValidatedDays strips a non-object dayParts and warns', (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const day = {
+    date: '2026-06-24', base: 'Kyoto', title: 't', plan: [], photos: [],
+    dayParts: 'not-an-object',
+  };
+  const result = buildValidatedDays([day], TRIP_STUB);
+  assert.equal(result.length, 1);
+  assert.equal('dayParts' in result[0], false, 'malformed dayParts must be dropped entirely');
+  assert.ok(warn.mock.calls.length >= 1, 'expected a warning for the non-object dayParts');
+});
+
+test('buildValidatedDays strips only the offending per-field non-string and keeps the rest', (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const day = {
+    date: '2026-06-24', base: 'Kyoto', title: 't', plan: [], photos: [],
+    dayParts: { morning: 'M', afternoon: 123, evening: 'E' },
+  };
+  const result = buildValidatedDays([day], TRIP_STUB);
+  assert.equal(result.length, 1);
+  assert.deepEqual(result[0].dayParts, { morning: 'M', evening: 'E' });
+  assert.ok(warn.mock.calls.length >= 1, 'expected a warning for the dropped per-field value');
+});
+
+test('buildValidatedDays drops dayParts entirely when every field is invalid (no empty {} left behind)', (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const day = {
+    date: '2026-06-24', base: 'Kyoto', title: 't', plan: [], photos: [],
+    dayParts: { morning: 1, afternoon: 2, evening: 3 },
+  };
+  const result = buildValidatedDays([day], TRIP_STUB);
+  assert.equal(result.length, 1);
+  assert.equal('dayParts' in result[0], false,
+    'all-invalid dayParts should be dropped from the validated day, not left as {} or undefined');
+});
+
+test('buildValidatedDays leaves dayParts undefined when absent, with no warning', (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const day = { date: '2026-06-24', base: 'Kyoto', title: 't', plan: [], photos: [] };
+  const result = buildValidatedDays([day], TRIP_STUB);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].dayParts, undefined);
+  assert.equal('dayParts' in result[0], false);
+  assert.equal(warn.mock.calls.length, 0, 'no warning should fire for an absent (optional) dayParts');
+});
+
+// --- Group C: renderDay bucket rendering ------------------------------------
+
+// Shared fixture for render-bucket tests: items across all three buckets.
+function multiBucketFixture() {
+  return {
+    date: '2026-06-24', dayNumber: 9, base: 'Kyoto', title: 'A full day',
+    intro: 'Across the day.', photos: [], lodging: null,
+    plan: [
+      { time: '09:00', tag: 'sight', title: 'Yasaka Shrine',
+        coords: { lat: 35.0036, lng: 135.7785 } },
+      { time: '13:00', tag: 'meal', title: 'Riverside Lunch',
+        recommendations: [
+          { name: 'Tousuiro Kiyamachi', pros: ['Riverside'], con: 'Reservation needed.',
+            coords: { lat: 35.0040, lng: 135.7710 } },
+        ] },
+      { time: '20:00', tag: 'meal', title: 'Late Ramen' },
+    ],
+  };
+}
+
+test('renderDay (multi-bucket day): produces exactly three .day-part sections', () => {
+  withDom(() => {
+    const node = renderDay(multiBucketFixture(), 'plan').node;
+    assert.equal(node.byClass('day-part').length, 3,
+      'one section per non-empty bucket — Morning, Afternoon, Evening');
+  });
+});
+
+test('renderDay: section headers use the AUTHORED dayParts summary when present', () => {
+  withDom(() => {
+    const day = multiBucketFixture();
+    day.dayParts = {
+      morning: 'A gentle start at Yasaka.',
+      afternoon: 'Lunch on the river.',
+      evening: 'Ramen to close the day.',
+    };
+    const node = renderDay(day, 'plan').node;
+    const summaries = node.byClass('day-part-summary').map((n) => n.textContent);
+    assert.deepEqual(summaries, [
+      'A gentle start at Yasaka.',
+      'Lunch on the river.',
+      'Ramen to close the day.',
+    ]);
+  });
+});
+
+test('renderDay: section headers fall back to a derived summary when dayParts is absent', () => {
+  withDom(() => {
+    const day = multiBucketFixture();
+    delete day.dayParts;
+    const node = renderDay(day, 'plan').node;
+    const summaries = node.byClass('day-part-summary');
+    assert.ok(summaries.length >= 1, 'expected at least one derived summary span');
+    // For the Morning bucket the only item is "Yasaka Shrine" — derived summary
+    // is built from item titles joined by " • ", possibly truncated. We don't
+    // over-specify; just assert non-empty and that it appears as a substring of
+    // the canonical joined-titles string for that bucket.
+    const allTitles = day.plan.map((i) => i.title).join(' • ');
+    summaries.forEach((s) => {
+      assert.ok(s.textContent.length > 0, 'derived summary should be non-empty');
+      // Each derived summary is built from titles belonging to its bucket; every
+      // word in the summary must appear somewhere in the full title set.
+      // Strip the trailing ellipsis character that the truncator may add.
+      const cleaned = s.textContent.replace(/\s?…$/, '').trim();
+      if (cleaned.length > 0) {
+        assert.ok(
+          allTitles.includes(cleaned.split(' • ')[0]),
+          `derived summary "${s.textContent}" should be drawn from item titles`,
+        );
+      }
+    });
+  });
+});
+
+test('renderDay: every .day-part-body is hidden by default after render (collapsed initial state)', () => {
+  withDom(() => {
+    const node = renderDay(multiBucketFixture(), 'plan').node;
+    const bodies = node.byClass('day-part-body');
+    assert.equal(bodies.length, 3);
+    bodies.forEach((b) => assert.equal(b.hidden, true,
+      'each day-part body must start hidden so the day-view opens compact'));
+    // And every header must have aria-expanded="false" to match.
+    const headers = node.byClass('day-part-header');
+    assert.equal(headers.length, 3);
+    headers.forEach((h) => assert.equal(h.getAttribute('aria-expanded'), 'false'));
+  });
+});
+
+test('renderDay: a Morning-only plan renders exactly one .day-part section (empty buckets are dropped)', () => {
+  withDom(() => {
+    const day = multiBucketFixture();
+    day.plan = [
+      { time: '08:00', tag: 'sight', title: 'Sunrise walk' },
+      { time: '10:30', tag: 'cafe', title: 'Coffee stop' },
+    ];
+    const node = renderDay(day, 'plan').node;
+    assert.equal(node.byClass('day-part').length, 1, 'only Morning should render a section');
+    assert.equal(node.firstByClass('day-part').firstByClass('day-part-name').textContent, 'Morning');
+  });
+});
+
+test('renderDay: clicking a .day-part-header toggles body.hidden, aria-expanded, and .is-open (twice = reverts)', () => {
+  withDom(() => {
+    const node = renderDay(multiBucketFixture(), 'plan').node;
+    const header = node.firstByClass('day-part-header');
+    // Find this header's section + body — they share the same parent section.
+    const section = node.byClass('day-part')[0];
+    const body = section.firstByClass('day-part-body');
+
+    // Initial state: closed.
+    assert.equal(body.hidden, true);
+    assert.equal(header.getAttribute('aria-expanded'), 'false');
+    assert.equal(section.classList.contains('is-open'), false);
+
+    // First click: open.
+    header._fire('click');
+    assert.equal(body.hidden, false, 'body becomes visible on first click');
+    assert.equal(header.getAttribute('aria-expanded'), 'true');
+    assert.ok(section.classList.contains('is-open'), 'section gains .is-open');
+
+    // Second click: revert to closed.
+    header._fire('click');
+    assert.equal(body.hidden, true, 'body hides again on second click');
+    assert.equal(header.getAttribute('aria-expanded'), 'false');
+    assert.equal(section.classList.contains('is-open'), false);
+  });
+});
+
+test('renderDay: walking-distance origin is preserved ACROSS bucket boundaries (Morning origin → Afternoon rec)', () => {
+  withDom(() => {
+    // The fixture: plan[0] (09:00, Morning) Yasaka has coords. plan[1] (13:00,
+    // Afternoon) has a rec with coords. If buildPlanItem received a per-bucket
+    // index instead of indexInPlan, nearestPrecedingCoords would scan an empty
+    // afternoon-only slice and find no origin. So the rec-walk's presence —
+    // and the "from Yasaka Shrine" label — is the load-bearing proof.
+    const node = renderDay(multiBucketFixture(), 'plan').node;
+    const walks = node.byClass('rec-walk');
+    assert.equal(walks.length, 1, 'one walking-distance line for the lone coord-bearing rec');
+    assert.match(walks[0].textContent, /from Yasaka Shrine/,
+      'the walk should originate from the preceding Morning stop, proving indexInPlan threaded across buckets');
+  });
+});
+
+test('renderDay: a .plan-list still exists nested inside the .day-part-body (regression safety)', () => {
+  withDom(() => {
+    const node = renderDay(multiBucketFixture(), 'plan').node;
+    const list = node.firstByClass('plan-list');
+    assert.ok(list, 'expected at least one plan-list to survive the bucket refactor');
+    assert.equal(list.tagName, 'OL');
+    // And every plan-list must live inside a day-part-body (not as a free-floating child).
+    const allLists = node.byClass('plan-list');
+    assert.equal(allLists.length, 3, 'one list per bucket');
+    // Each list is nested under a .day-part-body — verify by traversal.
+    node.byClass('day-part-body').forEach((b) => {
+      assert.ok(b.firstByClass('plan-list'),
+        'each day-part-body wraps a plan-list (lists no longer float at the day-view root)');
+    });
+  });
+});
+
+test('renderDay: sparse day (empty plan) still renders the placeholder and NO .day-part sections leak through', () => {
+  withDom(() => {
+    const sparse = {
+      date: '2026-06-25', dayNumber: 10, base: 'Kyoto', title: 'A quiet day',
+      intro: 'Nothing planned yet.', photos: [], plan: [], lodging: null,
+    };
+    const node = renderDay(sparse, 'plan').node;
+    assert.ok(node.firstByClass('placeholder-title'),
+      'sparse day must still render the "details coming" placeholder');
+    assert.equal(node.byClass('day-part').length, 0,
+      'no day-part sections for an empty plan — the bucket loop must short-circuit');
+    assert.equal(node.firstByClass('plan-section'), null,
+      'no plan-section wrapper either');
+  });
 });

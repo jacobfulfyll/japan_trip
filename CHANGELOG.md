@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Collapsible Morning / Afternoon / Evening sections in the day view** — the flat plan list is now split into three labelled day-part sections, each collapsed by default. Clicking a header expands or collapses that bucket. Bucket boundaries: Morning (hour < 12), Afternoon (12–16), Evening (hour ≥ 17). Plan items with a missing or unparseable `time` fall into Morning with a console warning. Walking-distance "from previous stop" still threads correctly across bucket boundaries via an `indexInPlan` counter.
+  - New optional `dayParts: { morning?, afternoon?, evening? }` field in each day object — a one-line authored summary shown in the collapsed header for each non-empty bucket. Validator accepts the field and warn-strips malformed shapes (non-object, or values that are not non-empty strings).
+  - New public export `bucketPlanByDayPart(plan)` — pure helper that partitions a plan array into `{ morning, afternoon, evening }` bucket arrays. Exported for testing.
+  - New CSS in `index.html`: `.day-part`, `.day-part-header`, `.day-part-name`, `.day-part-summary`, `.day-part-chev` (rotates with `.is-open`), `.day-part-body[hidden] { display: none }`.
+  - All 10 authored days (Jun 24 – Jul 3) have hand-authored `dayParts` summaries in `data/days.js`.
+  - 21 new tests added; suite is now **235 total** (235 passing).
+  - `CACHE_VERSION` bumped to `v7` in `sw.js`.
+
+### Added
 - **Home button in the day navigation bar** — every day view now shows a 🏠 button (leading position, aria-label "Trip overview") that returns to the 18-day index overview. Before this you could only get back by reloading. The overview re-mount uses the same code path as the initial pre-trip overview (now factored into a `mountOverview()` closure in `mountApp`); mid-trip it renders the in-trip kicker ("IN JAPAN NOW" / "THE ADVENTURE IS UNDERWAY.") without a numeric countdown. `mountApp`'s controller gained a `toOverview()` method alongside `go`/`toIso`/`destroy` for programmatic navigation. 44pt minimum tap target (HIG). `CACHE_VERSION` bumped to `v6`.
 
 ### Changed
