@@ -2,17 +2,6 @@
 
 ## Active Tasks
 
-### map-button-icon-only
-**Task**: Reduce the map button to a muted icon in the bottom-right of each card
-**Pipeline**: code-workflow
-**Branch**: task/map-button-icon-only
-**Worktree**: .worktree/map-button-icon-only
-**Base**: main
-**Started**: 2026-05-27
-**Files**:
-- MOD: app.js
-- MOD: index.html
-
 ---
 
 ## Backlog
