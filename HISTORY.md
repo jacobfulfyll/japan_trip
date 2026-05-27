@@ -8,3 +8,4 @@
 - [x] time-travel-test-mode Fake the clock (override now) + test page to verify time-of-day behavior on a phone -- 2026-05-24
 - [x] trip-overview-home Pre-trip home: live countdown + tappable 18-day index (Planned/TBD), tap-to-open day view -- 2026-05-24
 - [x] sw-test-cache-version-coupling Derive sw.test.js cache-name literals from CACHE_VERSION (resolved within trip-overview-home) -- 2026-05-24
+- [x] fix-rec-collapse Make the recommendation collapse toggle actually collapse -- 2026-05-27

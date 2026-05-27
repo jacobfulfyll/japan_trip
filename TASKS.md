@@ -6,6 +6,14 @@
 
 ## Backlog
 
+### Day-View Polish (v1 follow-ups)
+- [ ] map-button-icon-only: Reduce the map button to a muted icon in the bottom-right of each card [P2] [simple] [tier: opus:medium] [conflicts: fix-rec-collapse, nav-back-to-home, collapsible-day-parts] [code] [planned]
+  files: app.js (MOD), index.html (MOD)
+- [ ] nav-back-to-home: Add a Home button to the day navigation bar [P2] [moderate] [tier: opus:medium] [conflicts: fix-rec-collapse, map-button-icon-only, collapsible-day-parts] [code] [planned]
+  files: app.js (MOD), index.html (MOD)
+- [ ] collapsible-day-parts: Group day plan into collapsed Morning/Afternoon/Evening sections with authored summaries [P2] [depends: fix-rec-collapse] [conflicts: fix-rec-collapse, map-button-icon-only, nav-back-to-home] [complex] [tier: opus:high] [code] [planned]
+  files: app.js (MOD), data/days.js (MOD), index.html (MOD)
+
 ### Firebase Photo Journal (v2 — after v1)
 - [ ] firebase-project-setup: Console setup — project, Storage/Firestore/Auth, shared account, Blaze + budget [P2] [simple] [tier: sonnet:medium] [depends: data-model-and-scaffold] [manual] [planned]
   files: external (Firebase console)
@@ -17,9 +25,6 @@
   files: app.js (MOD), index.html (MOD), sw.js (MOD)
 
 ### Ungroomed
-- [ ] need-a-way-to-get-back-to-home-while-viewing-the-days-of-the-trip: need a way to get back to home while viewing the days of the trip
-- [ ] the-recommendation-options-are-not-collapsible: the recommendation options are not collapsible
-- [ ] i-m-wondering-if-there-should-be-a-way-to-collapse-parts-of-the-day-as-well-morning-afternoon-evening: I’m wondering if there should be a way to collapse parts of the day as well, morning, afternoon, evening
 <!-- Real-world trip bookings & confirmations surfaced during grooming. Personal to-dos, not build tasks — to be tackled later. -->
 - [ ] reserve-jun24-dinner: Reserve Tousuiro Kiyamachi for 8pm — riverside terrace + Megan's vegetarian ROKUHARA course (state: no fish/bonito/dashi)
 - [ ] reserve-odawara-kyoto-shinkansen: Reserve Hikari seats Odawara→Kyoto (4 together; Hikari/Kodama only — not Nozomi)
