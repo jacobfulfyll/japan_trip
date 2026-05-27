@@ -1643,11 +1643,11 @@ test('mountApp clamps PREV at index 0 (Prev disabled on the first window day, no
         const prev = root.firstByClass('day-nav-prev');
         assert.equal(prev.disabled, true, 'Prev is disabled at index 0');
         const pos = root.firstByClass('day-nav-pos').textContent;
-        assert.equal(pos, 'Day 1', 'position label shows Day 1 at the window start');
+        assert.equal(pos, 'June 16th - Day 1', 'position label shows Day 1 at the window start');
         // Clicking the (disabled) Prev / navigating below 0 is a clamped no-op:
         // still on Day 1, still no crash.
         ctl.go(-5);
-        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 1', 'clamped to Day 1, no underflow');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'June 16th - Day 1', 'clamped to Day 1, no underflow');
       } finally {
         setNow(null);
       }
@@ -1665,10 +1665,10 @@ test('mountApp clamps NEXT at the last index (Next disabled on the final window 
         const ctl = mountApp(root);
         const next = root.firstByClass('day-nav-next');
         assert.equal(next.disabled, true, 'Next is disabled at the last index');
-        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 18');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'July 3rd - Day 18');
         // Navigating beyond the end is a clamped no-op.
         ctl.go(999);
-        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 18', 'clamped to Day 18, no overflow');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'July 3rd - Day 18', 'clamped to Day 18, no overflow');
       } finally {
         setNow(null);
       }
@@ -1683,10 +1683,10 @@ test('mountApp Next button advances one day; Prev is enabled once off the first 
         setNow(() => localDate(2026, 5, 16, 12, 0)); // start on Day 1
         const root = makeRoot();
         mountApp(root);
-        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 1');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'June 16th - Day 1');
         // Fire the Next button's click listener (drives navigate(index+1)).
         root.firstByClass('day-nav-next')._fire('click');
-        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 2', 'advanced to Day 2');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'June 17th - Day 2', 'advanced to Day 2');
         assert.equal(root.firstByClass('day-nav-prev').disabled, false, 'Prev enabled once off Day 1');
       } finally {
         setNow(null);
@@ -1786,12 +1786,12 @@ test('mountApp evening "Prep for tomorrow" CTA NAVIGATES to the next day when cl
         setNow(() => localDate(2026, 5, 24, 22, 0));
         const root = makeRoot();
         mountApp(root);
-        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 9', 'starts on Jun 24');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'June 24th - Day 9', 'starts on Jun 24');
         const cta = root.firstByClass('evening-prep-cta');
         assert.ok(cta, 'evening prep CTA present');
         // Clicking the CTA must move the day view to tomorrow (Day 10 / Jun 25).
         cta._fire('click');
-        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 10', 'CTA navigated to the next day');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'June 25th - Day 10', 'CTA navigated to the next day');
       } finally {
         setNow(null);
       }
@@ -1830,7 +1830,7 @@ test('mountApp on the LAST day (Jul 3) in the evening window shows NO prep CTA (
         setNow(() => localDate(2026, 6, 3, 22, 0));
         const root = makeRoot();
         mountApp(root);
-        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 18', 'on the last window day');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'July 3rd - Day 18', 'on the last window day');
         assert.equal(root.firstByClass('day-nav-next').disabled, true, 'Next clamped at the last day');
         assert.equal(root.firstByClass('evening-prep'), null,
           'no prep section on the last day — there is no tomorrow to prep for');
@@ -1849,19 +1849,19 @@ test('mountApp evening prep CTA is suppressed once you navigate OFF today (tomor
         setNow(() => localDate(2026, 5, 24, 22, 0));
         const root = makeRoot();
         const ctrl = mountApp(root);
-        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 9', 'lands on today');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'June 24th - Day 9', 'lands on today');
         assert.ok(root.firstByClass('evening-prep'), 'CTA present on today in the evening window');
 
         // Page forward to a FUTURE day (still 22:00) → "tomorrow" no longer means
         // the day after this one, so the CTA must be gone.
         ctrl.toIso('2026-06-26'); // Day 11
-        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 11', 'navigated to a future day');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'June 26th - Day 11', 'navigated to a future day');
         assert.equal(root.firstByClass('evening-prep'), null,
           'no prep CTA when viewing a non-today day in the evening window');
 
         // And back to today → CTA returns.
         ctrl.toIso('2026-06-24'); // back to today (Day 9)
-        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 9', 'back on today');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'June 24th - Day 9', 'back on today');
         assert.ok(root.firstByClass('evening-prep'), 'CTA reappears on today');
       } finally {
         setNow(null);
@@ -1968,7 +1968,7 @@ test('round-trip: Home → overview → tap a day-index row → that day view lo
         assert.equal(rows.length, 18, 'overview rendered all 18 trip-window rows');
         rows[9]._fire('click');
         assert.ok(root.firstByClass('day-nav'), 'day view re-mounted after tapping overview row');
-        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 10',
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'June 25th - Day 10',
           'navigated to the tapped day (Jun 25 = Day 10)');
       } finally {
         setNow(null);
@@ -2318,7 +2318,7 @@ test('mountApp BEFORE the trip mounts the overview with the full 18-day index an
         root.byClass('day-index-row')[8]._fire('click'); // Jun 24 (Day 9)
         assert.equal(root.firstByClass('overview-view'), null, 'overview replaced after tapping a row');
         assert.ok(root.firstByClass('day-nav'), 'a day view (with nav) is now mounted');
-        assert.equal(root.firstByClass('day-nav-pos').textContent, 'Day 9', 'tapped Jun 24 → Day 9');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'June 24th - Day 9', 'tapped Jun 24 → Day 9');
         ctl.destroy();
       } finally {
         setNow(null);

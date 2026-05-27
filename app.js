@@ -1374,6 +1374,35 @@ function stopActiveDayView() {
 }
 
 /**
+ * Format the day-nav label as "June 24th - Day 9". Falls back to the raw iso
+ * if the date is unparseable, or to "Day N" / iso if `num` is null.
+ */
+const MONTH_NAMES_LONG = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+function formatNavLabel(iso, num) {
+  const d = parseISODate(iso);
+  if (!d) return num != null ? `Day ${num}` : iso;
+  const day = d.getUTCDate();
+  const suffix = ordinalSuffix(day);
+  const datePart = `${MONTH_NAMES_LONG[d.getUTCMonth()]} ${day}${suffix}`;
+  return num != null ? `${datePart} - Day ${num}` : datePart;
+}
+
+function ordinalSuffix(n) {
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 13) return 'th';
+  switch (n % 10) {
+    case 1: return 'st';
+    case 2: return 'nd';
+    case 3: return 'rd';
+    default: return 'th';
+  }
+}
+
+/**
  * Build the prev/next navigation bar for the day at `index` in `dates`.
  * Buttons are clamped to the window ends. `onGo(index)` navigates.
  * `onHome()` returns to the trip overview; if omitted, the Home button is not rendered.
@@ -1402,12 +1431,11 @@ function buildNavBar(dates, index, onGo, onHome) {
   next.setAttribute('aria-label', 'Next day');
   next.addEventListener('click', () => onGo(index + 1));
 
-  // Position label (e.g. "Day 9 · Jun 24") — derived, never authored.
+  // Position label (e.g. "June 24th - Day 9") — derived, never authored.
   const iso = dates[index];
   const dayObj = getDay(iso);
   const num = dayObj?.dayNumber ?? deriveDayNumber(iso);
-  const label = el('span', 'day-nav-pos',
-    num != null ? `Day ${num}` : iso);
+  const label = el('span', 'day-nav-pos', formatNavLabel(iso, num));
 
   const group = el('div', 'day-nav-group');
   group.appendChild(prev);
