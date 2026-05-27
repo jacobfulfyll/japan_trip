@@ -51,3 +51,5 @@
   > sw.js staleWhileRevalidate grows unbounded. Fine for the small Wikimedia hero set today, but a real device-storage concern once v2 adds user-uploaded photos. Revisit alongside reminisce-photo-gallery / photo-upload-flow.
 - [ ] upgrade-deploy-pages-actions: Bump deploy-pages.yml `upload-pages-artifact` and `deploy-pages` from @v1 to @v3 (discovered during offline-and-installable; also in CLAUDE.md Known Issues)
   > @v1 actions are deprecated. Low-risk mechanical bump; verify a Pages deploy still succeeds after.
+- [ ] refresh-claudemd-test-count: CLAUDE.md says "205 node:test cases" but the suite is now 250 (was 247 before add-transit-alternative-to-recs added 3) — stale count
+  > The CLAUDE.md "key files" table claim is informational drift, not a bug. Refresh during the next docs sync pass.
