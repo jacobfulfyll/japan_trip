@@ -878,6 +878,8 @@ export const DAYS = [
     plan: [
       { time: "08:00", tag: "meal", title: "Breakfast at Senkyoro",
         note: "Included ryokan breakfast — relaxed start before checkout." },
+      { time: "10:00", tag: "checkout", title: "Checkout from Senkyoro",
+        note: "Settle up and leave bags at the desk if needed before the bus down to Odawara." },
       { time: "11:00", tag: "transit", title: "Senkyoro → Odawara (Hakone Tozan bus)",
         transit: { mode: 'bus', line: 'Hakone Tozan Bus', from: 'Senkyoro-Mae', to: 'Odawara Station', minutes: 50 },
         note: "From the Senkyoro-Mae stop. Covered by the Hakone Free Pass if still valid." },
