@@ -2,7 +2,17 @@
 
 ## Active Tasks
 
-_None._
+### author-tokyo-nightlife-shibuya
+**Task**: Author Days 5–6 (Jun 20 Tsukiji/flex/Shinjuku nightlife + Jun 21 Shinjuku/Shibuya, Amam Dacotan on Day 6)
+**Pipeline**: code-workflow
+**Branch**: task/author-tokyo-nightlife-shibuya
+**Worktree**: .worktree/author-tokyo-nightlife-shibuya
+**Base**: main
+**Started**: 2026-05-31
+**Files**:
+- MOD: data/days.js
+- MOD: sw.js
+- MOD: app.test.js
 
 ---
 
@@ -10,8 +20,6 @@ _None._
 
 ### Trip Content — Author Jun 16–23 (data/days.js)
 <!-- Fills the unauthored Jun 16–23 leg (Days 1–8) to the existing Kyoto-day bar. All edit data/days.js + sw.js (CACHE_VERSION) + app.test.js, so they run serially in date order (depends chain). Research dossiers + verified facts live in each .pipeline/<slug>/task.md. -->
-- [ ] author-tokyo-nightlife-shibuya: Author Days 5–6 (Jun 20 Tsukiji/Golden Gai + Jun 21 Shinjuku/Shibuya, Amam Dacotan on Day 6) [P2] [moderate] [tier: opus:high] [depends: author-tokyo-asakusa-ginza] [code] [planned]
-  files: data/days.js (MOD), sw.js (MOD), app.test.js (MOD)
 - [ ] author-hakone-leg: Author Days 7–8 (Jun 22 Tokyo→Hakone Romancecar + Jun 23 Hakone loop); close the gap, sync docs [P2] [moderate] [tier: opus:high] [depends: author-tokyo-nightlife-shibuya] [code] [planned]
   files: data/days.js (MOD), sw.js (MOD), app.test.js (MOD), CLAUDE.md (MOD)
 - [ ] add-jun24-checkout: Add an explicit 10am checkout item to the existing Jun 24 day [P3] [simple] [tier: sonnet:medium] [depends: author-hakone-leg] [code] [planned]
