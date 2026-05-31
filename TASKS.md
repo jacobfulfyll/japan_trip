@@ -2,17 +2,7 @@
 
 ## Active Tasks
 
-### author-tokyo-nightlife-shibuya
-**Task**: Author Days 5–6 (Jun 20 Tsukiji/flex/Shinjuku nightlife + Jun 21 Shinjuku/Shibuya, Amam Dacotan on Day 6)
-**Pipeline**: code-workflow
-**Branch**: task/author-tokyo-nightlife-shibuya
-**Worktree**: .worktree/author-tokyo-nightlife-shibuya
-**Base**: main
-**Started**: 2026-05-31
-**Files**:
-- MOD: data/days.js
-- MOD: sw.js
-- MOD: app.test.js
+_None._
 
 ---
 
