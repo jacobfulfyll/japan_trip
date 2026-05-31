@@ -77,12 +77,36 @@ function expectedDayNumber(iso) {
   return Math.round((utcMidnight(iso) - utcMidnight(TRIP.start)) / MS_PER_DAY) + 1;
 }
 
+/**
+ * Dynamically resolve a trip-window date that is currently UNAUTHORED (a "gap"
+ * day: inside [start,end] but not present in DAYS). Derived from live state
+ * (tripWindowDates minus authored dates), so the gap-semantic tests below
+ * self-heal as the remaining Jun 18–23 leg gets authored by later tasks — they
+ * re-point automatically instead of needing a hardcoded date chased forward.
+ *
+ * `which: 'last'` returns the LAST still-unauthored window date, which stays a
+ * gap the longest (the final authoring task is the only one that closes it).
+ * Returns null once every window date is authored (then the gap tests skip).
+ */
+function gapDate(which = 'last') {
+  const authored = new Set(getDays().map((d) => d.date));
+  const gaps = tripWindowDates().filter((iso) => !authored.has(iso));
+  if (gaps.length === 0) return null;
+  return which === 'first' ? gaps[0] : gaps[gaps.length - 1];
+}
+
+/** dayNumber of a gap date (see gapDate), or null if no gap remains. */
+function gapDayNumber(which = 'last') {
+  const iso = gapDate(which);
+  return iso === null ? null : expectedDayNumber(iso);
+}
+
 // ===========================================================================
 // getDays() — completeness & ordering
 // ===========================================================================
 
-test('getDays returns every present day (10) from data/days.js', () => {
-  assert.equal(getDays().length, 10);
+test('getDays returns every present day (12) from data/days.js', () => {
+  assert.equal(getDays().length, 12);
   // Sanity-check it tracks the source array length (all source days are valid).
   assert.equal(getDays().length, DAYS.length);
 });
@@ -93,13 +117,17 @@ test('getDays returns days sorted ascending by date', () => {
   assert.deepEqual(dates, sorted);
 });
 
-test('getDays spans the present range Jun 24 -> Jul 3 with no gap days included', () => {
+test('getDays spans the present range Jun 16 -> Jul 3 with no gap days included', () => {
   const dates = getDays().map((d) => d.date);
-  assert.equal(dates[0], '2026-06-24');
+  assert.equal(dates[0], '2026-06-16');
   assert.equal(dates[dates.length - 1], '2026-07-03');
-  // The Jun 16-23 gap is genuinely absent (partial-trip-safe), not zero-filled.
-  assert.ok(!dates.includes('2026-06-17'));
-  assert.ok(!dates.includes('2026-06-23'));
+  // Any still-unauthored window day is genuinely absent (partial-trip-safe),
+  // not zero-filled. Resolved dynamically so this stays true as the Jun 18–23
+  // leg is authored by later tasks (no hardcoded gap date to chase).
+  const gap = gapDate('last');
+  if (gap !== null) {
+    assert.ok(!dates.includes(gap), `gap day ${gap} must not be zero-filled into getDays()`);
+  }
 });
 
 // ===========================================================================
@@ -142,10 +170,14 @@ test('getDay returns the matching day for a present ISO date', () => {
   assert.equal(day.base, 'Kyoto');
 });
 
-test('getDay returns null for an absent date inside the Jun 16-23 gap', () => {
+test('getDay returns null for an absent date inside the Jun 18-23 gap', () => {
   // This is the critical partial-trip-safe behavior: unauthored days are null,
-  // never a throw and never a fabricated empty day.
-  assert.equal(getDay('2026-06-17'), null);
+  // never a throw and never a fabricated empty day. Gap date resolved
+  // dynamically so this self-heals as later tasks author the Jun 18–23 leg.
+  const gap = gapDate('last');
+  if (gap !== null) {
+    assert.equal(getDay(gap), null, `unauthored gap day ${gap} should resolve to null`);
+  }
 });
 
 test('getDay returns null for a valid date entirely outside the trip', () => {
@@ -184,9 +216,14 @@ test('getDayByNumber returns the right day for the last number (18 -> Jul 3)', (
   assert.equal(getDayByNumber(18).date, '2026-07-03');
 });
 
-test('getDayByNumber returns null for a number in the unauthored gap (2)', () => {
-  // Day 2 = Jun 17, which is in the not-yet-authored range.
-  assert.equal(getDayByNumber(2), null);
+test('getDayByNumber returns null for a number in the unauthored gap', () => {
+  // The dayNumber of a still-unauthored window day must resolve to null.
+  // Derived dynamically (gapDayNumber) so this re-points automatically as the
+  // Jun 18–23 leg is authored — no hardcoded "Day 5 = Jun 20" to chase forward.
+  const n = gapDayNumber('last');
+  if (n !== null) {
+    assert.equal(getDayByNumber(n), null, `unauthored gap dayNumber ${n} should resolve to null`);
+  }
 });
 
 test('getDayByNumber returns null for an out-of-range number', () => {
@@ -208,6 +245,248 @@ test('getDay and getDayByNumber resolve to the same day for present entries', ()
   for (const day of getDays()) {
     assert.equal(getDayByNumber(day.dayNumber), getDay(day.date));
   }
+});
+
+// ===========================================================================
+// author-travel-arrival — Jun 16 (Wheels Up) + Jun 17 (Touchdown) content.
+//
+// The fixture repoints above prove the COUNT changed (10 -> 12 days). These
+// cases assert the two NEW travel/arrival days are CORRECT and complete, so a
+// regression that broke or deleted their content would fail here rather than
+// silently shipping. Robust (substring/contains) assertions on prose, not
+// brittle whole-string matches.
+// ===========================================================================
+
+// --- Jun 16: Wheels Up — Montréal to Tokyo (travel day, Day 1) ---------------
+
+test('Jun 16 exists and is Day 1 with the right base/title', () => {
+  const day = getDay('2026-06-16');
+  assert.ok(day, 'Jun 16 should be present');
+  assert.equal(day.dayNumber, 1, 'Jun 16 is the first trip day');
+  assert.equal(day.base, 'In transit');
+  assert.equal(day.title, 'Wheels Up — Montréal to Tokyo');
+  // getDayByNumber(1) must round-trip to the same day.
+  assert.equal(getDayByNumber(1), day);
+});
+
+test('Jun 16 is a travel day with lodging null (overnight is in the air)', () => {
+  assert.equal(getDay('2026-06-16').lodging, null);
+});
+
+test('Jun 16 carries the AC 5 flight as a complete transit plan item', () => {
+  const day = getDay('2026-06-16');
+  const flight = day.plan.find(
+    (p) => p.tag === 'transit' && p.transit && /AC 5/.test(p.transit.line || ''),
+  );
+  assert.ok(flight, 'an AC 5 flight transit item should be present');
+  // Origin/destination on the transit leg (YUL -> NRT).
+  assert.match(flight.transit.from, /YUL/);
+  assert.match(flight.transit.to, /NRT/);
+  // Duration carried as numeric minutes (single source of truth), not prose.
+  assert.equal(typeof flight.transit.minutes, 'number');
+  assert.ok(flight.transit.minutes > 0);
+  // Key ticket facts survive in the note (substring, not exact-string).
+  assert.match(flight.note, /777-300ER/);
+  assert.match(flight.note, /Premium Economy/);
+  assert.match(flight.note, /\+1 day/);
+});
+
+// --- Jun 17: Touchdown — Into Akasaka (arrival day, Day 2) -------------------
+
+test('Jun 17 exists and is Day 2 with the Akasaka lodging', () => {
+  const day = getDay('2026-06-17');
+  assert.ok(day, 'Jun 17 should be present');
+  assert.equal(day.dayNumber, 2, 'Jun 17 is the second trip day');
+  assert.equal(getDayByNumber(2), day);
+  assert.ok(day.lodging, 'Jun 17 is the first night with a hotel');
+  assert.equal(day.lodging.name, 'Hotel Via Inn Prime Akasaka');
+});
+
+test('Jun 17 airport->hotel item has exactly 2 transit-bearing recommendations (bus + train)', () => {
+  const day = getDay('2026-06-17');
+  const intoCity = day.plan.find(
+    (p) => p.tag === 'transit' && Array.isArray(p.recommendations) && p.recommendations.length > 0,
+  );
+  assert.ok(intoCity, 'a transit item with airport->hotel recommendations should be present');
+  assert.equal(intoCity.recommendations.length, 2, 'exactly two ways into the city');
+  // Both recs carry a transit block with required numeric minutes.
+  for (const rec of intoCity.recommendations) {
+    assert.ok(rec.transit, `rec "${rec.name}" should carry a transit block`);
+    assert.equal(typeof rec.transit.minutes, 'number', `rec "${rec.name}" minutes must be numeric`);
+    assert.ok(rec.transit.minutes > 0);
+  }
+  // Both bus and train modes are represented (Limousine Bus + N'EX).
+  const modes = intoCity.recommendations.map((r) => r.transit.mode).sort();
+  assert.deepEqual(modes, ['bus', 'train']);
+});
+
+test('Jun 17 dinner recommendations include the vegan-safe Kyushu Jangara option (Megan)', () => {
+  const day = getDay('2026-06-17');
+  const dinner = day.plan.find(
+    (p) => p.tag === 'meal' && Array.isArray(p.recommendations) && p.recommendations.length > 0,
+  );
+  assert.ok(dinner, 'a first-night ramen meal with recommendations should be present');
+  const vegan = dinner.recommendations.find((r) => /Kyushu Jangara/.test(r.name));
+  assert.ok(vegan, "Megan's vegan-safe Kyushu Jangara option must be present");
+  // The veg signal lives in its pros — keep the safety cue load-bearing.
+  assert.ok(
+    vegan.pros.some((p) => /vegan/i.test(p)),
+    'the Kyushu Jangara pros should advertise a vegan option',
+  );
+});
+
+// --- Render smoke tests for the two new days --------------------------------
+
+test('renderDay renders Jun 16 (travel day, lodging null) without throwing', () => {
+  withDom(() => {
+    let r;
+    assert.doesNotThrow(() => { r = renderDay(getDay('2026-06-16'), 'plan'); });
+    assert.ok(r.node, 'a node is returned');
+    assert.doesNotThrow(() => { r.start(); r.stop(); });
+  });
+});
+
+test('renderDay renders Jun 17 (arrival day) without throwing', () => {
+  withDom(() => {
+    let r;
+    assert.doesNotThrow(() => { r = renderDay(getDay('2026-06-17'), 'plan'); });
+    assert.ok(r.node, 'a node is returned');
+    assert.doesNotThrow(() => { r.start(); r.stop(); });
+  });
+});
+
+// --- Schema invariants specific to the two new days -------------------------
+
+test('Jun 16 and Jun 17 obey the <=4 recommendations schema RULE', () => {
+  for (const iso of ['2026-06-16', '2026-06-17']) {
+    for (const item of getDay(iso).plan) {
+      if (item.recommendations !== undefined) {
+        assert.ok(
+          item.recommendations.length <= 4,
+          `>4 recommendations on ${iso} / "${item.title}"`,
+        );
+      }
+    }
+  }
+});
+
+test('Jun 16 and Jun 17 do NOT author dayNumber in the source (it is derived)', () => {
+  // dayNumber must be DERIVED, never a literal key in data/days.js. Check the
+  // raw source objects (DAYS), not getDay()'s output (which adds the derived #).
+  for (const iso of ['2026-06-16', '2026-06-17']) {
+    const raw = DAYS.find((d) => d.date === iso);
+    assert.ok(raw, `raw source day ${iso} should exist`);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(raw, 'dayNumber'),
+      `${iso} must not author a literal dayNumber key`,
+    );
+  }
+});
+
+test('Jun 16 and Jun 17 plan items all carry a parseable HH:MM time (no tilde/untimed buckets)', () => {
+  // Regression guard: every authored Kyoto day gives each plan item a real
+  // "HH:MM" time. The travel/arrival days must match — an unparseable time
+  // (e.g. a "~18:00" tilde or a missing `time`) silently dumps the item into
+  // Morning, so an evening check-in would render ABOVE the afternoon arrival.
+  for (const iso of ['2026-06-16', '2026-06-17']) {
+    for (const item of getDay(iso).plan) {
+      assert.match(
+        item.time ?? '',
+        /^\d{2}:\d{2}$/,
+        `${iso} / "${item.title}" must have a parseable HH:MM time`,
+      );
+    }
+  }
+});
+
+test('Jun 17 buckets afternoon arrival/transit and evening check-in/dinner in chronological order', () => {
+  // The arrival day reads correctly only if NRT arrival + the into-city leg sit
+  // in Afternoon and the check-in + first-night ramen sit in Evening. Proves the
+  // time fix (16:30 transit, 18:00 check-in, 19:30 dinner) buckets as intended.
+  const [morning, afternoon, evening] = bucketPlanByDayPart(getDay('2026-06-17').plan);
+  assert.equal(morning.items.length, 0, 'nothing should fall back into Morning');
+  assert.deepEqual(
+    afternoon.items.map((x) => x.item.tag),
+    ['transit', 'transit'],
+    'afternoon = NRT arrival + into-city transit',
+  );
+  assert.deepEqual(
+    evening.items.map((x) => x.item.tag),
+    ['checkin', 'meal'],
+    'evening = hotel check-in + first-night ramen',
+  );
+});
+
+test('Jun 17 airport-transfer recs render their transit pill but NOT a misleading "from <hotel>" walk line', () => {
+  withDom(() => {
+    // The NRT→Akasaka recs (Limousine Bus + N'EX) are airport transfers, not
+    // walkable spots. They carry NO coords, so the walk-distance origin must not
+    // fall back to the lodging and print "9 min from the hotel" on a leg that
+    // travels TO the hotel. The transit pill must still render. Scope the check
+    // PER CARD: the dinner recs below legitimately DO show a walk from the hotel.
+    const node = renderDay(getDay('2026-06-17'), 'plan').node;
+    const cardByName = (name) =>
+      node.byClass('rec-card').find((c) => c.firstByClass('rec-name')?.textContent === name);
+
+    for (const name of ['Airport Limousine Bus (to Kioicho)', "Narita Express (N'EX)"]) {
+      const card = cardByName(name);
+      assert.ok(card, `${name} card rendered`);
+      assert.equal(card.byClass('rec-transit').length, 1, `${name} keeps its transit pill`);
+      assert.match(card.firstByClass('rec-transit').textContent, /Narita Airport T1 →/, `${name} pill shows the route`);
+      assert.equal(card.byClass('rec-walk-from').length, 0, `${name} shows NO "from <hotel>" walk line`);
+    }
+    // Sanity: the bus pill carries 110 min, the N'EX pill 56 min.
+    assert.match(cardByName('Airport Limousine Bus (to Kioicho)').firstByClass('rec-transit').textContent, /110 min/);
+    assert.match(cardByName("Narita Express (N'EX)").firstByClass('rec-transit').textContent, /56 min/);
+
+    // The dinner recs, by contrast, ARE walkable from the hotel — that walk line
+    // is correct and must survive the fix.
+    const dinner = cardByName('Kyushu Jangara Akasaka');
+    assert.ok(dinner, 'dinner rec card rendered');
+    assert.match(dinner.firstByClass('rec-walk-from')?.textContent ?? '', /Via Inn Prime Akasaka/,
+      'walkable dinner rec still shows its distance from the hotel');
+  });
+});
+
+test('Jun 16 and Jun 17 photos all carry a license credit in the existing CC/PD format', () => {
+  // Acceptance criterion: photos are CC/PD Wikimedia with attribution in the
+  // existing `credit` format ("<attribution> · <license>"). Assert structure
+  // (non-empty, has the " · " separator, names a CC/CC0/PD license) — not exact
+  // strings — so a copy tweak to an attribution name won't break this.
+  for (const iso of ['2026-06-16', '2026-06-17']) {
+    const photos = getDay(iso).photos;
+    assert.ok(photos.length > 0, `${iso} should have hype photos`);
+    for (const p of photos) {
+      assert.equal(typeof p.credit, 'string', `${iso} photo "${p.alt}" must carry a credit`);
+      assert.ok(p.credit.includes(' · '), `${iso} credit must use the "<who> · <license>" format`);
+      assert.match(
+        p.credit,
+        /CC0|CC BY|public domain/i,
+        `${iso} credit "${p.credit}" must name a CC/CC0/PD license`,
+      );
+      // Alt text is required for the a11y/render path.
+      assert.ok(typeof p.alt === 'string' && p.alt.length > 0, `${iso} photo must have alt text`);
+    }
+  }
+});
+
+test('the two new days VALIDATE cleanly (no warn-and-skip) — proven by zero warnings on the real data', () => {
+  // Acceptance criterion: Jun 16/17 validate with no console warn-skip. The
+  // production helpers (getDays) run validation once at import where warnings
+  // are swallowed; re-run the SAME validator on the live DAYS+TRIP under a warn
+  // spy to prove the real data emits zero warnings AND all 12 days survive.
+  // (If either new day were malformed it would either warn or be skipped — both
+  // are caught here.)
+  let result;
+  const warnings = captureWarnings(() => {
+    result = buildValidatedDays(DAYS, TRIP);
+  });
+  assert.equal(warnings, 0, 'live trip data must validate with no warnings');
+  assert.equal(result.length, DAYS.length, 'every authored day survives validation (none skipped)');
+  assert.equal(result.length, 12, 'all 12 days present after validation');
+  // Both new days specifically made it through.
+  assert.ok(result.find((d) => d.date === '2026-06-16'), 'Jun 16 survived validation');
+  assert.ok(result.find((d) => d.date === '2026-06-17'), 'Jun 17 survived validation');
 });
 
 // ===========================================================================
@@ -1164,6 +1443,26 @@ test('renderDay omits ALL walk lines when there is no usable origin (no precedin
   });
 });
 
+test('renderDay still renders a rec transit pill when there is no walkable origin (airport-transfer case)', () => {
+  withDom(() => {
+    const day = fullDayFixture();
+    // No usable origin (strip preceding + lodging coords), and the rec itself has
+    // no coords — but it DOES carry a transit block. The pill must still render:
+    // the walk distance is gated on finite metres, the transit pill must not be.
+    delete day.plan[0].coords;
+    day.lodging.coords = undefined;
+    day.plan[1].recommendations = [
+      { name: 'Airport transfer', pros: ['Direct'], con: 'Slow.',
+        transit: { mode: 'bus', line: 'Limousine', from: 'NRT T1', to: 'Kioicho', minutes: 110 } },
+    ];
+    const node = renderDay(day, 'plan').node;
+    assert.equal(node.byClass('rec-walk').length, 1, 'one line for the lone transit-bearing rec');
+    assert.equal(node.byClass('rec-walk-from').length, 0, 'no "from <origin>" segment without a walkable origin');
+    assert.equal(node.byClass('rec-transit').length, 1, 'transit pill still renders');
+    assert.match(node.firstByClass('rec-transit').textContent, /110 min/, 'pill carries the route minutes');
+  });
+});
+
 // --- Rec transit-alternative pill (add-transit-alternative-to-recs) ---------
 
 /**
@@ -1501,11 +1800,16 @@ test('pickLandingView DURING the trip on an AUTHORED day → that day in "plan" 
 });
 
 test('pickLandingView DURING the trip on an ABSENT day (Jun 16–23 leg) → day descriptor with null day, "plan" framing', () => {
-  // 2026-06-18 is within [start,end] but NOT authored → getDay returns null.
-  // pickLandingView still returns a 'day' descriptor (renderDay draws the
-  // "Details coming" placeholder); framing is 'plan' because it's the same
-  // calendar day as `now`.
-  const view = pickLandingView(localDate(2026, 5, 18, 10, 0));
+  // A still-unauthored window day is within [start,end] but NOT authored →
+  // getDay returns null. pickLandingView still returns a 'day' descriptor
+  // (renderDay draws the "Details coming" placeholder); framing is 'plan'
+  // because it's the same calendar day as `now`. Gap date resolved dynamically
+  // so this self-heals as the Jun 18–23 leg is authored (the assertion is about
+  // ABSENT days, so it only runs while a gap day still exists).
+  const gap = gapDate('last');
+  if (gap === null) return; // whole window authored — no absent day to land on
+  const [y, m, d] = gap.split('-').map(Number);
+  const view = pickLandingView(localDate(y, m - 1, d, 10, 0));
   assert.equal(view.view, 'day');
   assert.equal(view.day, null, 'unauthored day has no data');
   assert.equal(view.framing, 'plan');
@@ -1995,14 +2299,15 @@ test('toOverview() is callable as a programmatic API (same effect as the Home bu
   });
 });
 
-test('Home button works on the unauthored leg (Jun 18, sparse day-view placeholder)', () => {
+test('Home button works on the unauthored leg (sparse day-view placeholder)', () => {
   withDom(() => {
     withTimerSpies(() => {
       try {
         setNow(() => localDate(2026, 5, 24, 12, 0)); // land mid-trip so day-view shows
         const root = makeRoot();
         const ctl = mountApp(root);
-        ctl.toIso('2026-06-18'); // unauthored day → placeholder day-view
+        const gap = gapDate('last') ?? '2026-06-24'; // a still-unauthored day, else any authored day
+        ctl.toIso(gap); // unauthored day → placeholder day-view (or a real day once authored)
         assert.ok(root.firstByClass('day-nav'), 'day-nav present even on unauthored day');
         const home = root.firstByClass('day-nav-home');
         assert.ok(home, 'home button present on unauthored day');
@@ -2062,12 +2367,18 @@ test('pre-trip overview (boot-time) has no day-nav and no Home button (overview 
 });
 
 test('frameForDay frames an ABSENT day (unauthored Jun 16–23 leg) purely by its calendar date', () => {
-  // 2026-06-18 has no authored data (getDay → null), but frameForDay works off
-  // the ISO date alone, so the lifecycle framing is still correct relative to now.
-  assert.equal(getDay('2026-06-18'), null, 'precondition: Jun 18 is unauthored');
-  assert.equal(frameForDay('2026-06-18', localDate(2026, 5, 17, 12, 0)), 'anticipation', 'before that calendar day');
-  assert.equal(frameForDay('2026-06-18', localDate(2026, 5, 18, 12, 0)), 'plan', 'on that calendar day');
-  assert.equal(frameForDay('2026-06-18', localDate(2026, 5, 19, 12, 0)), 'reminisce', 'after that calendar day');
+  // A still-unauthored gap day has no authored data (getDay → null), but
+  // frameForDay works off the ISO date alone, so the lifecycle framing is still
+  // correct relative to now. Gap date resolved dynamically so the precondition
+  // self-heals as the Jun 18–23 leg is authored (this asserts a property of
+  // ABSENT days, so it only runs while a gap day still exists).
+  const gap = gapDate('last');
+  if (gap === null) return; // whole window authored — nothing absent to frame
+  assert.equal(getDay(gap), null, `precondition: ${gap} is unauthored`);
+  const [y, m, d] = gap.split('-').map(Number);
+  assert.equal(frameForDay(gap, localDate(y, m - 1, d - 1, 12, 0)), 'anticipation', 'before that calendar day');
+  assert.equal(frameForDay(gap, localDate(y, m - 1, d, 12, 0)), 'plan', 'on that calendar day');
+  assert.equal(frameForDay(gap, localDate(y, m - 1, d + 1, 12, 0)), 'reminisce', 'after that calendar day');
 });
 
 // ===========================================================================
@@ -2179,11 +2490,26 @@ test('renderOverview AUTHORED rows show day.base + "Planned" status; UNAUTHORED 
       setNow(() => localDate(2026, 4, 24, 12, 0));
       const rows = renderOverview(23, () => {}).node.byClass('day-index-row');
 
-      // Jun 16 (index 0) is unauthored → region from UNAUTHORED_REGIONS + TBD.
-      const first = rows[0];
-      assert.ok(first.classList.contains('day-index-row-tbd'), 'unauthored row gets the tbd class');
-      assert.equal(first.firstByClass('day-index-region').textContent, 'Travel — NY → Tokyo');
-      assert.equal(first.firstByClass('day-index-status').textContent, 'TBD');
+      // A still-unauthored window day renders region from UNAUTHORED_REGIONS +
+      // TBD. Its row index (days since Jun 16) is derived dynamically so this
+      // tracks the shrinking gap as later tasks author the Jun 18–23 leg,
+      // instead of pinning "Jun 18 = index 2".
+      const gap = gapDate('last');
+      if (gap !== null) {
+        const gapIdx = Math.round((utcMidnight(gap) - utcMidnight(TRIP.start)) / MS_PER_DAY);
+        const first = rows[gapIdx];
+        assert.ok(first.classList.contains('day-index-row-tbd'), 'unauthored row gets the tbd class');
+        assert.equal(first.firstByClass('day-index-status').textContent, 'TBD');
+        // Region is a non-empty hint string (from UNAUTHORED_REGIONS), not 'TBD' or empty.
+        const region = first.firstByClass('day-index-region').textContent;
+        assert.ok(region.length > 0, 'unauthored row still shows a region hint');
+      }
+
+      // Jun 16 (index 0) is now authored (In transit, Day 1) → base + Planned, no tbd class.
+      const firstAuthored = rows[0];
+      assert.equal(firstAuthored.classList.contains('day-index-row-tbd'), false, 'authored travel row has no tbd class');
+      assert.equal(firstAuthored.firstByClass('day-index-region').textContent, getDay('2026-06-16').base);
+      assert.equal(firstAuthored.firstByClass('day-index-status').textContent, 'Planned');
 
       // Jun 24 (index 8) is authored (Kyoto, Day 9) → base + Planned, no tbd class.
       const authored = rows[8];
@@ -2202,9 +2528,8 @@ test('renderOverview row shows the derived "Day N" number (incl. unauthored leg)
       setNow(() => localDate(2026, 4, 24, 12, 0));
       const rows = renderOverview(23, () => {}).node.byClass('day-index-row');
 
-      // Jun 16 (index 0) is unauthored — its "Day 1" number comes from
-      // deriveDayNumber(iso) (the day-object fallback), a path no other test
-      // exercises by value. Off-by-one numbering would surface here.
+      // Jun 16 (index 0) is now authored (Day 1, "In transit") — its "Day 1"
+      // number is the derived dayNumber. Off-by-one numbering would surface here.
       const first = rows[0];
       assert.equal(first.firstByClass('day-index-num').textContent, 'Day 1');
       assert.equal(first.firstByClass('day-index-date').textContent, 'Tue · Jun 16');

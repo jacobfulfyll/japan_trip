@@ -960,27 +960,31 @@ function buildPlanItem(item, index, plan, lodging) {
       const card = el('div', 'rec-card');
       card.appendChild(el('h4', 'rec-name', rec?.name ?? ''));
 
-      if (origin) {
-        const meters = haversineMeters(origin.from, rec?.coords);
-        if (Number.isFinite(meters)) {
-          const hasTransit = rec?.transit && typeof rec.transit === 'object' && rec.transit.from && rec.transit.to;
-          if (hasTransit) {
-            // Inline transit-alternative pill: drop the distance label + "walk"
-            // word from the walk half (the 🚶 prefix + mode emoji convey it).
-            const walkMin = Math.max(1, Math.round(meters / 80));
-            const walk = el('p', 'rec-walk', `${walkMin} min`);
-            walk.appendChild(el('span', 'rec-walk-from', ` from ${origin.label}`));
-            walk.appendChild(el('span', 'rec-walk-sep', ' · '));
-            walk.appendChild(buildRecTransitSpan(rec.transit));
-            card.appendChild(walk);
-          } else {
-            const walkMin = Math.max(1, Math.round(meters / 80));
-            const walk = el('p', 'rec-walk', `${walkMin} min`);
-            walk.appendChild(el('span', 'rec-walk-sep', ' · '));
-            walk.appendChild(el('span', 'rec-walk-from', `from ${origin.label}`));
-            card.appendChild(walk);
-          }
+      const hasTransit = rec?.transit && typeof rec.transit === 'object' && rec.transit.from && rec.transit.to;
+      const meters = origin ? haversineMeters(origin.from, rec?.coords) : null;
+      if (Number.isFinite(meters)) {
+        const walkMin = Math.max(1, Math.round(meters / 80));
+        if (hasTransit) {
+          // Inline transit-alternative pill: drop the distance label + "walk"
+          // word from the walk half (the 🚶 prefix + mode emoji convey it).
+          const walk = el('p', 'rec-walk', `${walkMin} min`);
+          walk.appendChild(el('span', 'rec-walk-from', ` from ${origin.label}`));
+          walk.appendChild(el('span', 'rec-walk-sep', ' · '));
+          walk.appendChild(buildRecTransitSpan(rec.transit));
+          card.appendChild(walk);
+        } else {
+          const walk = el('p', 'rec-walk', `${walkMin} min`);
+          walk.appendChild(el('span', 'rec-walk-sep', ' · '));
+          walk.appendChild(el('span', 'rec-walk-from', `from ${origin.label}`));
+          card.appendChild(walk);
         }
+      } else if (hasTransit) {
+        // No walkable anchor (e.g. an airport transfer — the preceding item has
+        // no coords and the rec isn't a place you walk to). Show the transit
+        // pill on its own so the mode/route/minutes still render.
+        const line = el('p', 'rec-walk');
+        line.appendChild(buildRecTransitSpan(rec.transit));
+        card.appendChild(line);
       }
 
       const pros = Array.isArray(rec?.pros) ? rec.pros : [];
@@ -1202,14 +1206,12 @@ export function tripWindowDates(trip = getTrip()) {
 // (XSS-safe via el()), no external deps.
 // ---------------------------------------------------------------------------
 
-// Region hint for the unauthored Jun 16–23 leg (not in data/days.js, which is
-// read-only here). Locked from project memory (trip-skeleton). Authored days
-// (Jun 24–Jul 3) read their region from the day object's `base` instead — that
-// branch always wins, so once the Jun 16–23 days land in data/days.js the
-// matching entries here become dead. TODO: drop this map once that leg is authored.
+// Region hint for the still-unauthored Jun 18–23 leg (not in data/days.js,
+// which is read-only here). Locked from project memory (trip-skeleton).
+// Authored days read their region from the day object's `base` instead — that
+// branch always wins, so as each gap day lands in data/days.js the matching
+// entry here becomes dead. TODO: drop this map once that leg is authored.
 const UNAUTHORED_REGIONS = {
-  '2026-06-16': 'Travel — NY → Tokyo',
-  '2026-06-17': 'Tokyo (arrive)',
   '2026-06-18': 'Tokyo',
   '2026-06-19': 'Tokyo',
   '2026-06-20': 'Tokyo',

@@ -50,6 +50,120 @@ export const TRIP = {
 
 export const DAYS = [
   {
+    date: "2026-06-16",
+    base: "In transit",
+    title: "Wheels Up — Montréal to Tokyo",
+    intro:
+      "Trip day one: a single nonstop hop across the Pacific. Board in Montréal in the early afternoon, chase the daylight west, and land at Narita the next afternoon Tokyo time — thirteen hours in the air and a full day on the calendar.",
+    photos: [
+      { url: "https://upload.wikimedia.org/wikipedia/commons/thumb/d/db/Air_Canada_Boeing_777-300ER_%28C-FIUA%29.jpg/1280px-Air_Canada_Boeing_777-300ER_%28C-FIUA%29.jpg",
+        alt: "An Air Canada Boeing 777-300ER in flight",
+        credit: "Quintin Soloviev / Wikimedia Commons · CC BY 4.0" },
+      { url: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/80/Narita_International_Airport_Terminal_1.JPG/1280px-Narita_International_Airport_Terminal_1.JPG",
+        alt: "The curved glass facade of Narita International Airport Terminal 1",
+        credit: "Wikimedia Commons · CC BY-SA 3.0" },
+      { url: "https://upload.wikimedia.org/wikipedia/commons/8/89/Shirakara_Canal%2C_Gion%2C_Kyoto.jpg",
+        alt: "Japan ahead — the willow-lined Shirakawa canal in Gion, a taste of what's coming",
+        credit: "MichaelMaggs / Wikimedia Commons · CC BY-SA 2.5" },
+      { url: "https://upload.wikimedia.org/wikipedia/commons/3/30/Yasaka_Shrine%2C_10-2025.jpg",
+        alt: "The vermillion main hall of Yasaka Shrine framed by green maple",
+        credit: "Pufacz / Wikimedia Commons · CC BY-SA 4.0" },
+    ],
+    lodging: null, // overnight is in the air — arrive Tokyo Jun 17
+    prep: [
+      "Register Visit Japan Web — each traveler needs their own QR (screenshot before boarding).",
+      "Don't pre-book the Narita limousine bus — buy after customs.",
+      "NRT 2026 Joint Kiosk: one scan does immigration + customs.",
+    ],
+    dayParts: {
+      morning: "YUL departure 13:05 — Air Canada AC 5 nonstop to Tokyo.",
+      afternoon: "Over the Pacific.",
+      evening: "Over the Pacific.",
+    },
+    plan: [
+      { time: "13:05", tag: "transit", title: "Air Canada AC 5: Montréal → Tokyo Narita",
+        transit: { mode: 'train', line: 'Air Canada AC 5 (nonstop)', from: 'Montréal-Trudeau (YUL)', to: 'Tokyo Narita T1 (NRT)', minutes: 800 },
+        note: "Boeing 777-300ER · Premium Economy · 13h20m · Wi-Fi · meal + breakfast. Depart Jun 16 13:05 EDT, arrive Jun 17 15:25 JST (+1 day, +13h time change)." },
+    ],
+  },
+
+  {
+    date: "2026-06-17",
+    base: "Tokyo",
+    title: "Touchdown — Into Akasaka",
+    intro:
+      "Land at Narita mid-afternoon, clear the new joint kiosk, and pick your way into the city. Drop bags in Akasaka, then keep the first night easy — a relaxed bowl of ramen a few minutes from the hotel.",
+    photos: [
+      { url: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/80/Narita_International_Airport_Terminal_1.JPG/1280px-Narita_International_Airport_Terminal_1.JPG",
+        alt: "The curved glass facade of Narita International Airport Terminal 1",
+        credit: "Wikimedia Commons · CC BY-SA 3.0" },
+      { url: "https://upload.wikimedia.org/wikipedia/commons/b/b0/Akasaka_Hitotsugi_Street_%2CTokyo-pref._-_panoramio.jpg",
+        alt: "Akasaka Hitotsugi food street lined with restaurants and lanterns",
+        credit: "JiroS. / Wikimedia Commons · CC BY-SA 3.0" },
+      { url: "https://upload.wikimedia.org/wikipedia/commons/7/7e/Akasaka_sacasNight2.jpg",
+        alt: "Akasaka Sacas plaza lit up at night",
+        credit: "Steve Nagata / Wikimedia Commons · CC BY 2.0" },
+      { url: "https://upload.wikimedia.org/wikipedia/commons/a/ac/Kamo_River_from_Shijo_Bridge.jpg",
+        alt: "A Japanese riverside evening — easing into the trip",
+        credit: "Saigen Jiro / Wikimedia Commons · CC0" },
+    ],
+    lodging: {
+      name: "Hotel Via Inn Prime Akasaka",
+      address: "2-6-17 Akasaka, Minato-ku, Tokyo 107-0052",
+      mapUrl: "https://maps.google.com/?q=Via+Inn+Prime+Akasaka+Tokyo",
+      coords: { lat: 35.6726, lng: 139.7370 },
+      breakfast: null,
+    },
+    prep: [
+      "Have each traveler's Visit Japan Web QR ready before the kiosk line.",
+      "Decide bus vs N'EX at the arrival hall — buy tickets on arrival.",
+    ],
+    dayParts: {
+      afternoon: "Land NRT 15:25, bus or N'EX into Akasaka.",
+      evening: "Check in, relaxed first-night ramen.",
+    },
+    plan: [
+      { time: "15:25", tag: "transit", title: "Arrive Narita Airport Terminal 1",
+        note: "Clear the Joint Kiosk (VJW QR + passport), bags, customs, then decide bus vs train at the arrival hall." },
+      { time: "16:30", tag: "transit", title: "Narita → Akasaka — pick your way in",
+        note: "Two solid options from the arrival hall; no need to pre-book either. Buy whichever you choose once you're through customs.",
+        recommendations: [
+          { name: "Airport Limousine Bus (to Kioicho)",
+            pros: ["No transfers — sit with luggage", "Drops ~8 min walk from hotel", "Buy on arrival, no booking"],
+            con: "Slowest; expressway-traffic dependent (~100–140 min).",
+            // No coords: this is an airport→city transfer, not a walkable spot —
+            // the transit pill carries the route; a "walk from hotel" line would mislead.
+            transit: { mode: 'bus', line: 'Airport Limousine (Akasaka/Roppongi route)', from: 'Narita Airport T1', to: 'Tokyo Garden Terrace Kioicho', minutes: 110 } },
+          { name: "Narita Express (N'EX)",
+            pros: ["Fastest (~55 min to Tokyo Stn)", "¥5,000 round-trip deal covers the return too", "Trains ~every 30 min"],
+            con: "Needs a taxi/subway last leg with luggage from Tokyo Station.",
+            transit: { mode: 'train', line: "N'EX (Narita Express)", from: 'Narita Airport T1', to: 'Tokyo Station', minutes: 56 } },
+        ] },
+      { time: "18:00", tag: "checkin", title: "Check into Hotel Via Inn Prime Akasaka",
+        note: "Drop bags, freshen up, shake off the flight before heading out for dinner.",
+        mapUrl: "https://maps.google.com/?q=Via+Inn+Prime+Akasaka+Tokyo",
+        coords: { lat: 35.6726, lng: 139.7370 } },
+      { time: "19:30", tag: "meal", title: "First-night ramen in Akasaka",
+        note: "Keep it easy and close — a casual bowl within a few minutes of the hotel. Headline pick is vegan-safe for Megan; the others have heartier tonkotsu options nearby.",
+        recommendations: [
+          { name: "Kyushu Jangara Akasaka",
+            pros: ["Genuine vegan ramen (vegan tonkotsu/shoyu/yuzu-shio, soy-meat, no fish broth)", "Right by the hotel, casual, English-friendly", "Open late on weekdays"],
+            con: "Hakata tonkotsu shop — Megan must order the explicitly vegan bowls.",
+            mapUrl: "https://maps.google.com/?q=Kyushu+Jangara+Akasaka",
+            coords: { lat: 35.6740, lng: 139.7363 } },
+          { name: "Ikkakuya (Tameike-Sannō)",
+            pros: ["Close, hearty Hakata tonkotsu", "Good for the non-veg three", "Quick casual meal"],
+            con: "Not veg-safe — pork/fish broth.",
+            coords: { lat: 35.6730, lng: 139.7415 } },
+          { name: "Shina Men Hashigo, Akasaka",
+            pros: ["Famous Akasaka tantan-men", "Close to the hotel", "A spicier change of pace"],
+            con: "Meat/fish based — not a Megan option.",
+            coords: { lat: 35.6735, lng: 139.7378 } },
+        ] },
+    ],
+  },
+
+  {
     date: "2026-06-24",
     base: "Kyoto",
     title: "Into Kyoto — Gion & Pontocho by Night",
