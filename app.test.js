@@ -105,8 +105,8 @@ function gapDayNumber(which = 'last') {
 // getDays() — completeness & ordering
 // ===========================================================================
 
-test('getDays returns every present day (14) from data/days.js', () => {
-  assert.equal(getDays().length, 14);
+test('getDays returns every present day (16) from data/days.js', () => {
+  assert.equal(getDays().length, 16);
   // Sanity-check it tracks the source array length (all source days are valid).
   assert.equal(getDays().length, DAYS.length);
 });
@@ -483,7 +483,7 @@ test('the two new days VALIDATE cleanly (no warn-and-skip) — proven by zero wa
   });
   assert.equal(warnings, 0, 'live trip data must validate with no warnings');
   assert.equal(result.length, DAYS.length, 'every authored day survives validation (none skipped)');
-  assert.equal(result.length, 14, 'all 14 days present after validation');
+  assert.equal(result.length, 16, 'all 16 days present after validation');
   // Both new days specifically made it through.
   assert.ok(result.find((d) => d.date === '2026-06-16'), 'Jun 16 survived validation');
   assert.ok(result.find((d) => d.date === '2026-06-17'), 'Jun 17 survived validation');
@@ -615,6 +615,97 @@ test('Jun 19 Faro dinner is a confirmed booking with Megan\'s vegan tasting note
   assert.match(faro.note, /vegan tasting/i, "Faro note must mention Megan's vegan tasting menu");
 });
 
+// --- Jun 20/21 content contracts (author-tokyo-nightlife-shibuya) ------------
+//
+// These encode this task's acceptance criteria as regression guards: the Amam
+// Dacotan / Shinjuku Gyoen timing slots, the Megan veg-anchor rec invariant,
+// the Akasaka lodging, and the photo completeness for the two new days.
+
+test('Jun 20 exists and is Day 5 with the Tokyo base + Akasaka lodging', () => {
+  const day = getDay('2026-06-20');
+  assert.ok(day, 'Jun 20 should be present');
+  assert.equal(day.dayNumber, 5, 'Jun 20 is Day 5');
+  assert.equal(day.base, 'Tokyo');
+  assert.ok(day.lodging, 'Jun 20 has a hotel');
+  assert.equal(day.lodging.name, 'Hotel Via Inn Prime Akasaka');
+});
+
+test('Jun 21 exists and is Day 6 with the Tokyo base + Akasaka lodging', () => {
+  const day = getDay('2026-06-21');
+  assert.ok(day, 'Jun 21 should be present');
+  assert.equal(day.dayNumber, 6, 'Jun 21 is Day 6');
+  assert.equal(day.base, 'Tokyo');
+  assert.ok(day.lodging, 'Jun 21 has a hotel');
+  assert.equal(day.lodging.name, 'Hotel Via Inn Prime Akasaka');
+});
+
+test('Jun 21 Amam Dacotan stays in the 11:00 Omotesando brunch slot', () => {
+  // Acceptance criterion: Amam Dacotan must anchor the 11:00 window (the 11–2
+  // Omotesando block). A regression that drifted it out of that slot — e.g. an
+  // earlier/later time — would fail here.
+  const day = getDay('2026-06-21');
+  const amam = day.plan.find((p) => /Amam Dacotan/.test(p.title));
+  assert.ok(amam, 'a plan item titled with "Amam Dacotan" should be present');
+  assert.equal(amam.time, '11:00', 'Amam Dacotan is the 11:00 brunch window');
+  assert.equal(amam.tag, 'meal', 'Amam Dacotan is a meal block');
+});
+
+test('Jun 21 Shinjuku Gyoen holds its 14:30 slot (guards the Amam-crowding bail regression)', () => {
+  // Acceptance criterion: Shinjuku Gyoen must stay at 14:30. The bail-condition
+  // regression was Amam crowding the afternoon and pushing Gyoen past its slot;
+  // pinning the time guards against that drift.
+  const day = getDay('2026-06-21');
+  const gyoen = day.plan.find((p) => /Shinjuku Gyoen/.test(p.title));
+  assert.ok(gyoen, 'a "Shinjuku Gyoen" plan item should be present');
+  assert.equal(gyoen.time, '14:30', 'Shinjuku Gyoen is the 14:30 (2:30pm) block');
+});
+
+test('every non-booked meal on Jun 20 and Jun 21 carries a 1–4 rec block (Megan veg-anchor invariant)', () => {
+  // "Every non-booked meal has a ≤4 rec block" — data-shape based so it does not
+  // brittle-match restaurant names that may change. The <=4 upper bound is also
+  // covered globally; this pins the LOWER bound (>=1) for the new days' meals.
+  for (const iso of ['2026-06-20', '2026-06-21']) {
+    const openMeals = getDay(iso).plan.filter(
+      (p) => p.tag === 'meal' && p.reserved !== true,
+    );
+    assert.ok(openMeals.length > 0, `${iso} should have at least one non-booked meal`);
+    for (const meal of openMeals) {
+      assert.ok(
+        Array.isArray(meal.recommendations),
+        `${iso} / "${meal.title}" non-booked meal must have a recommendations array`,
+      );
+      assert.ok(
+        meal.recommendations.length >= 1 && meal.recommendations.length <= 4,
+        `${iso} / "${meal.title}" must carry 1–4 recommendations (has ${meal.recommendations.length})`,
+      );
+      // Megan's veg-safety cue must stay load-bearing: at least one rec advertises
+      // a veg/vegan signal in its pros (matches the Jun 18/19 per-meal anchor tests).
+      // Guards against the anchor being swapped out for generic recs while the
+      // 1–4 count still passes.
+      assert.ok(
+        meal.recommendations.some((r) =>
+          Array.isArray(r.pros) && r.pros.some((p) => /veg(etari|an|gie)?\b|vegan/i.test(p)),
+        ),
+        `${iso} / "${meal.title}" must keep at least one rec whose pros advertise a veg/vegan option for Megan`,
+      );
+    }
+  }
+});
+
+test('Jun 20 and Jun 21 each carry at least one complete photo (url/alt/credit all non-empty)', () => {
+  // Photo completeness is not a global invariant (only "photos is an array" is),
+  // so guard it explicitly for the two new days.
+  for (const iso of ['2026-06-20', '2026-06-21']) {
+    const photos = getDay(iso).photos;
+    assert.ok(Array.isArray(photos) && photos.length > 0, `${iso} should have at least one photo`);
+    for (const photo of photos) {
+      assert.ok(typeof photo.url === 'string' && photo.url.length > 0, `${iso} photo url non-empty`);
+      assert.ok(typeof photo.alt === 'string' && photo.alt.length > 0, `${iso} photo alt non-empty`);
+      assert.ok(typeof photo.credit === 'string' && photo.credit.length > 0, `${iso} photo credit non-empty`);
+    }
+  }
+});
+
 // --- Structured-transit invariant across both new days ----------------------
 
 test('Jun 18 and Jun 19 transit items all carry a complete transit object (mode/from/to + numeric minutes)', () => {
@@ -650,6 +741,53 @@ test('Jun 18/19 transit legs pin their authored durations (guards against a minu
   assert.equal(legMinutes('2026-06-19', ['Kamiyacho', 'Ginza']), 8, 'Hibiya Line Kamiyacho → Ginza is 8 min');
 });
 
+test('Jun 20/21 transit legs pin their authored durations (guards against a minutes value regression)', () => {
+  const legMinutes = (iso, fromTo) => {
+    const item = getDay(iso).plan.find(
+      (p) => p.tag === 'transit' && p.transit.from === fromTo[0] && p.transit.to === fromTo[1],
+    );
+    assert.ok(item, `${iso} should have a transit leg ${fromTo[0]} → ${fromTo[1]}`);
+    return item.transit.minutes;
+  };
+  // Representative durations for the two new days — a regression that swapped
+  // any of these for a wrong value (e.g. 8 → 80) would slip past the generic
+  // "positive number" invariant. These encode this task's specific legs.
+  assert.equal(legMinutes('2026-06-20', ['Akasaka-mitsuke', 'Shinjuku-sanchome']), 8, 'Marunouchi Line Akasaka-mitsuke → Shinjuku-sanchome is 8 min');
+  assert.equal(legMinutes('2026-06-21', ['Akasaka', 'Omotesando']), 6, 'Chiyoda Line Akasaka → Omotesando is 6 min');
+  // Multi-leg Omotesando → Shinjuku-gyoenmae: primary leg is now Ginza Line to
+  // the Akasaka-mitsuke interchange (8 min), then a 10-min Marunouchi transfer.
+  assert.equal(legMinutes('2026-06-21', ['Omotesando', 'Akasaka-mitsuke']), 8, 'Ginza Line Omotesando → Akasaka-mitsuke (interchange) is 8 min');
+});
+
+test('every multi-leg transit item chains coherent stops (no two adjacent stops equal — guards the duplicate-terminal-stop bug)', () => {
+  // Regression guard for the BLOCKER where a multi-leg primary `to` was authored
+  // as the FINAL destination instead of the interchange, producing a rendered
+  // stops chain like `Akasaka → Tsukiji → Tsukiji`. The renderer builds the chain
+  // as [from, to, transfer.to]; the interchange must sit in the middle and no two
+  // adjacent stops may be equal. Loops getDays() so it covers existing + future days.
+  let checked = 0;
+  for (const day of getDays()) {
+    for (const item of day.plan ?? []) {
+      const t = item.transit;
+      if (!t || !t.transfer) continue;
+      checked += 1;
+      const chain = [String(t.from), String(t.to), String(t.transfer.to)];
+      // Interchange invariant: primary `to` must equal the transfer's `from`.
+      assert.equal(
+        String(t.to), String(t.transfer.from),
+        `${day.date} multi-leg ${t.from} → … : primary 'to' (${t.to}) must be the interchange = transfer.from (${t.transfer.from})`,
+      );
+      for (let i = 0; i < chain.length - 1; i += 1) {
+        assert.notEqual(
+          chain[i], chain[i + 1],
+          `${day.date} transit chain has duplicate adjacent stop "${chain[i]}" in [${chain.join(' → ')}]`,
+        );
+      }
+    }
+  }
+  assert.ok(checked > 0, 'expected at least one multi-leg transit item to be checked');
+});
+
 // --- Render smoke tests for the two new days --------------------------------
 
 test('renderDay renders Jun 18 (Asakusa/Ueno day) without throwing', () => {
@@ -665,6 +803,36 @@ test('renderDay renders Jun 19 (teamLab/Ginza day) without throwing', () => {
   withDom(() => {
     let r;
     assert.doesNotThrow(() => { r = renderDay(getDay('2026-06-19'), 'plan'); });
+    assert.ok(r.node, 'a node is returned');
+    assert.doesNotThrow(() => { r.start(); r.stop(); });
+  });
+});
+
+test('renderDay renders Jun 20 (Tsukiji/Shinjuku nightlife day) without throwing', () => {
+  withDom(() => {
+    let r;
+    assert.doesNotThrow(() => { r = renderDay(getDay('2026-06-20'), 'plan'); });
+    assert.ok(r.node, 'a node is returned');
+    assert.doesNotThrow(() => { r.start(); r.stop(); });
+  });
+});
+
+test('renderDay renders Jun 21 (Meiji/Omotesando/Shibuya day) without throwing', () => {
+  withDom(() => {
+    let r;
+    assert.doesNotThrow(() => { r = renderDay(getDay('2026-06-21'), 'plan'); });
+    assert.ok(r.node, 'a node is returned');
+    assert.doesNotThrow(() => { r.start(); r.stop(); });
+  });
+});
+
+test("renderDay renders Jun 21 under the 'anticipation' framing without throwing", () => {
+  // Pre-trip the landing/overview enters days via the 'anticipation' framing;
+  // smoke-test the alternate framing path on a new day, mirroring how the
+  // earlier authored days are exercised across framings.
+  withDom(() => {
+    let r;
+    assert.doesNotThrow(() => { r = renderDay(getDay('2026-06-21'), 'anticipation'); });
     assert.ok(r.node, 'a node is returned');
     assert.doesNotThrow(() => { r.start(); r.stop(); });
   });

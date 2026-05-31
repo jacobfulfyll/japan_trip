@@ -88,6 +88,12 @@ export const DAYS = [{
 }];
 // TransitLeg = { mode: 'bus'|'train'|'subway', line?, from, to }
 // Tags: meal | transit | sight | checkin | reservation | rest | bar | spa | checkout
+// MULTI-LEG GOTCHA: for a `transfer`, the PRIMARY leg's `to` must be the
+// INTERCHANGE station (= transfer.from), NOT the final destination — the renderer
+// draws stops as `from → to → transfer.to`, so authoring the destination on the
+// primary `to` prints a duplicated terminal stop (e.g. "Akasaka → Tsukiji → Tsukiji").
+// Author per-leg `minutes` on BOTH legs (they sum). See the Universal→Nishikujo→Osaka-Namba
+// leg for the canonical shape; an invariant test in app.test.js guards every multi-leg item.
 ```
 
 Conventions baked into the data: reservations are plan items with `reserved:true` (no separate field); there is **no `status` field** — a sparse day = empty `plan`/`photos`. See `README.md` for an annotated example and field-by-field docs.
