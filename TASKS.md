@@ -2,18 +2,7 @@
 
 ## Active Tasks
 
-### author-hakone-leg
-**Task**: Author Days 7–8 (Jun 22 Tokyo→Hakone Romancecar + Jun 23 Hakone loop); close the gap, sync docs
-**Pipeline**: code-workflow
-**Branch**: task/author-hakone-leg
-**Worktree**: .worktree/author-hakone-leg
-**Base**: main
-**Started**: 2026-05-31
-**Files**:
-- MOD: data/days.js
-- MOD: sw.js
-- MOD: app.test.js
-- MOD: CLAUDE.md
+_None._
 
 ---
 
