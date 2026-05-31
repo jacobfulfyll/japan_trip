@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← 205 tests for the data/API/nav layer (node --test; 235 with sw.test.js).
+app.test.js    ← tests for the data/API/nav layer (node --test; 301 total with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -169,12 +169,13 @@ There's no status flag — emptiness *is* the "not planned yet" state:
 { date: "2026-06-20", base: "Tokyo", title: "TBD", intro: "", photos: [], lodging: null, prep: [], plan: [] }
 ```
 
-### Days that don't exist yet
+### All 18 days are authored
 
-The trip runs **Jun 16 – Jul 3**, and **Jun 16–17 + Jun 24 – Jul 3** are authored
-so far. Jun 18–23 are deliberately absent — that content is owed later. Missing days
-aren't an error: `app.js` simply renders the days that exist, and lookups for an
-absent date return `null`. Add those days to `DAYS` when you're ready.
+The trip runs **Jun 16 – Jul 3** and all 18 days are now authored end-to-end —
+Tokyo (Jun 16–21), Hakone (Jun 22–23), Kyoto and the return leg (Jun 24 – Jul 3).
+If you ever need to add or replace a day, just add or edit the object in `DAYS`.
+Missing days aren't an error: `app.js` renders whatever is present and lookups for
+an absent date return `null`.
 
 ## The `app.js` API
 
@@ -202,7 +203,7 @@ screens import them.
 
 | Function                | Returns / effect                                              |
 |-------------------------|--------------------------------------------------------------|
-| `mountApp(rootEl)`      | **Primary mount entry point** (what the bootstrap calls). Boots the date/time-aware controller: picks a landing view, renders it, and wires a day-nav bar (Home / prev / position / next) that pages across the full 18-day trip window (Jun 16 – Jul 3). Absent days (the Jun 18–23 gap) render placeholder screens, not crashes. Returns `{ go(index), toIso(iso), toOverview(), destroy() }`. `toOverview()` re-mounts the 18-day overview from any day view (the Home button calls this). |
+| `mountApp(rootEl)`      | **Primary mount entry point** (what the bootstrap calls). Boots the date/time-aware controller: picks a landing view, renders it, and wires a day-nav bar (Home / prev / position / next) that pages across the full 18-day trip window (Jun 16 – Jul 3). Returns `{ go(index), toIso(iso), toOverview(), destroy() }`. `toOverview()` re-mounts the 18-day overview from any day view (the Home button calls this). |
 | `pickLandingView(now?)` | Decides what to show on open. Before the trip: `{ view: 'overview', day: null, daysUntil }`. During: `{ view: 'day', day, framing }` for today's day in its lifecycle framing. After: `{ view: 'day', day, framing: 'reminisce' }` for the last day (overview fallback if no days authored). Defaults `now` to `getNow()`. |
 | `frameForDay(day, now?)` | Returns `'anticipation'` (future day), `'plan'` (today), or `'reminisce'` (past day), comparing calendar dates in local time. Accepts a day object or an ISO string. Bad input returns `'plan'`. Defaults `now` to `getNow()`. |
 | `isEveningWindow(now, window?)` | Returns `true` during the evening window defined by `TRIP.eveningWindow` (default 9 pm – 4 am, midnight-wrapping). Defaults `window` to `getTrip().eveningWindow`. |
@@ -218,11 +219,11 @@ returns a new array each call, so you can sort/filter the result freely.
 
 When the page loads, `mountApp` calls `pickLandingView` to choose the opening screen:
 
-- **Before Jun 16** (pre-trip): the pre-trip home screen — a live countdown showing days until departure and a tappable index of all 18 trip days. Rows with authored content are marked "Planned"; the Jun 18–23 leg shows "TBD" (dimmed). Tapping any row navigates to that day's view. Today's row is highlighted when the trip is active.
+- **Before Jun 16** (pre-trip): the pre-trip home screen — a live countdown showing days until departure and a tappable index of all 18 trip days. All rows are marked "Planned" (the trip is fully authored). Tapping any row navigates to that day's view. Today's row is highlighted when the trip is active.
 - **Jun 16 – Jul 3** (during the trip): today's day view in its lifecycle framing — `'anticipation'` in the morning, `'plan'` through the day, `'reminisce'` once the day has passed.
 - **After Jul 3** (post-trip): the last authored day in `'reminisce'` framing.
 
-The nav bar's prev/next arrows page through all 18 dates regardless of which days are authored. Absent days (Jun 18–23 as of now) show a placeholder rather than crashing.
+The nav bar's prev/next arrows page through all 18 dates. All days are now authored; if a day is ever removed, the app renders a placeholder rather than crashing.
 
 #### Evening "Prep for tomorrow" button
 
@@ -338,7 +339,7 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The `app.test.js` suite (205 cases; 235 total alongside `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The test suite (**301 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),
@@ -346,7 +347,8 @@ the date/time-aware navigation layer (`frameForDay`, `pickLandingView`,
 `isEveningWindow`, `tripWindowDates`, `mountApp`, and the `getNow`/`setNow` clock seam),
 the pre-trip home screen (`renderOverview` countdown states, day-index rows, today-highlighting),
 the time-travel override layer (`parseNowOverride`, `resolveNowOverride`, precedence, clear tokens),
-and collapsible day-parts (`bucketPlanByDayPart` bucketing, `dayParts` validation, day-part section rendering).
+collapsible day-parts (`bucketPlanByDayPart` bucketing, `dayParts` validation, day-part section rendering),
+and Hakone content contracts (Romancecar terminus/reserved, transit minutes, veg coverage, lodging consistency, contiguous 18-day span).
 
 ## Deploy
 
