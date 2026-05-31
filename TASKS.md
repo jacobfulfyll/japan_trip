@@ -2,17 +2,7 @@
 
 ## Active Tasks
 
-### author-travel-arrival
-**Task**: Author Days 1–2 (Jun 16 flight + Jun 17 Tokyo arrival), incl. the AC 5 Montréal→Tokyo flight; refactor the partial-trip tests
-**Pipeline**: code-workflow
-**Branch**: task/author-travel-arrival
-**Worktree**: .worktree/author-travel-arrival
-**Base**: main
-**Started**: 2026-05-30
-**Files**:
-- MOD: data/days.js
-- MOD: sw.js
-- MOD: app.test.js
+_None._
 
 ---
 
@@ -20,11 +10,11 @@
 
 ### Trip Content — Author Jun 16–23 (data/days.js)
 <!-- Fills the unauthored Jun 16–23 leg (Days 1–8) to the existing Kyoto-day bar. All edit data/days.js + sw.js (CACHE_VERSION) + app.test.js, so they run serially in date order (depends chain). Research dossiers + verified facts live in each .pipeline/<slug>/task.md. -->
-- [ ] author-tokyo-asakusa-ginza: Author Days 3–4 (Jun 18 Asakusa/Eastern Tokyo + Jun 19 teamLab/Tokyo Tower/Ginza, Faro booked) [P2] [moderate] [tier: opus:medium] [depends: author-travel-arrival] [code] [planned]
+- [ ] author-tokyo-asakusa-ginza: Author Days 3–4 (Jun 18 Asakusa/Eastern Tokyo + Jun 19 teamLab/Tokyo Tower/Ginza, Faro booked) [P2] [moderate] [tier: opus:high] [depends: author-travel-arrival] [code] [planned]
   files: data/days.js (MOD), sw.js (MOD), app.test.js (MOD)
-- [ ] author-tokyo-nightlife-shibuya: Author Days 5–6 (Jun 20 Tsukiji/Golden Gai + Jun 21 Shinjuku/Shibuya, Amam Dacotan on Day 6) [P2] [moderate] [tier: opus:medium] [depends: author-tokyo-asakusa-ginza] [code] [planned]
+- [ ] author-tokyo-nightlife-shibuya: Author Days 5–6 (Jun 20 Tsukiji/Golden Gai + Jun 21 Shinjuku/Shibuya, Amam Dacotan on Day 6) [P2] [moderate] [tier: opus:high] [depends: author-tokyo-asakusa-ginza] [code] [planned]
   files: data/days.js (MOD), sw.js (MOD), app.test.js (MOD)
-- [ ] author-hakone-leg: Author Days 7–8 (Jun 22 Tokyo→Hakone Romancecar + Jun 23 Hakone loop); close the gap, sync docs [P2] [moderate] [tier: opus:medium] [depends: author-tokyo-nightlife-shibuya] [code] [planned]
+- [ ] author-hakone-leg: Author Days 7–8 (Jun 22 Tokyo→Hakone Romancecar + Jun 23 Hakone loop); close the gap, sync docs [P2] [moderate] [tier: opus:high] [depends: author-tokyo-nightlife-shibuya] [code] [planned]
   files: data/days.js (MOD), sw.js (MOD), app.test.js (MOD), CLAUDE.md (MOD)
 - [ ] add-jun24-checkout: Add an explicit 10am checkout item to the existing Jun 24 day [P3] [simple] [tier: sonnet:medium] [depends: author-hakone-leg] [code] [planned]
   files: data/days.js (MOD), sw.js (MOD)
@@ -66,3 +56,5 @@
 - [ ] request-senkyoro-veg-kaiseki: Request Megan's vegetarian kaiseki at Senkyoro in advance for both nights (Jun 22 & 23) — no fish, no katsuobushi/bonito, no fish dashi; confirm dinner seating time + late-arrival cutoff
 - [ ] confirm-faro-vegan-tasting: Confirm the Faro (Ginza) booking specifies Megan's vegan tasting menu for the Jun 19 dinner (1 of 4 covers)
 - [ ] confirm-hakone-free-pass-jun22-23: Confirm the Hakone Free Pass (2-day vs 3-day) covers the Jun 22–23 legs — Tozan buses, cable car, ropeway, pirate cruise (Romancecar surcharge is separate, already paid)
+- [ ] confirm-vegan-sushi-tokyo-jun21: Confirm Vegan Sushi Tokyo (Shoto, Shibuya) is open Sun Jun 21 before relying on it as Megan's vegan-sushi dinner option — Vegan Izakaya Masaka stays the backup if not
+  > Check their open-dates calendar on Instagram (@vegansushitokyo_jp) — the official site lists no weekly closed day ("check Instagram") and HappyCow says closed Wed & Sun. June dates weren't posted yet as of late May 2026; re-check in June, or just try to book the Sun Jun 21 slot (no slot = closed). Dinner 17:00–21:00 (LO 20:30), reservation recommended, credit card only.
