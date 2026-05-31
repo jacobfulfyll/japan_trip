@@ -36,6 +36,8 @@
 
 ### Ungroomed
 <!-- Real-world trip bookings & confirmations surfaced during grooming. Personal to-dos, not build tasks — to be tackled later. -->
+- [ ] remove-unauthored-regions-deadcode: Drop the now-dead `UNAUTHORED_REGIONS` map in app.js (discovered during IMPLEMENT of author-hakone-leg)
+  > app.js ~lines 1214–1221: all six dates (2026-06-18 … 2026-06-23) are now authored, so `day.base` always wins and the `authored ? day.base : UNAUTHORED_REGIONS[iso]` fallback in `buildDayIndexRow` is unreachable. CLAUDE.md already notes the map becomes dead once the gap closes. Remove the map + the fallback branch + any test referencing it.
 - [ ] reserve-jun24-dinner: Reserve Tousuiro Kiyamachi for 8pm — riverside terrace + Megan's vegetarian ROKUHARA course (state: no fish/bonito/dashi)
 - [ ] reserve-odawara-kyoto-shinkansen: Reserve Hikari seats Odawara→Kyoto (4 together; Hikari/Kodama only — not Nozomi)
 - [ ] confirm-senkyoro-checkout: Confirm Senkyoro checkout time (ryokan typically 10–11am)
