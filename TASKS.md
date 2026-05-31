@@ -2,17 +2,7 @@
 
 ## Active Tasks
 
-### author-tokyo-asakusa-ginza
-**Task**: Author Days 3–4 (Jun 18 Asakusa/Eastern Tokyo + Jun 19 teamLab/Tokyo Tower/Ginza, Faro booked)
-**Pipeline**: code-workflow
-**Branch**: task/author-tokyo-asakusa-ginza
-**Worktree**: .worktree/author-tokyo-asakusa-ginza
-**Base**: main
-**Started**: 2026-05-30
-**Files**:
-- MOD: data/days.js
-- MOD: sw.js
-- MOD: app.test.js
+_None._
 
 ---
 

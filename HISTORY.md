@@ -20,3 +20,4 @@
 - [x] center-day-nav: Center the Prev/Day/Next cluster in the day-nav bar via 3-column grid -- 2026-05-27
 - [x] remove-rec-walk-meters: Drop meters distance from rec walk lines (render `N min · from <origin>`) -- 2026-05-27
 - [x] author-travel-arrival: Author Days 1–2 (Jun 16 AC 5 flight + Jun 17 Tokyo arrival); refactor partial-trip tests to dynamic gap fixtures -- 2026-05-30
+- [x] author-tokyo-asakusa-ginza: Author Days 3–4 (Jun 18 Asakusa/Eastern Tokyo + Jun 19 teamLab/Tokyo Tower/Ginza, Faro booked) -- 2026-05-30
