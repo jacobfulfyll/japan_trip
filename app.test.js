@@ -105,8 +105,8 @@ function gapDayNumber(which = 'last') {
 // getDays() — completeness & ordering
 // ===========================================================================
 
-test('getDays returns every present day (12) from data/days.js', () => {
-  assert.equal(getDays().length, 12);
+test('getDays returns every present day (14) from data/days.js', () => {
+  assert.equal(getDays().length, 14);
   // Sanity-check it tracks the source array length (all source days are valid).
   assert.equal(getDays().length, DAYS.length);
 });
@@ -474,7 +474,7 @@ test('the two new days VALIDATE cleanly (no warn-and-skip) — proven by zero wa
   // Acceptance criterion: Jun 16/17 validate with no console warn-skip. The
   // production helpers (getDays) run validation once at import where warnings
   // are swallowed; re-run the SAME validator on the live DAYS+TRIP under a warn
-  // spy to prove the real data emits zero warnings AND all 12 days survive.
+  // spy to prove the real data emits zero warnings AND all 14 days survive.
   // (If either new day were malformed it would either warn or be skipped — both
   // are caught here.)
   let result;
@@ -483,10 +483,191 @@ test('the two new days VALIDATE cleanly (no warn-and-skip) — proven by zero wa
   });
   assert.equal(warnings, 0, 'live trip data must validate with no warnings');
   assert.equal(result.length, DAYS.length, 'every authored day survives validation (none skipped)');
-  assert.equal(result.length, 12, 'all 12 days present after validation');
+  assert.equal(result.length, 14, 'all 14 days present after validation');
   // Both new days specifically made it through.
   assert.ok(result.find((d) => d.date === '2026-06-16'), 'Jun 16 survived validation');
   assert.ok(result.find((d) => d.date === '2026-06-17'), 'Jun 17 survived validation');
+});
+
+// ===========================================================================
+// author-tokyo-asakusa-ginza — Jun 18 (Asakusa/Ueno) + Jun 19 (teamLab/Ginza) content.
+//
+// Mirrors the author-travel-arrival block above: these cases assert the two NEW
+// Tokyo days are CORRECT and complete (lodging, day numbers, the veg-safe meal
+// anchors that keep Megan covered, the teamLab early slot + pre-book prep, the
+// booked Faro dinner, and the structured-transit invariant) so a regression that
+// broke or deleted their content fails here. Robust substring/contains asserts on
+// prose, not brittle whole-string matches.
+// ===========================================================================
+
+// --- Jun 18: Old Tokyo — Asakusa, Ueno & Electric Town (Day 3) --------------
+
+test('Jun 18 exists and is Day 3 with the Tokyo base + Akasaka lodging', () => {
+  const day = getDay('2026-06-18');
+  assert.ok(day, 'Jun 18 should be present');
+  assert.equal(day.dayNumber, 3, 'Jun 18 is the third trip day');
+  assert.equal(day.base, 'Tokyo');
+  assert.equal(getDayByNumber(3), day, 'getDayByNumber(3) round-trips to Jun 18');
+  assert.ok(day.lodging, 'Jun 18 has a hotel');
+  assert.equal(day.lodging.name, 'Hotel Via Inn Prime Akasaka');
+});
+
+test('Jun 18 has an out-for-breakfast block in Akasaka with The Earl as the veg-safe anchor (<=4 recs)', () => {
+  const day = getDay('2026-06-18');
+  const breakfast = day.plan.find(
+    (p) => p.tag === 'meal' && /breakfast/i.test(p.title),
+  );
+  assert.ok(breakfast, 'an out-for-breakfast meal block should be present');
+  assert.match(breakfast.title, /Akasaka/, 'breakfast is out in Akasaka (the lodging neighborhood)');
+  assert.ok(Array.isArray(breakfast.recommendations) && breakfast.recommendations.length > 0);
+  assert.ok(breakfast.recommendations.length <= 4, 'breakfast keeps <=4 recommendations');
+  const earl = breakfast.recommendations.find((r) => /The Earl/.test(r.name));
+  assert.ok(earl, "Megan's veg-safe anchor 'The Earl' must be present");
+  assert.ok(
+    earl.pros.some((p) => /veg/i.test(p)),
+    "The Earl's pros must advertise the vegetarian signal",
+  );
+});
+
+test('Jun 18 is an out-for-breakfast day: no hotel breakfast, breakfast taken out in the plan', () => {
+  const day = getDay('2026-06-18');
+  // The hotel breakfast is intentionally null — the morning starts out in Akasaka.
+  assert.equal(day.lodging.breakfast, null, 'Jun 18 hotel provides no breakfast (out for breakfast)');
+  // ...and that intent is realized by an actual breakfast meal block in the plan.
+  const breakfast = day.plan.find((p) => p.tag === 'meal' && /breakfast/i.test(p.title));
+  assert.ok(breakfast, 'breakfast is taken OUT — a breakfast meal block exists in the plan');
+  assert.match(breakfast.title, /out/i, 'the breakfast block reads as eaten out, not at the hotel');
+});
+
+test('Jun 18 has an Asakusa lunch block with the Marugoto Vegan anchor (<=4 recs)', () => {
+  const day = getDay('2026-06-18');
+  const lunch = day.plan.find(
+    (p) => p.tag === 'meal' && /lunch/i.test(p.title) && /Asakusa/.test(p.title),
+  );
+  assert.ok(lunch, 'an Asakusa lunch block should be present');
+  assert.ok(Array.isArray(lunch.recommendations) && lunch.recommendations.length > 0);
+  assert.ok(lunch.recommendations.length <= 4, 'lunch keeps <=4 recommendations');
+  const vegan = lunch.recommendations.find((r) => /Marugoto Vegan/.test(r.name));
+  assert.ok(vegan, "Megan's veg-safe anchor 'Marugoto Vegan Dining Asakusa' must be present");
+  assert.ok(
+    vegan.pros.some((p) => /vegan/i.test(p)),
+    "Marugoto's pros must advertise the vegan signal",
+  );
+});
+
+test('Jun 18 has a Kanda dinner block with the Genki veg anchor (<=4 recs)', () => {
+  const day = getDay('2026-06-18');
+  const dinner = day.plan.find(
+    (p) => p.tag === 'meal' && /dinner/i.test(p.title) && /Kanda/.test(p.title),
+  );
+  assert.ok(dinner, 'a Kanda dinner block should be present');
+  assert.ok(Array.isArray(dinner.recommendations) && dinner.recommendations.length > 0);
+  assert.ok(dinner.recommendations.length <= 4, 'dinner keeps <=4 recommendations');
+  const veg = dinner.recommendations.find((r) => /Genki/.test(r.name));
+  assert.ok(veg, "Megan's veg-safe anchor 'Vegetable Izakaya Genki Kanda' must be present");
+  assert.ok(
+    veg.pros.some((p) => /veg/i.test(p)),
+    "Genki's pros must advertise the vegetable/vegan signal",
+  );
+});
+
+// --- Jun 19: teamLab, Tokyo Tower & Ginza (Day 4) ---------------------------
+
+test('Jun 19 exists and is Day 4', () => {
+  const day = getDay('2026-06-19');
+  assert.ok(day, 'Jun 19 should be present');
+  assert.equal(day.dayNumber, 4, 'Jun 19 is the fourth trip day');
+  assert.equal(getDayByNumber(4), day, 'getDayByNumber(4) round-trips to Jun 19');
+});
+
+test('Jun 19 lunch in Ginza includes the Ain Soph. vegan anchor (<=4 recs)', () => {
+  const day = getDay('2026-06-19');
+  const lunch = day.plan.find(
+    (p) => p.tag === 'meal' && /lunch/i.test(p.title) && /Ginza/.test(p.title),
+  );
+  assert.ok(lunch, 'a Ginza lunch block should be present');
+  assert.ok(Array.isArray(lunch.recommendations) && lunch.recommendations.length > 0);
+  assert.ok(lunch.recommendations.length <= 4, 'lunch keeps <=4 recommendations');
+  const vegan = lunch.recommendations.find((r) => /Ain Soph\. Ginza/.test(r.name));
+  assert.ok(vegan, "Megan's veg-safe anchor 'Ain Soph. Ginza' must be present");
+  assert.ok(
+    vegan.pros.some((p) => /vegan/i.test(p)),
+    "Ain Soph.'s pros must advertise the vegan signal",
+  );
+});
+
+test('Jun 19 teamLab is a 9:00 start and the prep mentions confirming hours / pre-booking the slot', () => {
+  const day = getDay('2026-06-19');
+  const teamlab = day.plan.find((p) => /teamLab/i.test(p.title));
+  assert.ok(teamlab, 'a teamLab plan item should be present');
+  assert.match(teamlab.time, /^0?9:00$/, 'teamLab opens the day at 9:00');
+  // The prep array must flag confirming June hours AND pre-booking the timed slot.
+  const prep = day.prep.join('\n');
+  assert.match(prep, /hours/i, 'prep should mention confirming teamLab hours');
+  assert.match(prep, /pre-?book/i, 'prep should mention pre-booking the timed slot');
+});
+
+test('Jun 19 Faro dinner is a confirmed booking with Megan\'s vegan tasting noted', () => {
+  const day = getDay('2026-06-19');
+  const faro = day.plan.find((p) => p.tag === 'meal' && /Faro/i.test(p.title));
+  assert.ok(faro, 'the Faro dinner item should be present');
+  assert.equal(faro.reserved, true, 'Faro is a confirmed booking (reserved:true)');
+  assert.match(faro.note, /vegan tasting/i, "Faro note must mention Megan's vegan tasting menu");
+});
+
+// --- Structured-transit invariant across both new days ----------------------
+
+test('Jun 18 and Jun 19 transit items all carry a complete transit object (mode/from/to + numeric minutes)', () => {
+  for (const iso of ['2026-06-18', '2026-06-19']) {
+    const transitItems = getDay(iso).plan.filter((p) => p.tag === 'transit');
+    assert.ok(transitItems.length > 0, `${iso} should have at least one transit leg`);
+    for (const item of transitItems) {
+      assert.ok(item.transit, `${iso} / "${item.title}" must carry a transit object`);
+      assert.equal(typeof item.transit.mode, 'string', `${iso} / "${item.title}" transit.mode`);
+      assert.ok(item.transit.mode.length > 0, `${iso} / "${item.title}" transit.mode non-empty`);
+      assert.equal(typeof item.transit.from, 'string', `${iso} / "${item.title}" transit.from`);
+      assert.ok(item.transit.from.length > 0, `${iso} / "${item.title}" transit.from non-empty`);
+      assert.equal(typeof item.transit.to, 'string', `${iso} / "${item.title}" transit.to`);
+      assert.ok(item.transit.to.length > 0, `${iso} / "${item.title}" transit.to non-empty`);
+      assert.equal(typeof item.transit.minutes, 'number', `${iso} / "${item.title}" transit.minutes numeric`);
+      assert.ok(item.transit.minutes > 0, `${iso} / "${item.title}" transit.minutes positive`);
+    }
+  }
+});
+
+test('Jun 18/19 transit legs pin their authored durations (guards against a minutes value regression)', () => {
+  const legMinutes = (iso, fromTo) => {
+    const item = getDay(iso).plan.find(
+      (p) => p.tag === 'transit' && p.transit.from === fromTo[0] && p.transit.to === fromTo[1],
+    );
+    assert.ok(item, `${iso} should have a transit leg ${fromTo[0]} → ${fromTo[1]}`);
+    return item.transit.minutes;
+  };
+  // Representative durations — a regression that swapped these for a wrong value
+  // (e.g. 30 → 3) would slip past the generic "positive number" invariant above.
+  assert.equal(legMinutes('2026-06-18', ['Tameike-sanno', 'Asakusa']), 30, 'Ginza Line Tameike-sanno → Asakusa is 30 min');
+  assert.equal(legMinutes('2026-06-18', ['Asakusa', 'Ueno']), 5, 'Ginza Line Asakusa → Ueno is 5 min');
+  assert.equal(legMinutes('2026-06-19', ['Kamiyacho', 'Ginza']), 8, 'Hibiya Line Kamiyacho → Ginza is 8 min');
+});
+
+// --- Render smoke tests for the two new days --------------------------------
+
+test('renderDay renders Jun 18 (Asakusa/Ueno day) without throwing', () => {
+  withDom(() => {
+    let r;
+    assert.doesNotThrow(() => { r = renderDay(getDay('2026-06-18'), 'plan'); });
+    assert.ok(r.node, 'a node is returned');
+    assert.doesNotThrow(() => { r.start(); r.stop(); });
+  });
+});
+
+test('renderDay renders Jun 19 (teamLab/Ginza day) without throwing', () => {
+  withDom(() => {
+    let r;
+    assert.doesNotThrow(() => { r = renderDay(getDay('2026-06-19'), 'plan'); });
+    assert.ok(r.node, 'a node is returned');
+    assert.doesNotThrow(() => { r.start(); r.stop(); });
+  });
 });
 
 // ===========================================================================
@@ -1862,7 +2043,14 @@ test('tripWindowDates enumerates all 18 calendar days, sorted, contiguous, inclu
 test('tripWindowDates spans the authored leg correctly (Jun 24 present, day count math holds)', () => {
   const dates = tripWindowDates();
   assert.ok(dates.includes('2026-06-24'), 'authored leg start is in the window');
-  assert.ok(dates.includes('2026-06-18'), 'unauthored leg day is still in the window');
+  // The window enumerates every trip day regardless of whether it is authored
+  // yet. Assert a still-unauthored gap day is present (dynamic, so it doesn't
+  // rot as the gap is filled); once every day is authored there is no gap left
+  // to check and the assertion is skipped.
+  const gap = gapDate('last');
+  if (gap !== null) {
+    assert.ok(dates.includes(gap), 'an unauthored gap day is still in the window');
+  }
 });
 
 test('tripWindowDates returns [] for an inverted window (end before start)', () => {
