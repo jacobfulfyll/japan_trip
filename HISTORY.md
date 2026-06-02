@@ -24,3 +24,5 @@
 - [x] author-tokyo-nightlife-shibuya Author Days 5–6 (Jun 20 Tsukiji/Shinjuku nightlife + Jun 21 Shinjuku/Shibuya, Amam Dacotan on Day 6) -- 2026-05-31
 - [x] author-hakone-leg Author Days 7–8 (Jun 22 Tokyo→Hakone Romancecar + Jun 23 Hakone loop); closed the Jun 16–23 gap (18/18 days), synced docs -- 2026-05-31
 - [x] add-jun24-checkout Add explicit 10:00 ryokan checkout beat to Jun 24 (between breakfast and the Odawara bus); CACHE_VERSION v17->v18 -- 2026-05-31
+- [x] reserve-jun26-tea-ceremony Booked Rie's private Urasenke tea ceremony (byFood #760) — Jun 26, 15:30, ~US$207 for 4 -- 2026-06-01
+- [x] reserve-odawara-kyoto-shinkansen: Reserve 4 seats Odawara→Kyoto Jun 24 — Hikari/Kodama only (NOT Nozomi) -- manual, completed 2026-06-01 (HIKARI 641, 12:07 Odawara→14:12 Kyoto, Ordinary reserved x4, backpacks only, booked via SmartEX)
