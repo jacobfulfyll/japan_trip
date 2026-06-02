@@ -19,8 +19,6 @@ _None._
   files: external (restaurant reservation)
 - [ ] reserve-jun26-shigetsu-lunch: Reserve Shigetsu shojin-ryori lunch at Tenryu-ji Jun 26 (4 ppl, lunch-only) [P2] [simple] [tier: sonnet:medium] [manual] [planned]
   files: external (restaurant reservation)
-- [ ] reserve-jun30-shinkansen: Reserve 4 seats Kyoto→Tokyo Jun 30 (~10:30 Nozomi, with luggage) [P2] [simple] [tier: sonnet:medium] [manual] [planned]
-  files: external (rail reservation)
 
 ### Firebase Photo Journal (v2 — after v1)
 - [ ] firebase-project-setup: Console setup — project, Storage/Firestore/Auth, shared account, Blaze + budget [P2] [simple] [tier: sonnet:medium] [depends: data-model-and-scaffold] [manual] [planned]
