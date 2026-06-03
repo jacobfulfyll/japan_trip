@@ -2,11 +2,33 @@
 
 ## Active Tasks
 
-_None._
+### remove-unauthored-regions-deadcode
+**Task**: Drop the now-dead `UNAUTHORED_REGIONS` map + fallback branch in app.js
+**Pipeline**: code-workflow
+**Branch**: task/remove-unauthored-regions-deadcode
+**Worktree**: .worktree/remove-unauthored-regions-deadcode
+**Base**: main
+**Started**: 2026-06-03
+**Files**:
+- MOD: app.js
+- MOD: sw.js
 
 ---
 
 ## Backlog
+
+### Trip Content & Schedule
+<!-- Data edits to data/days.js (the trip content). All touch data/days.js + share a sw.js CACHE_VERSION bump → mutually conflicting; run serially. -->
+- [ ] revise-jun24-schedule: Jun 24 — Tousuiro now 7:30pm (drop alt option), earlier ~10:05 Senkyoro→Odawara bus for Odawara lunch buffer, align Shinkansen to booked Hikari 641 (12:07) [P2] [moderate] [tier: opus:medium] [conflicts: fix-vegan-sushi-jun21, sw-runtime-cache-cap] [code] [planned]
+  files: data/days.js (MOD), sw.js (MOD)
+- [ ] fix-vegan-sushi-jun21: Drop Vegan Sushi Tokyo from the Jun 21 dinner recs (lunch-only Sundays, doesn't fit the Shibuya evening); Masaka stays the vegan anchor [P3] [simple] [tier: sonnet:medium] [conflicts: revise-jun24-schedule, sw-runtime-cache-cap] [code] [planned]
+  files: data/days.js (MOD), sw.js (MOD)
+
+### Site Maintenance & Infra
+- [ ] sw-runtime-cache-cap: Add a count-based eviction cap (~60 entries) to the SW runtime photo/font cache + eviction test [P2] [moderate] [tier: opus:medium] [conflicts: revise-jun24-schedule, fix-vegan-sushi-jun21] [code] [planned]
+  files: sw.js (MOD), sw.test.js (MOD)
+- [ ] upgrade-deploy-pages-actions: Bump deploy-pages.yml upload-pages-artifact@v1→v3 + deploy-pages@v1→v4; fix stale CLAUDE.md note [P2] [simple] [tier: sonnet:medium] [code] [planned]
+  files: deploy-pages.yml (MOD), CLAUDE.md (MOD)
 
 ### Trip Bookings (manual)
 <!-- Real-world reservations already authored as reserved plan items in data/days.js; these tasks are the act of booking them. No code changes. Walk each via /reggie-manual-task <slug>. -->
@@ -24,28 +46,16 @@ _None._
   files: app.js (MOD), index.html (MOD), sw.js (MOD)
 
 ### Ungroomed
-<!-- Real-world trip bookings & confirmations surfaced during grooming. Personal to-dos, not build tasks — to be tackled later. -->
-- [ ] remove-unauthored-regions-deadcode: Drop the now-dead `UNAUTHORED_REGIONS` map in app.js (discovered during IMPLEMENT of author-hakone-leg)
-  > app.js ~lines 1214–1221: all six dates (2026-06-18 … 2026-06-23) are now authored, so `day.base` always wins and the `authored ? day.base : UNAUTHORED_REGIONS[iso]` fallback in `buildDayIndexRow` is unreachable. CLAUDE.md already notes the map becomes dead once the gap closes. Remove the map + the fallback branch + any test referencing it.
-- [ ] confirm-senkyoro-checkout: Confirm Senkyoro checkout time (ryokan typically 10–11am)
-- [ ] confirm-hakone-free-pass: Confirm Hakone Free Pass covers Jun 24 (2-day vs 3-day) for the Senkyoro→Odawara bus
-- [ ] (optional) reserve-jun26-dinner-tenamonya: IF you want Teppan Tavern Tenamonya for Jun 26 dinner — reserve ~Jun 19 (1-week window, ~7 tables/night, sells out)
+
+<!-- Real-world trip bookings, confirmations & pre-trip setup. Personal to-dos, not build tasks — kept as a deadline-ordered checklist, NOT formalized into pipelines. Today: Jun 3; trip: Jun 16–Jul 3. -->
+- [ ] register-visit-japan-web: Before Jun 16 — each of the 4 travelers registers their own Visit Japan Web account + QR (a single account with empty companions = paper-form lane); screenshot every QR before boarding (surfaced authoring author-travel-arrival)
+- [ ] prebook-teamlab-borderless: ⏰ Book now — teamLab Borderless (Azabudai Hills) timed entry for Jun 19; June slots open ~mid-April 2026, no re-entry; confirm June hours + the scattered closed-Tuesday calendar (surfaced authoring author-tokyo-asakusa-ginza)
+- [ ] (optional) reserve-jul2-farewell-dinner: ⏰ ~2–4 wk window is open now — IF you want a special farewell dinner Jul 2 (Ningyocho Imahan or Sushi Fukunaga)
+- [ ] (optional) reserve-jun26-dinner-tenamonya: Reserve ~Jun 19 — IF you want Teppan Tavern Tenamonya for Jun 26 dinner (1-week window, ~7 tables/night, sells out)
+- [ ] buy-hakone-openair-tickets: Buy Hakone Open-Air Museum tickets online before Jun 23 (skip the ticket line; −¥100 with Free Pass)
+- [ ] confirm-hakone-free-pass: Confirm Hakone Free Pass coverage (2-day vs 3-day) for ALL legs — Jun 22–23 (Tozan buses, cable car, ropeway, pirate cruise) AND the Jun 24 Senkyoro→Odawara bus (Romancecar surcharge is separate, already paid)
 - [ ] (optional) reserve-jun27-dinner-gyuzen: IF you want Gion Gyuzen's private room for Jun 27 (Sat) dinner — reserve ahead
-- [ ] usj-app-setup: Before the trip — all 4 install the USJ app + link your (already-purchased) passes for ride times + Super Nintendo World entry
 - [ ] (optional) reserve-jun29-dinner-robin: IF you want Pontocho Robin for the final Kyoto night (Jun 29) — reserve ≥2 days ahead via concierge, incl. Megan's vegetarian course
 - [ ] reserve-jul2-couples-massage: Book the couples massage at SPA KIOI by Swiss Perfection (30F, Prince Gallery) for Jul 2 — phone/email, ahead
 - [ ] reserve-jul3-narita-express: Reserve Narita Express (N'EX) seats Tokyo Station → Narita for Jul 3 (~1 PM, for the 5:35 PM flight)
-- [ ] (optional) reserve-jul2-farewell-dinner: IF you want a special farewell dinner Jul 2 (Ningyocho Imahan or Sushi Fukunaga) — reserve ~2–4 weeks ahead
-- [ ] sw-runtime-cache-cap: Add an eviction cap (count/age) to the service worker `runtime-v1` photo cache (discovered during offline-and-installable)
-  > sw.js staleWhileRevalidate grows unbounded. Fine for the small Wikimedia hero set today, but a real device-storage concern once v2 adds user-uploaded photos. Revisit alongside reminisce-photo-gallery / photo-upload-flow.
-- [ ] upgrade-deploy-pages-actions: Bump deploy-pages.yml `upload-pages-artifact` and `deploy-pages` from @v1 to @v3 (discovered during offline-and-installable; also in CLAUDE.md Known Issues)
-  > @v1 actions are deprecated. Low-risk mechanical bump; verify a Pages deploy still succeeds after.
-- [ ] register-visit-japan-web: Before Jun 16 — each of the 4 travelers registers their own Visit Japan Web account + QR (a single account with empty companions = paper-form lane); screenshot every QR before boarding (surfaced authoring author-travel-arrival)
-- [ ] prebook-teamlab-borderless: Pre-book teamLab Borderless (Azabudai Hills) timed entry for Jun 19 — June slots open ~mid-April 2026; confirm June hours + the scattered closed-Tuesday calendar when teamLab publishes it (surfaced authoring author-tokyo-asakusa-ginza)
-- [ ] reserve-tokyo-tower-top-deck: IF you want the Tokyo Tower Top Deck (250m) on Jun 19 — reserve a timed slot online (¥3,300 vs ¥3,500 at counter); Main Deck needs no booking
-- [ ] buy-hakone-openair-tickets: Buy Hakone Open-Air Museum tickets online before Jun 23 (skip the ticket line; −¥100 with Free Pass)
-- [ ] request-senkyoro-veg-kaiseki: Request Megan's vegetarian kaiseki at Senkyoro in advance for both nights (Jun 22 & 23) — no fish, no katsuobushi/bonito, no fish dashi; confirm dinner seating time + late-arrival cutoff
-- [ ] confirm-faro-vegan-tasting: Confirm the Faro (Ginza) booking specifies Megan's vegan tasting menu for the Jun 19 dinner (1 of 4 covers)
-- [ ] confirm-hakone-free-pass-jun22-23: Confirm the Hakone Free Pass (2-day vs 3-day) covers the Jun 22–23 legs — Tozan buses, cable car, ropeway, pirate cruise (Romancecar surcharge is separate, already paid)
-- [ ] confirm-vegan-sushi-tokyo-jun21: Confirm Vegan Sushi Tokyo (Shoto, Shibuya) is open Sun Jun 21 before relying on it as Megan's vegan-sushi dinner option — Vegan Izakaya Masaka stays the backup if not
-  > Check their open-dates calendar on Instagram (@vegansushitokyo_jp) — the official site lists no weekly closed day ("check Instagram") and HappyCow says closed Wed & Sun. June dates weren't posted yet as of late May 2026; re-check in June, or just try to book the Sun Jun 21 slot (no slot = closed). Dinner 17:00–21:00 (LO 20:30), reservation recommended, credit card only.
+- [ ] usj-app-setup: Before the trip — all 4 install the USJ app + link your (already-purchased) passes for ride times + Super Nintendo World entry
