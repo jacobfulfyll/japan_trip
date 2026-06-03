@@ -8,6 +8,7 @@
 - [x] time-travel-test-mode Fake the clock (override now) + test page to verify time-of-day behavior on a phone -- 2026-05-24
 - [x] trip-overview-home Pre-trip home: live countdown + tappable 18-day index (Planned/TBD), tap-to-open day view -- 2026-05-24
 - [x] sw-test-cache-version-coupling Derive sw.test.js cache-name literals from CACHE_VERSION (resolved within trip-overview-home) -- 2026-05-24
+- [x] reserve-jun24-dinner: Reserve Tousuiro Kiyamachi 8pm Jun 24 — riverside terrace + Megan's dashi-free veg course (4 ppl) -- manual, completed 2026-06-03
 - [x] fix-rec-collapse Make the recommendation collapse toggle actually collapse -- 2026-05-27
 - [x] map-button-icon-only Reduce the map button to a muted icon in the bottom-right of each card -- 2026-05-27
 - [x] nav-back-to-home Add a Home button to the day navigation bar -- 2026-05-27

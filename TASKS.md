@@ -15,8 +15,6 @@ _None._
 
 ### Trip Bookings (manual)
 <!-- Real-world reservations already authored as reserved plan items in data/days.js; these tasks are the act of booking them. No code changes. Walk each via /reggie-manual-task <slug>. -->
-- [ ] reserve-jun24-dinner: Reserve Tousuiro Kiyamachi 8pm Jun 24 — riverside terrace + Megan's dashi-free veg course (4 ppl) [P2] [simple] [tier: sonnet:medium] [manual] [planned]
-  files: external (restaurant reservation)
 - [ ] reserve-jun26-shigetsu-lunch: Reserve Shigetsu shojin-ryori lunch at Tenryu-ji Jun 26 (4 ppl, lunch-only) [P2] [simple] [tier: sonnet:medium] [manual] [planned]
   files: external (restaurant reservation)
 
