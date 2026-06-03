@@ -1206,20 +1206,6 @@ export function tripWindowDates(trip = getTrip()) {
 // (XSS-safe via el()), no external deps.
 // ---------------------------------------------------------------------------
 
-// Region hint for the still-unauthored Jun 18–23 leg (not in data/days.js,
-// which is read-only here). Locked from project memory (trip-skeleton).
-// Authored days read their region from the day object's `base` instead — that
-// branch always wins, so as each gap day lands in data/days.js the matching
-// entry here becomes dead. TODO: drop this map once that leg is authored.
-const UNAUTHORED_REGIONS = {
-  '2026-06-18': 'Tokyo',
-  '2026-06-19': 'Tokyo',
-  '2026-06-20': 'Tokyo',
-  '2026-06-21': 'Tokyo',
-  '2026-06-22': 'Hakone',
-  '2026-06-23': 'Hakone',
-};
-
 const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTH_NAMES = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -1245,12 +1231,10 @@ function formatIndexDate(iso) {
  * @param {(iso:string)=>void} onTap
  */
 function buildDayIndexRow(iso, now, onTap) {
-  const day = getDay(iso); // null for the unauthored Jun 16–23 leg
+  const day = getDay(iso);
   const authored = day != null;
   const num = day?.dayNumber ?? deriveDayNumber(iso);
-  const region = authored
-    ? (day.base ?? 'TBD')
-    : (UNAUTHORED_REGIONS[iso] ?? 'TBD');
+  const region = day?.base ?? 'TBD';
   const isToday = iso === localISODate(now);
 
   const row = el('button', 'day-index-row');
