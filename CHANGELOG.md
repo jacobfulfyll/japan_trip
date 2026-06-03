@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Jun 18 (Day 3) reverted to the original hand-planned itinerary** — `data/days.js` now matches the source plan rather than the optimized-transit variant. The two intra-city hops are walks again, not trains: Asakusa → Tokyo National Museum (~30 min walk, folded into the museum note) and museum → Akihabara (~30 min walk south through Ueno Park). The museum block is back to the full ~3 hours (≈2–5pm, last entry 4:30) and its `prep` note restores the "book a timed ticket the night before to skip the ~30–40 min line" guidance. Ueno Park is restored as a `tag:'sight'` stop (17:00) on the walk down to Akihabara — per the original plan, it's explored, not folded into transit. Morning times shifted earlier to match (Senso-ji 9:00, Nakamise 10:00). The Ginza Line (Tameike-sanno → Asakusa) and Chiyoda Line home legs are unchanged. Meal recommendation blocks (breakfast/lunch/dinner, Megan veg anchors) are retained — the original plan listed those meals undetailed. One `app.test.js` transit-duration assertion updated (the removed Asakusa → Ueno subway leg) and the leg-finder guarded against walk items with no `transit` block; suite stays green at **307 total**. `CACHE_VERSION` bumped to `v22` in `sw.js`.
+
 ### Removed
 - **Vegan Sushi Tokyo dropped from Jun 21 dinner recs** — VST is lunch-only on Sundays and the itinerary doesn't reach Shibuya until ~18:00, so it has no viable slot on Jun 21. Removed the rec object and pruned two stale "may be closed Sundays" note references (prep line and dinner-beat note). Masaka / Genki / Shabu-Yo remain as the Jun 21 Shibuya dinner options; Masaka stays the vegan anchor for Megan. `CACHE_VERSION` bumped to `v21` in `sw.js`.
 

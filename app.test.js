@@ -708,15 +708,16 @@ test('Jun 18 and Jun 19 transit items all carry a complete transit object (mode/
 test('Jun 18/19 transit legs pin their authored durations (guards against a minutes value regression)', () => {
   const legMinutes = (iso, fromTo) => {
     const item = getDay(iso).plan.find(
-      (p) => p.tag === 'transit' && p.transit.from === fromTo[0] && p.transit.to === fromTo[1],
+      (p) => p.tag === 'transit' && p.transit && p.transit.from === fromTo[0] && p.transit.to === fromTo[1],
     );
     assert.ok(item, `${iso} should have a transit leg ${fromTo[0]} → ${fromTo[1]}`);
     return item.transit.minutes;
   };
   // Representative durations — a regression that swapped these for a wrong value
   // (e.g. 30 → 3) would slip past the generic "positive number" invariant above.
+  // (Jun 18's Asakusa→museum and museum→Akihabara legs are walks, so they carry
+  // no structured `transit` block — only the Ginza Line ride is pinned here.)
   assert.equal(legMinutes('2026-06-18', ['Tameike-sanno', 'Asakusa']), 30, 'Ginza Line Tameike-sanno → Asakusa is 30 min');
-  assert.equal(legMinutes('2026-06-18', ['Asakusa', 'Ueno']), 5, 'Ginza Line Asakusa → Ueno is 5 min');
   assert.equal(legMinutes('2026-06-19', ['Kamiyacho', 'Ginza']), 8, 'Hibiya Line Kamiyacho → Ginza is 8 min');
 });
 
