@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Removed
+- **Vegan Sushi Tokyo dropped from Jun 21 dinner recs** — VST is lunch-only on Sundays and the itinerary doesn't reach Shibuya until ~18:00, so it has no viable slot on Jun 21. Removed the rec object and pruned two stale "may be closed Sundays" note references (prep line and dinner-beat note). Masaka / Genki / Shabu-Yo remain as the Jun 21 Shibuya dinner options; Masaka stays the vegan anchor for Megan. `CACHE_VERSION` bumped to `v21` in `sw.js`.
+
 ### Changed
 - **CI: GitHub Pages actions bumped to current majors** — `actions/upload-pages-artifact@v1` → `@v3` and `actions/deploy-pages@v1` → `@v4` in `deploy-pages.yml`. `actions/checkout@v4` unchanged. Stale Known Issues note in `CLAUDE.md` removed.
 

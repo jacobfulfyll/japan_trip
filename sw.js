@@ -19,7 +19,7 @@
 // Every handler is wrapped defensively: any error falls back to a plain
 // fetch(request) so a service-worker bug can never block the page.
 
-const CACHE_VERSION = 'v20';
+const CACHE_VERSION = 'v21';
 const SHELL_CACHE = `app-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `runtime-${CACHE_VERSION}`;
 const EXPECTED_CACHES = [SHELL_CACHE, RUNTIME_CACHE];
