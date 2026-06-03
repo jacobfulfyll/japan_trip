@@ -2,17 +2,6 @@
 
 ## Active Tasks
 
-### remove-unauthored-regions-deadcode
-**Task**: Drop the now-dead `UNAUTHORED_REGIONS` map + fallback branch in app.js
-**Pipeline**: code-workflow
-**Branch**: task/remove-unauthored-regions-deadcode
-**Worktree**: .worktree/remove-unauthored-regions-deadcode
-**Base**: main
-**Started**: 2026-06-03
-**Files**:
-- MOD: app.js
-- MOD: sw.js
-
 ### upgrade-deploy-pages-actions
 **Task**: Bump deploy-pages.yml upload-pages-artifact@v1→v3 + deploy-pages@v1→v4; fix stale CLAUDE.md note
 **Pipeline**: code-workflow

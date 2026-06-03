@@ -28,3 +28,4 @@
 - [x] reserve-jun26-tea-ceremony Booked Rie's private Urasenke tea ceremony (byFood #760) — Jun 26, 15:30, ~US$207 for 4 -- 2026-06-01
 - [x] reserve-odawara-kyoto-shinkansen: Reserve 4 seats Odawara→Kyoto Jun 24 — Hikari/Kodama only (NOT Nozomi) -- manual, completed 2026-06-01 (HIKARI 641, 12:07 Odawara→14:12 Kyoto, Ordinary reserved x4, backpacks only, booked via SmartEX)
 - [x] reserve-jun30-shinkansen: Reserve 4 seats Kyoto→Tokyo Jun 30 (~10:30 Nozomi, with luggage) -- manual, completed 2026-06-01 (NOZOMI 248, 10:30 Kyoto→12:45 Tokyo, Ordinary reserved x4, booked via SmartEX)
+- [x] remove-unauthored-regions-deadcode Drop dead UNAUTHORED_REGIONS map + fallback branch in app.js; bump CACHE_VERSION v18→v19 -- 2026-06-03
