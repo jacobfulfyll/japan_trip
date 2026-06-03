@@ -32,3 +32,4 @@
 - [x] upgrade-deploy-pages-actions Bump upload-pages-artifact@v1→v3, deploy-pages@v1→v4; fix stale CLAUDE.md note -- 2026-06-03
 - [x] revise-jun24-schedule Jun 24 schedule revised (7:30 Tousuiro, earlier Odawara bus, Hikari 641 12:07) -- 2026-06-03
 - [x] sw-runtime-cache-cap Add a count-based eviction cap (~60 entries) to the SW runtime photo/font cache + eviction test -- 2026-06-03
+- [x] fix-vegan-sushi-jun21 Drop Vegan Sushi Tokyo from Jun 21 dinner recs -- 2026-06-03

@@ -2,16 +2,7 @@
 
 ## Active Tasks
 
-### fix-vegan-sushi-jun21
-**Task**: Drop Vegan Sushi Tokyo from the Jun 21 dinner recs
-**Pipeline**: code-workflow
-**Branch**: task/fix-vegan-sushi-jun21
-**Worktree**: .worktree/fix-vegan-sushi-jun21
-**Base**: main
-**Started**: 2026-06-03
-**Files**:
-- MOD: data/days.js
-- MOD: sw.js
+_None._
 
 ---
 
