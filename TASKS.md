@@ -24,14 +24,24 @@
 - MOD: deploy-pages.yml
 - MOD: CLAUDE.md
 
+### revise-jun24-schedule
+**Task**: Jun 24 — Tousuiro 7:30pm (drop alt), earlier ~10:05 Odawara bus, align Shinkansen to Hikari 641 (12:07)
+**Pipeline**: code-workflow
+**Branch**: task/revise-jun24-schedule
+**Worktree**: .worktree/revise-jun24-schedule
+**Base**: main
+**Started**: 2026-06-03
+**Files**:
+- MOD: data/days.js
+- MOD: sw.js
+**Note**: sw.js CACHE_VERSION overlaps active remove-unauthored-regions-deadcode — reconcile version at merge.
+
 ---
 
 ## Backlog
 
 ### Trip Content & Schedule
 <!-- Data edits to data/days.js (the trip content). All touch data/days.js + share a sw.js CACHE_VERSION bump → mutually conflicting; run serially. -->
-- [ ] revise-jun24-schedule: Jun 24 — Tousuiro now 7:30pm (drop alt option), earlier ~10:05 Senkyoro→Odawara bus for Odawara lunch buffer, align Shinkansen to booked Hikari 641 (12:07) [P2] [moderate] [tier: opus:medium] [conflicts: fix-vegan-sushi-jun21, sw-runtime-cache-cap] [code] [planned]
-  files: data/days.js (MOD), sw.js (MOD)
 - [ ] fix-vegan-sushi-jun21: Drop Vegan Sushi Tokyo from the Jun 21 dinner recs (lunch-only Sundays, doesn't fit the Shibuya evening); Masaka stays the vegan anchor [P3] [simple] [tier: sonnet:medium] [conflicts: revise-jun24-schedule, sw-runtime-cache-cap] [code] [planned]
   files: data/days.js (MOD), sw.js (MOD)
 
