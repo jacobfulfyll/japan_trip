@@ -2,16 +2,7 @@
 
 ## Active Tasks
 
-### sw-runtime-cache-cap
-**Task**: Add a count-based eviction cap (~60 entries) to the SW runtime photo/font cache + eviction test
-**Pipeline**: code-workflow
-**Branch**: task/sw-runtime-cache-cap
-**Worktree**: .worktree/sw-runtime-cache-cap
-**Base**: main
-**Started**: 2026-06-03
-**Files**:
-- MOD: sw.js
-- MOD: sw.test.js
+_None._
 
 ---
 
