@@ -1054,6 +1054,49 @@ test('every non-booked meal-with-recs on Jun 22 and Jun 23 keeps a Megan veg-saf
   }
 });
 
+// ===========================================================================
+// revise-jun24-schedule — Jun 24 reservation-lock regressions.
+//
+// The Jun 24 dinner became a LOCKED reservation (Tousuiro Kiyamachi): its
+// `recommendations` array was removed and `reserved:true` set. The Shinkansen
+// down to Kyoto is likewise a confirmed booking (reserved:true) carrying a
+// structured transit object. These two facts are the genuine regression risks
+// of the revision; the rest of the edit was volatile content (exact times,
+// prose) that the structural/invariant suite already guards. We deliberately
+// do NOT pin the volatile clock times / minutes here (those can be re-corrected
+// without being a regression) — only the booking-lock contract.
+// ===========================================================================
+
+test('Jun 24 dinner is a locked reservation with NO recommendations array (guards an accidental rec re-add)', () => {
+  const day = getDay('2026-06-24');
+  const dinner = day.plan.find((p) => p.tag === 'meal' && /Tousuiro/i.test(p.title));
+  assert.ok(dinner, 'a Tousuiro dinner meal item should be present on Jun 24');
+  assert.equal(dinner.reserved, true, 'the Tousuiro dinner is a confirmed booking (reserved:true)');
+  // The reservation is locked, so the recommendations key must be ABSENT entirely
+  // (not an empty array). If a future edit re-adds alternatives, this fails.
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(dinner, 'recommendations'), false,
+    'a locked reservation must NOT carry a recommendations key',
+  );
+});
+
+test('Jun 24 Shinkansen to Kyoto is a reserved transit leg with a structurally complete transit object', () => {
+  const day = getDay('2026-06-24');
+  const shinkansen = day.plan.find((p) => p.tag === 'transit' && /Shinkansen/i.test(p.title));
+  assert.ok(shinkansen, 'a Shinkansen transit item should be present on Jun 24');
+  assert.equal(shinkansen.reserved, true, 'the Shinkansen down to Kyoto is a confirmed booking (reserved:true)');
+  // Structural shape mirrors the structured-transit invariant (mode/from/to +
+  // positive numeric minutes) — value-agnostic so a corrected time is not a fail.
+  const t = shinkansen.transit;
+  assert.ok(t, 'the Shinkansen item must carry a transit object');
+  assert.equal(typeof t.mode, 'string');
+  assert.ok(t.mode.length > 0, 'transit.mode non-empty');
+  assert.equal(t.from, 'Odawara', 'Shinkansen departs Odawara (Hikari/Kodama — Nozomi skips Odawara)');
+  assert.equal(t.to, 'Kyoto', 'Shinkansen terminus is Kyoto');
+  assert.equal(typeof t.minutes, 'number');
+  assert.ok(t.minutes > 0, 'transit.minutes positive');
+});
+
 // --- Render smoke tests for the two new days --------------------------------
 
 test('renderDay renders Jun 22 (Romancecar to Hakone day) without throwing', () => {
