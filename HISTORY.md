@@ -29,3 +29,4 @@
 - [x] reserve-odawara-kyoto-shinkansen: Reserve 4 seats Odawara→Kyoto Jun 24 — Hikari/Kodama only (NOT Nozomi) -- manual, completed 2026-06-01 (HIKARI 641, 12:07 Odawara→14:12 Kyoto, Ordinary reserved x4, backpacks only, booked via SmartEX)
 - [x] reserve-jun30-shinkansen: Reserve 4 seats Kyoto→Tokyo Jun 30 (~10:30 Nozomi, with luggage) -- manual, completed 2026-06-01 (NOZOMI 248, 10:30 Kyoto→12:45 Tokyo, Ordinary reserved x4, booked via SmartEX)
 - [x] remove-unauthored-regions-deadcode Drop dead UNAUTHORED_REGIONS map + fallback branch in app.js; bump CACHE_VERSION v18→v19 -- 2026-06-03
+- [x] upgrade-deploy-pages-actions Bump upload-pages-artifact@v1→v3, deploy-pages@v1→v4; fix stale CLAUDE.md note -- 2026-06-03

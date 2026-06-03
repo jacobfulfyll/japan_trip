@@ -2,17 +2,6 @@
 
 ## Active Tasks
 
-### upgrade-deploy-pages-actions
-**Task**: Bump deploy-pages.yml upload-pages-artifact@v1→v3 + deploy-pages@v1→v4; fix stale CLAUDE.md note
-**Pipeline**: code-workflow
-**Branch**: task/upgrade-deploy-pages-actions
-**Worktree**: .worktree/upgrade-deploy-pages-actions
-**Base**: main
-**Started**: 2026-06-03
-**Files**:
-- MOD: deploy-pages.yml
-- MOD: CLAUDE.md
-
 ### revise-jun24-schedule
 **Task**: Jun 24 — Tousuiro 7:30pm (drop alt), earlier ~10:05 Odawara bus, align Shinkansen to Hikari 641 (12:07)
 **Pipeline**: code-workflow
