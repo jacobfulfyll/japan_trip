@@ -2,17 +2,7 @@
 
 ## Active Tasks
 
-### revise-jun24-schedule
-**Task**: Jun 24 — Tousuiro 7:30pm (drop alt), earlier ~10:05 Odawara bus, align Shinkansen to Hikari 641 (12:07)
-**Pipeline**: code-workflow
-**Branch**: task/revise-jun24-schedule
-**Worktree**: .worktree/revise-jun24-schedule
-**Base**: main
-**Started**: 2026-06-03
-**Files**:
-- MOD: data/days.js
-- MOD: sw.js
-**Note**: sw.js CACHE_VERSION overlaps active remove-unauthored-regions-deadcode — reconcile version at merge.
+_None._
 
 ---
 
@@ -20,11 +10,11 @@
 
 ### Trip Content & Schedule
 <!-- Data edits to data/days.js (the trip content). All touch data/days.js + share a sw.js CACHE_VERSION bump → mutually conflicting; run serially. -->
-- [ ] fix-vegan-sushi-jun21: Drop Vegan Sushi Tokyo from the Jun 21 dinner recs (lunch-only Sundays, doesn't fit the Shibuya evening); Masaka stays the vegan anchor [P3] [simple] [tier: sonnet:medium] [conflicts: revise-jun24-schedule, sw-runtime-cache-cap] [code] [planned]
+- [ ] fix-vegan-sushi-jun21: Drop Vegan Sushi Tokyo from the Jun 21 dinner recs (lunch-only Sundays, doesn't fit the Shibuya evening); Masaka stays the vegan anchor [P3] [simple] [tier: sonnet:medium] [conflicts: sw-runtime-cache-cap] [code] [planned]
   files: data/days.js (MOD), sw.js (MOD)
 
 ### Site Maintenance & Infra
-- [ ] sw-runtime-cache-cap: Add a count-based eviction cap (~60 entries) to the SW runtime photo/font cache + eviction test [P2] [moderate] [tier: opus:medium] [conflicts: revise-jun24-schedule, fix-vegan-sushi-jun21] [code] [planned]
+- [ ] sw-runtime-cache-cap: Add a count-based eviction cap (~60 entries) to the SW runtime photo/font cache + eviction test [P2] [moderate] [tier: opus:medium] [conflicts: fix-vegan-sushi-jun21] [code] [planned]
   files: sw.js (MOD), sw.test.js (MOD)
 ### Trip Bookings (manual)
 <!-- Real-world reservations already authored as reserved plan items in data/days.js; these tasks are the act of booking them. No code changes. Walk each via /reggie-manual-task <slug>. -->
