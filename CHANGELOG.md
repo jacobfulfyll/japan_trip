@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **CI: GitHub Pages actions bumped to current majors** — `actions/upload-pages-artifact@v1` → `@v3` and `actions/deploy-pages@v1` → `@v4` in `deploy-pages.yml`. `actions/checkout@v4` unchanged. Stale Known Issues note in `CLAUDE.md` removed.
+
 ### Removed
 - **`UNAUTHORED_REGIONS` dead-code cleanup** — dropped the static fallback map in `app.js` that mapped Jun 18–23 dates to region labels. All 18 trip days are now authored, so `getDay(iso)` always returns a real day for in-window dates and `day.base` always wins. The `buildDayIndexRow` region assignment simplifies to `day?.base ?? 'TBD'`; absent-day graceful degradation is retained. `CACHE_VERSION` bumped to `v19` in `sw.js`.
 

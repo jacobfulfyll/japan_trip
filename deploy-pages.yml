@@ -18,9 +18,9 @@ jobs:
 
       - name: Upload site artifact
         # Upload the repository root (your HTML/CSS/JS files at repo root)
-        uses: actions/upload-pages-artifact@v1
+        uses: actions/upload-pages-artifact@v3
         with:
           path: '.' 
 
       - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v1
+        uses: actions/deploy-pages@v4

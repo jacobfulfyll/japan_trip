@@ -143,4 +143,4 @@ Returns are **deeply frozen and copy-safe** — callers cannot corrupt shared mo
 
 ## Known Issues
 
-- `deploy-pages.yml` uses `@v1` for `upload-pages-artifact` and `deploy-pages` (current is `@v3`).
+_None._
