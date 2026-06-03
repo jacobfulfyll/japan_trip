@@ -13,6 +13,17 @@
 - MOD: app.js
 - MOD: sw.js
 
+### upgrade-deploy-pages-actions
+**Task**: Bump deploy-pages.yml upload-pages-artifact@v1→v3 + deploy-pages@v1→v4; fix stale CLAUDE.md note
+**Pipeline**: code-workflow
+**Branch**: task/upgrade-deploy-pages-actions
+**Worktree**: .worktree/upgrade-deploy-pages-actions
+**Base**: main
+**Started**: 2026-06-03
+**Files**:
+- MOD: deploy-pages.yml
+- MOD: CLAUDE.md
+
 ---
 
 ## Backlog
@@ -27,9 +38,6 @@
 ### Site Maintenance & Infra
 - [ ] sw-runtime-cache-cap: Add a count-based eviction cap (~60 entries) to the SW runtime photo/font cache + eviction test [P2] [moderate] [tier: opus:medium] [conflicts: revise-jun24-schedule, fix-vegan-sushi-jun21] [code] [planned]
   files: sw.js (MOD), sw.test.js (MOD)
-- [ ] upgrade-deploy-pages-actions: Bump deploy-pages.yml upload-pages-artifact@v1→v3 + deploy-pages@v1→v4; fix stale CLAUDE.md note [P2] [simple] [tier: sonnet:medium] [code] [planned]
-  files: deploy-pages.yml (MOD), CLAUDE.md (MOD)
-
 ### Trip Bookings (manual)
 <!-- Real-world reservations already authored as reserved plan items in data/days.js; these tasks are the act of booking them. No code changes. Walk each via /reggie-manual-task <slug>. -->
 - [ ] reserve-jun26-shigetsu-lunch: Reserve Shigetsu shojin-ryori lunch at Tenryu-ji Jun 26 (4 ppl, lunch-only) [P2] [simple] [tier: sonnet:medium] [manual] [planned]
