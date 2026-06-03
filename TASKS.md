@@ -2,7 +2,16 @@
 
 ## Active Tasks
 
-_None._
+### sw-runtime-cache-cap
+**Task**: Add a count-based eviction cap (~60 entries) to the SW runtime photo/font cache + eviction test
+**Pipeline**: code-workflow
+**Branch**: task/sw-runtime-cache-cap
+**Worktree**: .worktree/sw-runtime-cache-cap
+**Base**: main
+**Started**: 2026-06-03
+**Files**:
+- MOD: sw.js
+- MOD: sw.test.js
 
 ---
 
@@ -13,9 +22,6 @@ _None._
 - [ ] fix-vegan-sushi-jun21: Drop Vegan Sushi Tokyo from the Jun 21 dinner recs (lunch-only Sundays, doesn't fit the Shibuya evening); Masaka stays the vegan anchor [P3] [simple] [tier: sonnet:medium] [conflicts: sw-runtime-cache-cap] [code] [planned]
   files: data/days.js (MOD), sw.js (MOD)
 
-### Site Maintenance & Infra
-- [ ] sw-runtime-cache-cap: Add a count-based eviction cap (~60 entries) to the SW runtime photo/font cache + eviction test [P2] [moderate] [tier: opus:medium] [conflicts: fix-vegan-sushi-jun21] [code] [planned]
-  files: sw.js (MOD), sw.test.js (MOD)
 ### Trip Bookings (manual)
 <!-- Real-world reservations already authored as reserved plan items in data/days.js; these tasks are the act of booking them. No code changes. Walk each via /reggie-manual-task <slug>. -->
 - [ ] reserve-jun26-shigetsu-lunch: Reserve Shigetsu shojin-ryori lunch at Tenryu-ji Jun 26 (4 ppl, lunch-only) [P2] [simple] [tier: sonnet:medium] [manual] [planned]
