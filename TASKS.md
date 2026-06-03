@@ -8,11 +8,6 @@ _None._
 
 ## Backlog
 
-### Trip Content — Author Jun 16–23 (data/days.js)
-<!-- Fills the unauthored Jun 16–23 leg (Days 1–8) to the existing Kyoto-day bar. All edit data/days.js + sw.js (CACHE_VERSION) + app.test.js, so they run serially in date order (depends chain). Research dossiers + verified facts live in each .pipeline/<slug>/task.md. -->
-- [ ] add-jun24-checkout: Add an explicit 10am checkout item to the existing Jun 24 day [P3] [simple] [tier: sonnet:medium] [depends: author-hakone-leg] [code] [planned]
-  files: data/days.js (MOD), sw.js (MOD)
-
 ### Trip Bookings (manual)
 <!-- Real-world reservations already authored as reserved plan items in data/days.js; these tasks are the act of booking them. No code changes. Walk each via /reggie-manual-task <slug>. -->
 - [ ] reserve-jun26-shigetsu-lunch: Reserve Shigetsu shojin-ryori lunch at Tenryu-ji Jun 26 (4 ppl, lunch-only) [P2] [simple] [tier: sonnet:medium] [manual] [planned]
