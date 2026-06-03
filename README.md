@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← tests for the data/API/nav layer (node --test; 301 total with sw.test.js).
+app.test.js    ← tests for the data/API/nav layer (node --test; 307 total with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -294,8 +294,10 @@ from the icon.
 The app shell — `index.html`, `app.js`, `data/days.js`, and icons — is precached
 on first visit, so the full itinerary loads with no network. Fonts and hero photos
 are cached the first time you load them (stale-while-revalidate), so
-previously-viewed photos (and the fonts) also load offline afterward. Google Maps
-links still require a network connection.
+previously-viewed photos (and the fonts) also load offline afterward. This
+runtime cache is capped at 60 entries (oldest evicted first), so it can't grow
+without bound over a long trip. Google Maps links still require a network
+connection.
 
 ### Maintainer: bump `CACHE_VERSION` when you ship changes
 
@@ -339,7 +341,7 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The test suite (**301 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The test suite (**307 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),

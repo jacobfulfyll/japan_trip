@@ -24,6 +24,10 @@ const SHELL_CACHE = `app-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `runtime-${CACHE_VERSION}`;
 const EXPECTED_CACHES = [SHELL_CACHE, RUNTIME_CACHE];
 
+// Cap on entries kept in the runtime (photo/font) cache. Without a build step
+// the runtime cache would otherwise grow unbounded across a long trip.
+const RUNTIME_MAX_ENTRIES = 60;
+
 // App-shell files to precache. Relative paths resolve against the SW scope, so
 // this works both at the domain root and under the GitHub Pages subpath
 // (/japan_trip/). '.' is the document root (serves index.html).
@@ -186,6 +190,19 @@ async function cacheFirst(request, cacheName) {
 }
 
 /**
+ * Trim a cache to at most `max` entries, evicting oldest-first (FIFO). The
+ * Cache API returns keys() in insertion order, so the leading entries are the
+ * oldest — no timestamps needed.
+ */
+async function trimCache(cacheName, max) {
+  const cache = await caches.open(cacheName);
+  const keys = await cache.keys();
+  for (let i = 0; i < keys.length - max; i++) {
+    await cache.delete(keys[i]);
+  }
+}
+
+/**
  * Stale-while-revalidate: serve cache immediately if present, refresh in the
  * background. Handles opaque (no-cors) responses — they have status 0 / type
  * 'opaque', so we cache any response we receive rather than gating on .ok.
@@ -198,6 +215,7 @@ async function staleWhileRevalidate(request, cacheName) {
       .then((response) => {
         if (response && (response.ok || response.type === 'opaque')) {
           cache.put(request, response.clone()).catch(() => {});
+          trimCache(cacheName, RUNTIME_MAX_ENTRIES).catch(() => {});
         }
         return response;
       })

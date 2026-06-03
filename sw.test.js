@@ -71,6 +71,9 @@ function makeCaches() {
         map.set(keyOf(req), res);
       },
       async keys() { return [...map.keys()].map((u) => new FakeRequest(u)); },
+      // Real Cache.delete returns Promise<boolean>; mirror that so trimCache's
+      // eviction (cache.delete(keys[i])) actually removes entries here.
+      async delete(req) { return map.delete(keyOf(req)); },
     };
   }
 
@@ -447,6 +450,120 @@ test('image detected by destination (not just wikimedia host) is intercepted', a
   handlers.fetch(event);
 
   assert.equal(event._responded, true);
+});
+
+// ===========================================================================
+// RUNTIME CACHE CAP — stale-while-revalidate trims the runtime cache (FIFO)
+// ===========================================================================
+
+// The cap lives in sw.js as RUNTIME_MAX_ENTRIES; derive it from the source so a
+// future change to the literal doesn't silently desync this suite.
+const RUNTIME_MAX = Number(
+  (SW_SRC.match(/RUNTIME_MAX_ENTRIES\s*=\s*(\d+)/) || [, '60'])[1],
+);
+
+/** Drain pending microtasks so the non-blocking trimCache chain settles. */
+async function flushMicrotasks() {
+  // staleWhileRevalidate fires `trimCache(...).catch(...)` without awaiting it,
+  // so the eviction happens on a detached promise chain. A macrotask turn after
+  // the awaited response guarantees that chain (and the awaited cache.delete
+  // calls inside trimCache) has fully run before we read keys().
+  await new Promise((r) => setTimeout(r, 0));
+}
+
+/** Drive one cross-origin image request through the fetch handler and settle it. */
+async function driveImage(handlers, url) {
+  const req = new FakeRequest(url, { mode: 'no-cors', destination: 'image' });
+  const event = makeFetchEvent(req);
+  handlers.fetch(event);
+  await event._res; // resolves to the (cold-cache) network response
+}
+
+/**
+ * Drive each URL through the fetch handler in order, letting each put+trim
+ * settle deterministically, then return the runtime cache's keys (as URLs).
+ */
+async function driveImagesAndReadKeys(handlers, caches, urls) {
+  for (const url of urls) {
+    await driveImage(handlers, url);
+    await flushMicrotasks();
+  }
+  const keys = await (await caches.open(RUNTIME_CACHE)).keys();
+  return keys.map((k) => k.url);
+}
+
+test('runtime cache evicts oldest entries once it exceeds the cap (FIFO)', async () => {
+  // Each request gets a distinct opaque response so distinct URLs => distinct keys.
+  const { handlers, caches } = loadSW(async (req) => opaqueResponse('img:' + req.url));
+  const N = RUNTIME_MAX + 5; // five over the cap
+  const urls = Array.from({ length: N }, (_, i) => `https://cdn.example.org/photo-${i}.jpg`);
+
+  const keys = await driveImagesAndReadKeys(handlers, caches, urls);
+
+  // Capped at exactly RUNTIME_MAX entries.
+  assert.equal(keys.length, RUNTIME_MAX, `runtime cache should be capped at ${RUNTIME_MAX}`);
+  // The five earliest-inserted URLs were evicted...
+  for (const evicted of urls.slice(0, 5)) {
+    assert.ok(!keys.includes(evicted), `oldest entry ${evicted} should have been evicted`);
+  }
+  // ...and the most-recent RUNTIME_MAX remain, in insertion order (FIFO).
+  assert.deepEqual(keys, urls.slice(5), 'the newest RUNTIME_MAX entries should remain in order');
+});
+
+test('runtime cache exactly at the cap evicts nothing (oldest entry retained)', async () => {
+  const { handlers, caches } = loadSW(async (req) => opaqueResponse('img:' + req.url));
+  const urls = Array.from({ length: RUNTIME_MAX }, (_, i) => `https://cdn.example.org/exact-${i}.jpg`);
+
+  const keys = await driveImagesAndReadKeys(handlers, caches, urls);
+
+  assert.equal(keys.length, RUNTIME_MAX, 'at exactly the cap, all entries are kept');
+  assert.ok(keys.includes(urls[0]), 'the oldest entry must NOT be evicted at exactly the cap');
+  assert.deepEqual(keys, urls, 'no reordering or eviction at exactly the cap');
+});
+
+test('one-over-cap evicts exactly the single oldest entry (keys[0])', async () => {
+  const { handlers, caches } = loadSW(async (req) => opaqueResponse('img:' + req.url));
+  const urls = Array.from({ length: RUNTIME_MAX + 1 }, (_, i) => `https://cdn.example.org/one-over-${i}.jpg`);
+
+  const keys = await driveImagesAndReadKeys(handlers, caches, urls);
+
+  assert.equal(keys.length, RUNTIME_MAX, `one over the cap trims back to ${RUNTIME_MAX}`);
+  assert.ok(!keys.includes(urls[0]), 'the single oldest entry (keys[0]) must be evicted');
+  assert.ok(keys.includes(urls[1]), 'the second-oldest entry must be retained');
+  assert.deepEqual(keys, urls.slice(1), 'exactly one entry (the oldest) is dropped');
+});
+
+test('a cache.delete rejection during trim does not break the SWR response path', async () => {
+  // sw.js fires `trimCache(...).catch(() => {})` so an eviction failure (e.g. a
+  // storage error on cache.delete) must never reject the response. Force the
+  // runtime cache's delete to reject and confirm the response still resolves.
+  const { handlers, caches } = loadSW(async (req) => opaqueResponse('img:' + req.url));
+  const realOpen = caches.open.bind(caches);
+  caches.open = async (name) => {
+    const cache = await realOpen(name);
+    if (name === RUNTIME_CACHE) {
+      cache.delete = async () => { throw new Error('storage failure'); };
+    }
+    return cache;
+  };
+
+  // Push past the cap so trimCache actually attempts a delete on each call.
+  const N = RUNTIME_MAX + 3;
+  const urls = Array.from({ length: N }, (_, i) => `https://cdn.example.org/reject-${i}.jpg`);
+  for (const url of urls) {
+    const req = new FakeRequest(url, { mode: 'no-cors', destination: 'image' });
+    const event = makeFetchEvent(req);
+    handlers.fetch(event);
+    // The key assertion: the response resolves normally despite delete rejecting.
+    const res = await assert.doesNotReject(event._res).then(() => event._res);
+    assert.equal(res.body, 'img:' + url, 'SWR still returns the network response');
+    await flushMicrotasks();
+  }
+
+  // Trim could not evict (delete rejects), so every entry is retained — proving
+  // the failure was swallowed rather than aborting the put/response.
+  const keys = (await (await caches.open(RUNTIME_CACHE)).keys()).map((k) => k.url);
+  assert.equal(keys.length, N, 'no eviction occurred because delete rejected');
 });
 
 // ===========================================================================
