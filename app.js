@@ -1055,6 +1055,179 @@ function buildLodging(lodging) {
  * @param {'anticipation'|'plan'|'reminisce'} [framingName='plan']
  * @returns {{ node: HTMLElement, start: () => void, stop: () => void }}
  */
+// ---------------------------------------------------------------------------
+// Reminisce photo gallery + lightbox ("Engawa Scroll" redesign). Past days drop
+// the hero slideshow and lead with a framed header that flows into a masonry
+// photo grid; tapping a photo opens a swipeable full-screen lightbox.
+//
+// TEMP: until the Firebase photo-journal (v2) lands, the gallery is fed by a
+// mock photo set for one demo day. When v2 ships, point reminisceGalleryPhotos()
+// at the day's real uploaded photos and delete the mock branch.
+// ---------------------------------------------------------------------------
+
+const MOCK_GALLERY_DATE = '2026-06-23';
+const MOCK_GALLERY_COUNT = 30;
+
+// Cap how many photos a day's gallery shows (and the lightbox scrolls). Keeps a
+// busy day scannable on a phone instead of an endless scroll. Tune to taste.
+const REMINISCE_GALLERY_MAX = 12;
+
+/** Photos to show in a day's reminisce gallery. TEMP mock source (see above). */
+function reminisceGalleryPhotos(day) {
+  if (day && day.date === MOCK_GALLERY_DATE) {
+    const out = [];
+    for (let i = 1; i <= MOCK_GALLERY_COUNT; i++) {
+      out.push({ url: `img/mock/photo${i}.jpg`, alt: `Trip photo ${i}` });
+    }
+    return out.slice(0, REMINISCE_GALLERY_MAX);
+  }
+  return [];
+}
+
+/**
+ * Masonry photo grid of focusable buttons. `onOpen(index)` fires on activation.
+ * XSS-safe: URLs pass through safeUrl(); text via textContent only.
+ */
+function buildReminisceGallery(photos, onOpen) {
+  const gallery = el('section', 'reminisce-gallery');
+  gallery.setAttribute('aria-label', 'Photos from this day');
+  photos.forEach((p, i) => {
+    const src = safeUrl(p?.url);
+    if (!src) return;
+    const btn = el('button', 'reminisce-photo');
+    btn.type = 'button';
+    const img = el('img');
+    img.src = src;
+    img.alt = p?.alt ? String(p.alt) : '';
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    btn.appendChild(img);
+    btn.addEventListener('click', () => onOpen(i));
+    gallery.appendChild(btn);
+  });
+  return gallery;
+}
+
+/**
+ * Full-screen swipeable lightbox over a set of photos. Native CSS scroll-snap
+ * provides the swipe/momentum (no gesture JS); JS adds open-at-index, the live
+ * counter, keyboard nav, and a focus trap. Returns { node, open(i), destroy() }.
+ * Append `node` to the day-view root and wire `destroy` into renderDay's stop().
+ */
+function buildLightbox(photos, dayLabel) {
+  const overlay = el('div', 'lightbox');
+  overlay.hidden = true;
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', 'Photo viewer');
+
+  const bar = el('div', 'lightbox-bar');
+  const counter = el('span', 'lightbox-counter');
+  counter.setAttribute('aria-live', 'polite');
+  const closeBtn = el('button', 'lightbox-close', '×');
+  closeBtn.type = 'button';
+  closeBtn.setAttribute('aria-label', 'Close photo viewer');
+  bar.appendChild(counter);
+  bar.appendChild(closeBtn);
+  overlay.appendChild(bar);
+
+  const track = el('div', 'lightbox-track');
+  photos.forEach((p) => {
+    const slide = el('div', 'lightbox-slide');
+    const src = safeUrl(p?.url);
+    if (src) {
+      const img = el('img');
+      img.src = src;
+      img.alt = p?.alt ? String(p.alt) : '';
+      img.decoding = 'async';
+      slide.appendChild(img);
+    }
+    track.appendChild(slide);
+  });
+  overlay.appendChild(track);
+
+  let current = 0;
+  let lastFocused = null;
+  let rafPending = false;
+
+  const reduceMotion =
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function setCounter(i) {
+    current = i;
+    counter.textContent = `${i + 1} / ${photos.length}`;
+    overlay.setAttribute(
+      'aria-label',
+      `Photo ${i + 1} of ${photos.length}${dayLabel ? ', ' + dayLabel : ''}`,
+    );
+  }
+
+  function onScroll() {
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(() => {
+      rafPending = false;
+      const w = track.clientWidth || 1;
+      setCounter(Math.round(track.scrollLeft / w));
+    });
+  }
+  track.addEventListener('scroll', onScroll, { passive: true });
+
+  function scrollToIndex(i, smooth) {
+    const w = track.clientWidth;
+    track.scrollTo({ left: i * w, behavior: smooth && !reduceMotion ? 'smooth' : 'auto' });
+  }
+
+  function unmount() {
+    if (overlay.parentNode && typeof overlay.parentNode.removeChild === 'function') {
+      overlay.parentNode.removeChild(overlay);
+    }
+  }
+
+  function close() {
+    overlay.hidden = true;
+    document.removeEventListener('keydown', onKey);
+    unmount();
+    if (lastFocused && typeof lastFocused.focus === 'function') lastFocused.focus();
+  }
+
+  function onKey(e) {
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); scrollToIndex(Math.min(current + 1, photos.length - 1), true); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); scrollToIndex(Math.max(current - 1, 0), true); }
+    else if (e.key === 'Tab') { e.preventDefault(); closeBtn.focus(); } // sole focusable → trap
+  }
+
+  function open(i) {
+    lastFocused = typeof document !== 'undefined' ? document.activeElement : null;
+    // Mount on <body> (not inside the day-view) so the fixed overlay escapes the
+    // day-view's backdrop-filter/overflow containing block and fills the viewport.
+    if (!overlay.parentNode && typeof document !== 'undefined' && document.body) {
+      document.body.appendChild(overlay);
+    }
+    overlay.hidden = false;
+    setCounter(i);
+    scrollToIndex(i, false); // jump to the tapped photo before it's seen
+    document.addEventListener('keydown', onKey);
+    closeBtn.focus();
+  }
+
+  closeBtn.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target === track) close();
+  });
+
+  function destroy() {
+    document.removeEventListener('keydown', onKey);
+    track.removeEventListener('scroll', onScroll);
+    unmount();
+  }
+
+  return { node: overlay, open, destroy };
+}
+
 export function renderDay(day, framingName = 'plan') {
   const framing = FRAMINGS[framingName] ?? FRAMINGS.plan;
 
@@ -1075,9 +1248,12 @@ export function renderDay(day, framingName = 'plan') {
   const photos = Array.isArray(day.photos) ? day.photos : [];
   const isSparse = plan.length === 0 && photos.length === 0;
 
-  // Hero slideshow on top.
-  const hero = buildHero(photos, framing);
-  view.appendChild(hero.node);
+  const isReminisce = framingName === 'reminisce';
+
+  // Hero slideshow on top — suppressed in reminisce framing (past days lead with
+  // the framed header + photo gallery instead of a hero).
+  const hero = isReminisce ? { node: null, start() {}, stop() {} } : buildHero(photos, framing);
+  if (hero.node) view.appendChild(hero.node);
 
   // Title block (kicker varies by framing).
   const headerBlock = el('header', 'day-header');
@@ -1093,24 +1269,42 @@ export function renderDay(day, framingName = 'plan') {
     intro.appendChild(el('span', null, day.intro));
     headerBlock.appendChild(intro);
   }
-  view.appendChild(headerBlock);
+
+  // Lightbox teardown (set when the reminisce gallery is built); folded into stop().
+  let lightboxStop = () => {};
+
+  if (isReminisce) {
+    // Wrap the header in the blue "memory frame" that flows into the gallery.
+    const galleryPhotos = reminisceGalleryPhotos(day);
+    const frame = el('section', 'reminisce-frame');
+    frame.appendChild(headerBlock);
+    const seam = el('p', 'reminisce-frame-seam');
+    seam.textContent = galleryPhotos.length
+      ? `${galleryPhotos.length} ${galleryPhotos.length === 1 ? 'photo' : 'photos'}`
+      : 'No photos yet';
+    frame.appendChild(seam);
+    view.appendChild(frame);
+
+    if (galleryPhotos.length) {
+      // The lightbox mounts itself on <body> when opened (see buildLightbox); we
+      // only wire the gallery to it and fold its teardown into stop().
+      const lightbox = buildLightbox(galleryPhotos, day.title ?? '');
+      view.appendChild(buildReminisceGallery(galleryPhotos, (i) => lightbox.open(i)));
+      lightboxStop = lightbox.destroy;
+    } else {
+      view.appendChild(el('p', 'reminisce-empty-note', 'Your trip photos from this day will live here.'));
+    }
+  } else {
+    view.appendChild(headerBlock);
+  }
 
   // Sparse day: "details coming" placeholder, then stop (no plan/lodging).
-  if (isSparse) {
+  if (isSparse && !isReminisce) {
     const ph = el('div', 'day-placeholder');
     ph.appendChild(el('h2', 'placeholder-title', 'Details coming'));
     ph.appendChild(el('p', 'placeholder-note', "The plan for this day isn't filled in yet."));
     view.appendChild(ph);
     return { node: view, start: hero.start, stop: hero.stop };
-  }
-
-  // Reminisce framing: a soft seam for the future photo gallery (NOT built here).
-  if (framingName === 'reminisce') {
-    const seam = el('section', 'reminisce-seam');
-    seam.setAttribute('aria-label', 'Your photos from this day will appear here');
-    seam.appendChild(el('p', 'seam-kicker', 'Your photos'));
-    seam.appendChild(el('p', 'seam-note', 'Your trip photos from this day will live here. For now, here’s how the day was planned.'));
-    view.appendChild(seam);
   }
 
   // The plan list — split into Morning / Afternoon / Evening collapsible
@@ -1169,7 +1363,11 @@ export function renderDay(day, framingName = 'plan') {
   const lodging = buildLodging(day.lodging ?? null);
   if (lodging) view.appendChild(lodging);
 
-  return { node: view, start: hero.start, stop: hero.stop };
+  return {
+    node: view,
+    start: hero.start,
+    stop: () => { hero.stop(); lightboxStop(); },
+  };
 }
 
 // ---------------------------------------------------------------------------

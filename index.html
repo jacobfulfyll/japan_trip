@@ -670,28 +670,122 @@
         .lodging-breakfast-label { font-weight: 800; color: var(--brand-deep); }
 
         /* --- Reminisce seam (future photo gallery placeholder) ----------- */
-        .reminisce-seam {
+        /* --- Reminisce view: blue "memory frame" → masonry gallery ------- */
+        .reminisce-frame {
             margin: 18px 20px 0;
-            border: 1px dashed rgba(16, 75, 115, 0.4);
+            border: 1.5px solid var(--brand-deep);
             border-radius: var(--radius-lg);
-            background: rgba(243, 233, 216, 0.6);
-            padding: 16px 18px;
-            text-align: center;
+            background: var(--paper-surface);
+            padding: 24px 18px 0;
         }
-
-        .seam-kicker {
+        .reminisce-frame .day-header {
+            margin: 0;
+        }
+        .reminisce-frame-seam {
+            margin: 16px 0 0;
+            padding: 11px 0 13px;
+            border-top: 1px dashed var(--line);
+            text-align: center;
             text-transform: uppercase;
             letter-spacing: 0.1em;
-            font-size: 0.7rem;
-            font-weight: 800;
-            color: var(--brand-mid);
-            margin-bottom: 5px;
+            font-size: 0.68rem;
+            font-weight: 700;
+            color: var(--ink-soft);
         }
 
-        .seam-note {
+        .reminisce-gallery {
+            margin: 12px 20px 0;
+            column-count: 2;
+            column-gap: 8px;
+        }
+        .reminisce-photo {
+            display: block;
+            width: 100%;
+            margin: 0 0 8px;
+            padding: 0;
+            border: none;
+            line-height: 0;
+            background: rgba(16, 75, 115, 0.08);
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            cursor: pointer;
+            break-inside: avoid;
+            -webkit-column-break-inside: avoid;
+            transition: transform 0.15s ease;
+        }
+        .reminisce-photo:active { transform: scale(0.98); }
+        .reminisce-photo:focus-visible {
+            outline: 2px solid var(--brand-mid);
+            outline-offset: 2px;
+        }
+        .reminisce-photo img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        .reminisce-empty-note {
+            margin: 14px 20px 0;
+            text-align: center;
             color: var(--ink-soft);
             font-size: 0.88rem;
             line-height: 1.45;
+        }
+
+        /* --- Lightbox: full-screen swipeable photo viewer ---------------- */
+        .lightbox {
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            background: rgba(8, 20, 30, 0.94);
+        }
+        .lightbox[hidden] { display: none; }
+        .lightbox-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 10px 8px 16px;
+            color: rgba(255, 255, 255, 0.92);
+            flex: 0 0 auto;
+        }
+        .lightbox-counter {
+            font-size: 0.9rem;
+            letter-spacing: 0.04em;
+        }
+        .lightbox-close {
+            width: 44px;
+            height: 44px;
+            border: none;
+            background: transparent;
+            color: #fff;
+            font-size: 1.9rem;
+            line-height: 1;
+            cursor: pointer;
+            border-radius: 50%;
+        }
+        .lightbox-close:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+        .lightbox-track {
+            flex: 1 1 auto;
+            display: flex;
+            overflow-x: auto;
+            overflow-y: hidden;
+            scroll-snap-type: x mandatory;
+            -webkit-overflow-scrolling: touch;
+        }
+        .lightbox-slide {
+            flex: 0 0 100%;
+            scroll-snap-align: center;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 8px 28px;
+        }
+        .lightbox-slide img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            border-radius: 6px;
         }
 
         /* --- Empty / sparse placeholder ---------------------------------- */
@@ -731,13 +825,9 @@
             background: linear-gradient(180deg, rgba(46, 107, 74, 0.16) 0%, rgba(8, 37, 61, 0) 45%, rgba(8, 37, 61, 0.3) 100%);
         }
 
-        .framing-reminisce { filter: saturate(0.92); }
-        .framing-reminisce .day-kicker { color: #8a4f1f; }
-        .framing-reminisce .day-number { background: #8a4f1f; }
-        .framing-reminisce .day-hero { opacity: 0.9; }
-        .framing-reminisce-hero .hero-scrim {
-            background: linear-gradient(180deg, rgba(138, 79, 31, 0.2) 0%, rgba(8, 37, 61, 0) 45%, rgba(8, 37, 61, 0.34) 100%);
-        }
+        /* Reminisce identity: calm "blue memory print" (no hero, no sepia). */
+        .framing-reminisce .day-kicker { color: var(--brand-mid); }
+        .framing-reminisce .day-number { background: var(--brand-deep); }
 
         /* --- Day navigation (prev / position / next) --------------------- */
         .day-screen { display: flex; flex-direction: column; gap: 14px; }
@@ -1041,7 +1131,9 @@
             .section-heading { padding: 0 16px; }
             .plan-list { padding: 0 16px; }
             .lodging-card { margin: 18px 16px 20px; }
-            .reminisce-seam { margin: 16px 16px 0; }
+            .reminisce-frame { margin: 16px 16px 0; }
+            .reminisce-gallery { margin: 12px 16px 0; }
+            .reminisce-empty-note { margin: 14px 16px 0; }
             .day-screen { gap: 10px; }
             .day-nav {
                 padding: 10px;

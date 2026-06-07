@@ -1809,14 +1809,43 @@ test('renderDay defaults to the plan framing when given an unknown framing name'
   });
 });
 
-// --- Item 4 (cont.): reminisce seam present only in reminisce ----------------
+// --- Item 4 (cont.): reminisce "memory frame" + gallery ----------------------
 
-test('renderDay includes the reminisce photo seam ONLY in the reminisce framing', () => {
+test('renderDay wraps the header in the blue memory frame ONLY in reminisce, and drops the hero', () => {
   withDom(() => {
-    assert.ok(renderDay(fullDayFixture(), 'reminisce').node.firstByClass('reminisce-seam'),
-      'reminisce framing should include the photo seam');
-    assert.equal(renderDay(fullDayFixture(), 'anticipation').node.firstByClass('reminisce-seam'), null);
-    assert.equal(renderDay(fullDayFixture(), 'plan').node.firstByClass('reminisce-seam'), null);
+    const r = renderDay(fullDayFixture(), 'reminisce').node;
+    assert.ok(r.firstByClass('reminisce-frame'), 'reminisce framing should include the memory frame');
+    assert.equal(r.firstByClass('day-hero'), null, 'reminisce drops the hero slideshow');
+
+    const p = renderDay(fullDayFixture(), 'plan').node;
+    assert.equal(p.firstByClass('reminisce-frame'), null, 'plan framing has no memory frame');
+    assert.ok(p.firstByClass('day-hero'), 'plan framing keeps the hero');
+
+    assert.equal(renderDay(fullDayFixture(), 'anticipation').node.firstByClass('reminisce-frame'), null);
+  });
+});
+
+test('reminisce shows the empty-photo note for a day with no gallery photos', () => {
+  withDom(() => {
+    const r = renderDay(fullDayFixture(), 'reminisce').node; // date 2026-06-24, no mock photos
+    assert.ok(r.firstByClass('reminisce-empty-note'), 'no-photo day shows the empty note');
+    assert.equal(r.firstByClass('reminisce-gallery'), null, 'no gallery rendered when empty');
+    assert.equal(r.firstByClass('reminisce-frame-seam').textContent, 'No photos yet');
+  });
+});
+
+test('reminisce renders a clickable gallery (capped) when the day has photos', () => {
+  withDom(() => {
+    const day = { ...fullDayFixture(), date: '2026-06-23' }; // the mock-photo demo day
+    const r = renderDay(day, 'reminisce').node;
+    const gallery = r.firstByClass('reminisce-gallery');
+    assert.ok(gallery, 'gallery present for a day with photos');
+    const thumbs = r.byClass('reminisce-photo');
+    assert.equal(thumbs.length, 12, 'gallery is capped at REMINISCE_GALLERY_MAX thumbnails');
+    assert.equal(thumbs[0].tagName, 'BUTTON', 'thumbnails are real buttons (focusable)');
+    assert.match(r.firstByClass('reminisce-frame-seam').textContent, /^12 photos$/);
+    // The lightbox mounts on <body> only when opened — it must NOT be inside the view tree.
+    assert.equal(r.firstByClass('lightbox'), null, 'lightbox is not pre-mounted inside the day view');
   });
 });
 
