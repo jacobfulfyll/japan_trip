@@ -1064,29 +1064,21 @@ function buildLodging(lodging) {
 // Reminisce photo gallery + lightbox ("Engawa Scroll" redesign). Past days drop
 // the hero slideshow and lead with a framed header that flows into a masonry
 // photo grid; tapping a photo opens a swipeable full-screen lightbox.
-//
-// TEMP: until the Firebase photo-journal (v2) lands, the gallery is fed by a
-// mock photo set for one demo day. When v2 ships, point reminisceGalleryPhotos()
-// at the day's real uploaded photos and delete the mock branch.
 // ---------------------------------------------------------------------------
-
-const MOCK_GALLERY_DATE = '2026-06-23';
-const MOCK_GALLERY_COUNT = 30;
 
 // Cap how many photos a day's gallery shows (and the lightbox scrolls). Keeps a
 // busy day scannable on a phone instead of an endless scroll. Tune to taste.
 const REMINISCE_GALLERY_MAX = 12;
 
-/** Photos to show in a day's reminisce gallery. TEMP mock source (see above). */
+/**
+ * Photos to show in a day's reminisce gallery, capped at REMINISCE_GALLERY_MAX.
+ * Source is the day's authored `photos` (the same set that feeds the hero on
+ * non-reminisce framings). This is the seam the Firebase photo-journal (v2) will
+ * extend — merging in travelers' uploaded photos for the day.
+ */
 function reminisceGalleryPhotos(day) {
-  if (day && day.date === MOCK_GALLERY_DATE) {
-    const out = [];
-    for (let i = 1; i <= MOCK_GALLERY_COUNT; i++) {
-      out.push({ url: `img/mock/photo${i}.jpg`, alt: `Trip photo ${i}` });
-    }
-    return out.slice(0, REMINISCE_GALLERY_MAX);
-  }
-  return [];
+  const photos = Array.isArray(day?.photos) ? day.photos : [];
+  return photos.slice(0, REMINISCE_GALLERY_MAX);
 }
 
 /**

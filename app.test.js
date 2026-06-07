@@ -1858,32 +1858,39 @@ test('renderDay wraps the header in the blue memory frame ONLY in reminisce, and
 
 test('reminisce shows the empty-photo note for a day with no gallery photos', () => {
   withDom(() => {
-    const r = renderDay(fullDayFixture(), 'reminisce').node; // date 2026-06-24, no mock photos
+    const r = renderDay({ ...fullDayFixture(), photos: [] }, 'reminisce').node;
     assert.ok(r.firstByClass('reminisce-empty-note'), 'no-photo day shows the empty note');
     assert.equal(r.firstByClass('reminisce-gallery'), null, 'no gallery rendered when empty');
     assert.equal(r.firstByClass('reminisce-frame-seam').textContent, 'No photos yet');
   });
 });
 
-test('reminisce renders a clickable gallery (capped) when the day has photos', () => {
+test('reminisce renders a clickable gallery from the day photos', () => {
   withDom(() => {
-    const day = { ...fullDayFixture(), date: '2026-06-23' }; // the mock-photo demo day
-    const r = renderDay(day, 'reminisce').node;
+    const r = renderDay(fullDayFixture(), 'reminisce').node; // fixture has 3 photos
     const gallery = r.firstByClass('reminisce-gallery');
     assert.ok(gallery, 'gallery present for a day with photos');
     const thumbs = r.byClass('reminisce-photo');
-    assert.equal(thumbs.length, 12, 'gallery is capped at REMINISCE_GALLERY_MAX thumbnails');
+    assert.equal(thumbs.length, 3, 'one thumbnail per authored photo');
     assert.equal(thumbs[0].tagName, 'BUTTON', 'thumbnails are real buttons (focusable)');
-    assert.match(r.firstByClass('reminisce-frame-seam').textContent, /^12 photos$/);
+    assert.match(r.firstByClass('reminisce-frame-seam').textContent, /^3 photos$/);
     // The lightbox mounts on <body> only when opened — it must NOT be inside the view tree.
     assert.equal(r.firstByClass('lightbox'), null, 'lightbox is not pre-mounted inside the day view');
   });
 });
 
+test('reminisce gallery is capped at REMINISCE_GALLERY_MAX thumbnails', () => {
+  withDom(() => {
+    const photos = Array.from({ length: 15 }, (_, i) => ({ url: `https://example.com/${i}.jpg`, alt: `p${i}` }));
+    const r = renderDay({ ...fullDayFixture(), photos }, 'reminisce').node;
+    assert.equal(r.byClass('reminisce-photo').length, 12, 'capped at 12 of the 15 photos');
+    assert.match(r.firstByClass('reminisce-frame-seam').textContent, /^12 photos$/);
+  });
+});
+
 test('reminisce lightbox: tapping a thumbnail mounts it on <body>, Esc closes + restores focus', () => {
   withDom(() => {
-    const day = { ...fullDayFixture(), date: '2026-06-23' };
-    const r = renderDay(day, 'reminisce');
+    const r = renderDay(fullDayFixture(), 'reminisce'); // 3 photos
     const thumb = r.node.byClass('reminisce-photo')[2]; // third photo
     thumb.focus();                                       // the element that "opens" it
     assert.equal(document.body.byClass('lightbox').length, 0, 'nothing mounted before tap');
@@ -1892,7 +1899,7 @@ test('reminisce lightbox: tapping a thumbnail mounts it on <body>, Esc closes + 
     const lb = document.body.firstByClass('lightbox');
     assert.ok(lb, 'lightbox is mounted on <body> when opened (escapes the day-view containing block)');
     assert.equal(lb.hidden, false, 'lightbox is visible');
-    assert.equal(lb.firstByClass('lightbox-counter').textContent, '3 / 12', 'counter opens at the tapped index');
+    assert.equal(lb.firstByClass('lightbox-counter').textContent, '3 / 3', 'counter opens at the tapped index');
 
     document._fire('keydown', { key: 'Escape', preventDefault() {} });
     assert.equal(document.body.byClass('lightbox').length, 0, 'Esc unmounts the lightbox from <body>');
@@ -1902,8 +1909,7 @@ test('reminisce lightbox: tapping a thumbnail mounts it on <body>, Esc closes + 
 
 test('reminisce lightbox: renderDay stop() tears down an open lightbox (no leak across navigation)', () => {
   withDom(() => {
-    const day = { ...fullDayFixture(), date: '2026-06-23' };
-    const r = renderDay(day, 'reminisce');
+    const r = renderDay(fullDayFixture(), 'reminisce');
     r.node.byClass('reminisce-photo')[0]._fire('click');
     assert.equal(document.body.byClass('lightbox').length, 1, 'open before navigation');
     r.stop(); // mountApp calls this before discarding the view
