@@ -720,6 +720,14 @@ export function nearestPrecedingCoords(plan, index, lodging) {
   return null;
 }
 
+/** True if the user has requested reduced motion. Browser-only — false in Node
+ * (no `window`), so build-time callers degrade to the non-animated path. */
+function prefersReducedMotion() {
+  return typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 /** Build the auto-crossfading hero slideshow (or a single static image under
  * reduced-motion / a lone photo). Returns { node, start, stop } so the caller
  * controls the timer lifecycle. */
@@ -739,10 +747,7 @@ function buildHero(photos, framing) {
   }
 
   // Detect reduced-motion at build time; if matched, render one static image.
-  const reduceMotion =
-    typeof window !== 'undefined' &&
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const reduceMotion = prefersReducedMotion();
 
   const slidesToShow = reduceMotion ? valid.slice(0, 1) : valid;
   const slideEls = [];
@@ -1150,10 +1155,7 @@ function buildLightbox(photos, dayLabel) {
   let lastFocused = null;
   let rafPending = false;
 
-  const reduceMotion =
-    typeof window !== 'undefined' &&
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const reduceMotion = prefersReducedMotion();
 
   function setCounter(i) {
     current = i;
@@ -1186,12 +1188,22 @@ function buildLightbox(photos, dayLabel) {
     }
   }
 
-  function close() {
+  let isOpen = false;
+
+  // Shared teardown. `restoreFocus` returns focus to the element that opened the
+  // lightbox — right for a user-driven close, but NOT for navigation teardown
+  // (the originating thumbnail is about to be removed, so let the next view own
+  // focus instead of yanking it to a detached node).
+  function teardown(restoreFocus) {
+    if (!isOpen) { unmount(); return; }
+    isOpen = false;
     overlay.hidden = true;
     document.removeEventListener('keydown', onKey);
     unmount();
-    if (lastFocused && typeof lastFocused.focus === 'function') lastFocused.focus();
+    if (restoreFocus && lastFocused && typeof lastFocused.focus === 'function') lastFocused.focus();
   }
+
+  function close() { teardown(true); }
 
   function onKey(e) {
     if (e.key === 'Escape') { e.preventDefault(); close(); }
@@ -1201,16 +1213,22 @@ function buildLightbox(photos, dayLabel) {
   }
 
   function open(i) {
-    lastFocused = typeof document !== 'undefined' ? document.activeElement : null;
-    // Mount on <body> (not inside the day-view) so the fixed overlay escapes the
-    // day-view's backdrop-filter/overflow containing block and fills the viewport.
-    if (!overlay.parentNode && typeof document !== 'undefined' && document.body) {
-      document.body.appendChild(overlay);
+    // Capture focus origin + mount/listen only on a real open → re-entrant taps
+    // (two thumbnails before the overlay paints) can't clobber lastFocused or
+    // double-register the keydown listener.
+    if (!isOpen) {
+      isOpen = true;
+      lastFocused = typeof document !== 'undefined' ? document.activeElement : null;
+      // Mount on <body> (not inside the day-view) so the fixed overlay escapes the
+      // day-view's backdrop-filter/overflow containing block and fills the viewport.
+      if (!overlay.parentNode && typeof document !== 'undefined' && document.body) {
+        document.body.appendChild(overlay);
+      }
+      document.addEventListener('keydown', onKey);
     }
     overlay.hidden = false;
     setCounter(i);
     scrollToIndex(i, false); // jump to the tapped photo before it's seen
-    document.addEventListener('keydown', onKey);
     closeBtn.focus();
   }
 
@@ -1220,9 +1238,8 @@ function buildLightbox(photos, dayLabel) {
   });
 
   function destroy() {
-    document.removeEventListener('keydown', onKey);
     track.removeEventListener('scroll', onScroll);
-    unmount();
+    teardown(false);
   }
 
   return { node: overlay, open, destroy };

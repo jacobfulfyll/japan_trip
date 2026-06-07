@@ -1679,10 +1679,25 @@ class StubElement {
   }
   setAttribute(name, value) { this.attributes[name] = String(value); }
   getAttribute(name) { return name in this.attributes ? this.attributes[name] : null; }
-  appendChild(child) { this.children.push(child); return child; }
+  appendChild(child) { child.parentNode = this; this.children.push(child); return child; }
+  removeChild(child) {
+    const i = this.children.indexOf(child);
+    if (i >= 0) this.children.splice(i, 1);
+    child.parentNode = null;
+    return child;
+  }
+  focus() { stubDocument.activeElement = this; }
+  scrollTo() {}
+  get clientWidth() { return 0; }
   addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
-  // Test-only helper: fire a registered listener (for the rec-toggle click).
-  _fire(type) { (this.listeners[type] || []).forEach((fn) => fn()); }
+  removeEventListener(type, fn) {
+    const arr = this.listeners[type];
+    if (!arr) return;
+    const i = arr.indexOf(fn);
+    if (i >= 0) arr.splice(i, 1);
+  }
+  // Test-only helper: fire registered listeners (rec-toggle click, lightbox keys).
+  _fire(type, evt) { (this.listeners[type] || []).slice().forEach((fn) => fn(evt)); }
   // Test-only traversal helpers --------------------------------------------
   _all() {
     const out = [];
@@ -1697,7 +1712,19 @@ class StubElement {
 }
 
 const stubDocument = {
+  body: null,
+  activeElement: null,
+  _listeners: {},
   createElement(tag) { return new StubElement(tag); },
+  addEventListener(type, fn) { (this._listeners[type] ||= []).push(fn); },
+  removeEventListener(type, fn) {
+    const arr = this._listeners[type];
+    if (!arr) return;
+    const i = arr.indexOf(fn);
+    if (i >= 0) arr.splice(i, 1);
+  },
+  // Test-only: fire document-level listeners (lightbox keydown).
+  _fire(type, evt) { (this._listeners[type] || []).slice().forEach((fn) => fn(evt)); },
 };
 
 /**
@@ -1709,6 +1736,10 @@ const stubDocument = {
 function withDom(fn, { reduceMotion } = {}) {
   const prevDoc = globalThis.document;
   const prevWin = globalThis.window;
+  // Fresh document state per run so a body-mounted lightbox can't leak across tests.
+  stubDocument.body = new StubElement('body');
+  stubDocument.activeElement = null;
+  stubDocument._listeners = {};
   globalThis.document = stubDocument;
   if (reduceMotion !== undefined) {
     globalThis.window = {
@@ -1846,6 +1877,37 @@ test('reminisce renders a clickable gallery (capped) when the day has photos', (
     assert.match(r.firstByClass('reminisce-frame-seam').textContent, /^12 photos$/);
     // The lightbox mounts on <body> only when opened — it must NOT be inside the view tree.
     assert.equal(r.firstByClass('lightbox'), null, 'lightbox is not pre-mounted inside the day view');
+  });
+});
+
+test('reminisce lightbox: tapping a thumbnail mounts it on <body>, Esc closes + restores focus', () => {
+  withDom(() => {
+    const day = { ...fullDayFixture(), date: '2026-06-23' };
+    const r = renderDay(day, 'reminisce');
+    const thumb = r.node.byClass('reminisce-photo')[2]; // third photo
+    thumb.focus();                                       // the element that "opens" it
+    assert.equal(document.body.byClass('lightbox').length, 0, 'nothing mounted before tap');
+
+    thumb._fire('click');
+    const lb = document.body.firstByClass('lightbox');
+    assert.ok(lb, 'lightbox is mounted on <body> when opened (escapes the day-view containing block)');
+    assert.equal(lb.hidden, false, 'lightbox is visible');
+    assert.equal(lb.firstByClass('lightbox-counter').textContent, '3 / 12', 'counter opens at the tapped index');
+
+    document._fire('keydown', { key: 'Escape', preventDefault() {} });
+    assert.equal(document.body.byClass('lightbox').length, 0, 'Esc unmounts the lightbox from <body>');
+    assert.equal(document.activeElement, thumb, 'focus is restored to the originating thumbnail');
+  });
+});
+
+test('reminisce lightbox: renderDay stop() tears down an open lightbox (no leak across navigation)', () => {
+  withDom(() => {
+    const day = { ...fullDayFixture(), date: '2026-06-23' };
+    const r = renderDay(day, 'reminisce');
+    r.node.byClass('reminisce-photo')[0]._fire('click');
+    assert.equal(document.body.byClass('lightbox').length, 1, 'open before navigation');
+    r.stop(); // mountApp calls this before discarding the view
+    assert.equal(document.body.byClass('lightbox').length, 0, 'stop() removed the body-mounted lightbox');
   });
 });
 
