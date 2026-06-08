@@ -17,8 +17,6 @@ _None._
   files: external (restaurant reservation)
 
 ### Firebase Photo Journal (v2 — after v1)
-- [ ] firebase-project-setup: Console setup — project, Storage/Firestore/Auth, shared account, Blaze + budget [P2] [simple] [tier: sonnet:medium] [depends: data-model-and-scaffold] [manual] [planned]
-  files: external (Firebase console)
 - [ ] auth-password-gate: Password-only landing via one shared account, persistent sessions, auth-gated rules [P2] [moderate] [tier: opus:medium] [depends: firebase-project-setup] [conflicts: photo-upload-flow] [code] [planned]
   files: index.html (MOD), app.js (MOD)
 - [ ] photo-upload-flow: One-tap photo sync (evening-window) → uploads everything since last sync, EXIF-bucketed by day, deduped [P2] [complex] [tier: opus:high] [depends: auth-password-gate, date-time-aware-navigation] [conflicts: auth-password-gate] [code] [planned]

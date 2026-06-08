@@ -2,3 +2,6 @@
 .worktree/
 .claude/
 .reggie/
+
+# Firebase web config — untracked for now (values are not secret; see firebase-project-setup)
+firebase-config.local.js
