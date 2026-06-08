@@ -2,7 +2,18 @@
 
 ## Active Tasks
 
-_None._
+### nav-redesign
+**Task**: Hamburger menu (Home + Add photos) + minimal right-side circular chevrons; exposes the onAddPhotos seam
+**Pipeline**: code-workflow
+**Branch**: task/nav-redesign
+**Worktree**: .worktree/nav-redesign
+**Base**: redesign-reminisce-view
+**Started**: 2026-06-08
+**Files**:
+- MOD: app.js
+- MOD: index.html
+- MOD: sw.js
+- MOD: sw.test.js
 
 ---
 
@@ -18,8 +29,6 @@ _None._
 
 ### Firebase Photo Journal (v2 — after v1)
 <!-- Four-task plan (replaces the old photo-upload-flow + reminisce-photo-gallery). Serial critical path: nav-redesign → firebase-photo-rules → photo-upload-flow → reminisce-gallery-live. Tasks 1/3/4 all touch app.js + index.html (+ sw.js for #4) → run serially, reconciling sw.js CACHE_VERSION to the next free value at each merge. -->
-- [ ] nav-redesign: Hamburger menu (Home + Add photos) + minimal right-side circular chevrons; exposes the onAddPhotos seam [P1] [moderate] [tier: opus:high] [conflicts: photo-upload-flow, reminisce-gallery-live] [code] [planned]
-  files: app.js (MOD), index.html (MOD), sw.js (MOD), sw.test.js (MOD)
 - [ ] firebase-photo-rules: Console — Storage/Firestore rules for trip-photos/** + photos/syncState (authed, size/type caps); confirm no composite index [P1] [simple] [tier: opus:high] [manual] [planned]
   files: external (Firebase console)
 - [ ] photo-upload-flow: One-tap "Add photos" → EXIF-bucketed by day, downscaled, unique overwrite-proof paths, best-effort dedup [P1] [complex] [tier: opus:high] [depends: nav-redesign, firebase-photo-rules] [conflicts: nav-redesign, reminisce-gallery-live] [code] [planned]
