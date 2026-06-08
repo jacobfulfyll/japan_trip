@@ -34,3 +34,4 @@
 - [x] sw-runtime-cache-cap Add a count-based eviction cap (~60 entries) to the SW runtime photo/font cache + eviction test -- 2026-06-03
 - [x] fix-vegan-sushi-jun21 Drop Vegan Sushi Tokyo from Jun 21 dinner recs -- 2026-06-03
 - [x] firebase-project-setup: Console setup — project, Storage/Firestore/Auth, shared account, Blaze + budget -- manual, completed 2026-06-07
+- [x] auth-password-gate Password-only Firebase auth gate (shared account, persistent sessions, offline-safe SDK caching, auth-gated rules) -- 2026-06-07

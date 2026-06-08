@@ -2,18 +2,7 @@
 
 ## Active Tasks
 
-### auth-password-gate
-**Task**: Password-only landing via one shared account, persistent sessions, auth-gated rules
-**Pipeline**: code-workflow
-**Branch**: task/auth-password-gate
-**Worktree**: .worktree/auth-password-gate
-**Base**: redesign-reminisce-view
-**Started**: 2026-06-07
-**Files**:
-- MOD: index.html
-- MOD: app.js
-- NEW: firebase-config.js (tracked, non-secret config — see CONTEXT arch-correction A)
-- MOD: sw.js (cache Firebase SDK for offline boot — see CONTEXT arch-correction B)
+_None._
 
 ---
 
