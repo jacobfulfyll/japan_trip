@@ -2,19 +2,7 @@
 
 ## Active Tasks
 
-### offload-photo-downscale-to-worker
-**Task**: Move image decode/downscale/encode into a Web Worker so bulk uploads don't freeze the UI (+ EXIF-read yield, main-thread fallback)
-**Pipeline**: code-workflow
-**Branch**: task/offload-photo-downscale-to-worker
-**Worktree**: .worktree/offload-photo-downscale-to-worker
-**Base**: main
-**Started**: 2026-06-08
-**Files**:
-- NEW: photo-worker.js
-- MOD: app.js
-- MOD: sw.js
-- MOD: sw.test.js
-- MOD: app.test.js
+_None._
 
 ---
 
