@@ -1164,12 +1164,12 @@
             align-items: center;
             justify-content: center;
             padding: 24px;
-            /* Fully opaque washi wash so no app content peeks through. */
-            background:
-                radial-gradient(circle at 22% 18%, rgba(206, 183, 154, 0.4) 0%, rgba(206, 183, 154, 0) 46%),
-                linear-gradient(155deg, rgba(243, 234, 221, 0.97), rgba(220, 205, 183, 0.97));
-            backdrop-filter: blur(6px);
-            -webkit-backdrop-filter: blur(6px);
+            /* Transparent so the site's Great Wave background (.wave-art /
+               .wave-layer) shows through — the gate is the trip's landing, so it
+               wears the same background as the rest of the app. The app only
+               mounts after auth (and is torn down on sign-out), so #app-root is
+               empty behind the gate — nothing peeks through. */
+            background: transparent;
         }
 
         .login-overlay[hidden] { display: none; }
