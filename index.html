@@ -866,13 +866,13 @@
         .day-nav-group {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 6px;
             grid-column: 3;
             justify-self: end;
         }
 
         /* Shared base for the minimal circular nav buttons (☰ + ‹ ›). Each is a
-           ~34px glyph circle inside a 44px tap target, low-alpha blue border,
+           ~30px glyph circle inside a 44px tap target, low-alpha blue border,
            transparent fill, --brand-mid glyph, faded at rest. */
         .day-nav-btn {
             position: relative;
@@ -882,7 +882,7 @@
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            /* ≥44px transparent tap target (AC4). The visible ~34px circle is
+            /* ≥44px transparent tap target (AC4). The visible ~30px circle is
                drawn by ::before, so the glyph reads as a small circle while the
                pointer/touch hit area stays a full 44px. */
             min-width: 44px;
@@ -896,10 +896,10 @@
             cursor: pointer;
         }
 
-        /* The three nav buttons share the ~34px visual circle (border + rest
+        /* The three nav buttons share the ~30px visual circle (border + rest
            opacity + hover/focus fill), drawn on a centered ::before behind the
            glyph. The button box itself stays 44px (the hit area); only this
-           pseudo-element is 34px (the visible chrome). */
+           pseudo-element is 30px (the visible chrome). */
         .day-nav-hamburger,
         .day-nav-prev,
         .day-nav-next {
@@ -916,8 +916,8 @@
             left: 50%;
             top: 50%;
             transform: translate(-50%, -50%);
-            width: 34px;
-            height: 34px;
+            width: 30px;
+            height: 30px;
             border: 1px solid rgba(18, 98, 143, 0.22);
             border-radius: 999px;
             background: transparent;
@@ -927,12 +927,17 @@
         .day-nav-hamburger {
             grid-column: 1;
             justify-self: start;
-            font-size: 1.05rem;
+        }
+
+        /* Inline hamburger SVG — inherits --brand-mid via stroke:currentColor. */
+        .nav-icon {
+            display: block;
+            color: var(--brand-mid);
         }
 
         .day-nav-prev,
         .day-nav-next {
-            font-size: 1.4rem;
+            font-size: 1.15rem;
             font-weight: 600;
         }
 
@@ -975,7 +980,8 @@
 
         /* --- ☰ popover menu (body-mounted, position:fixed) -------------- */
         .nav-menu {
-            min-width: 180px;
+            position: relative;
+            min-width: 188px;
             padding: 6px;
             background: var(--paper-panel);
             border: 1px solid var(--line);
@@ -990,9 +996,28 @@
 
         .nav-menu[hidden] { display: none; }
 
+        /* Optional upward caret pointing back at the ☰ trigger. Drawn as a
+           rotated square sharing the panel's border + background; positioned
+           near the panel's leading edge (the ☰ sits at the left). */
+        .nav-menu::before {
+            content: "";
+            position: absolute;
+            top: -6px;
+            left: 18px;
+            width: 11px;
+            height: 11px;
+            background: var(--paper-panel);
+            border-left: 1px solid var(--line);
+            border-top: 1px solid var(--line);
+            transform: rotate(45deg);
+        }
+
         .nav-menu-item {
-            display: block;
+            display: flex;
+            align-items: center;
+            gap: 11px;
             width: 100%;
+            min-height: 44px;
             text-align: left;
             font-family: inherit;
             font-size: 1rem;
@@ -1001,9 +1026,24 @@
             background: transparent;
             border: none;
             border-radius: 10px;
-            padding: 10px 14px;
+            padding: 8px 14px;
             cursor: pointer;
             transition: background 0.15s ease;
+        }
+
+        .nav-menu-icon {
+            flex: none;
+            display: block;
+            color: var(--brand-mid);
+        }
+
+        .nav-menu-label { flex: 1 1 auto; }
+
+        /* Hairline divider between rows (role="separator"). */
+        .nav-menu-divider {
+            height: 1px;
+            margin: 3px 10px;
+            background: var(--line);
         }
 
         .nav-menu-item:hover:not(:disabled),
@@ -1382,7 +1422,7 @@
                 padding: 10px 12px;
                 gap: 10px;
             }
-            .day-nav-group { gap: 8px; }
+            .day-nav-group { gap: 4px; }
             .day-nav-pos { font-size: 1.25rem; }
             .evening-prep { padding: 16px; }
             .overview-view { padding: 32px 18px; }

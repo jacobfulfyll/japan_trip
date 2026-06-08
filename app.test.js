@@ -1734,6 +1734,9 @@ const stubDocument = {
   activeElement: null,
   _listeners: {},
   createElement(tag) { return new StubElement(tag); },
+  // SVG nav icons use createElementNS. The stub ignores the namespace; an
+  // element built this way still gets tagName = tag.toUpperCase() (e.g. 'SVG').
+  createElementNS(_ns, tag) { return new StubElement(tag); },
   addEventListener(type, fn) { (this._listeners[type] ||= []).push(fn); },
   removeEventListener(type, fn) {
     const arr = this._listeners[type];
@@ -3393,7 +3396,15 @@ test('day-nav bar renders a ☰ hamburger trigger with menu aria wiring', () => 
         mountApp(root);
         const ham = root.firstByClass('day-nav-hamburger');
         assert.ok(ham, 'hamburger trigger rendered in the day-nav bar');
-        assert.equal(ham.textContent, '☰', 'trigger shows the ☰ glyph');
+        // The Unicode ☰ glyph is replaced by an inline SVG icon. The trigger's
+        // first child must be that SVG (so a button that lost its icon fails),
+        // and the SVG carries the nav-icon class (set via setAttribute, so read
+        // it through getAttribute('class') — the stub's classList does not track
+        // setAttribute-set classes).
+        const icon = ham.children[0];
+        assert.ok(icon, 'trigger has a child icon element');
+        assert.equal(icon.tagName, 'SVG', 'trigger contains an inline <svg> icon');
+        assert.equal(icon.getAttribute('class'), 'nav-icon', 'icon carries the nav-icon class');
         assert.equal(ham.type, 'button', 'trigger has type="button" (no form submit)');
         assert.ok(ham.getAttribute('aria-label'), 'trigger carries an aria-label');
         assert.equal(ham.getAttribute('aria-haspopup'), 'menu', 'trigger advertises a menu popup');
@@ -3643,6 +3654,152 @@ test('☰ menu moves focus to the first enabled row on open and back to ☰ on c
         // Close via Esc (restoreFocus true) → focus returns to ☰.
         stubDocument._fire('keydown', { key: 'Escape', preventDefault() {} });
         assert.equal(stubDocument.activeElement, trigger, 'focus restored to the ☰ trigger on close');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+// ===========================================================================
+// polish-nav-bar: inline-SVG hamburger + iconified menu rows + role=separator
+// divider. These assert the structure buildHamburgerIcon/buildMenuItem/
+// buildNavMenu produce, reached entirely through mountApp (the helpers are not
+// exported). SVG classes are set via setAttribute → read with getAttribute
+// ('class'); the stub's classList does not track setAttribute-set classes.
+// ===========================================================================
+
+test('☰ menu has exactly one role=separator divider, placed BETWEEN Home and Add photos', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root);
+        const menu = openNavMenu(root);
+        const dividers = menu.byClass('nav-menu-divider');
+        assert.equal(dividers.length, 1, 'exactly one divider in the menu');
+        const divider = dividers[0];
+        assert.equal(divider.getAttribute('role'), 'separator', 'divider exposes role=separator');
+        assert.equal(divider.getAttribute('aria-orientation'), 'horizontal',
+          'divider advertises horizontal orientation');
+        // Assert ORDER, not just existence: menu children are [Home, divider, Add].
+        const homeRow = navMenuRow(menu, 'Home');
+        const addRow = navMenuRow(menu, 'Add photos');
+        const kids = menu.children;
+        const iHome = kids.indexOf(homeRow);
+        const iDiv = kids.indexOf(divider);
+        const iAdd = kids.indexOf(addRow);
+        assert.ok(iHome >= 0 && iDiv >= 0 && iAdd >= 0, 'all three nodes are direct menu children');
+        assert.ok(iHome < iDiv && iDiv < iAdd,
+          'divider sits between the Home and Add photos rows in DOM order');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('☰ menu divider is NOT in the focus order — Tab cycles only Home↔Add photos', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        // Both rows enabled (handler + trip started) so the trap has two stops.
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root, { onAddPhotos: () => {} });
+        const trigger = root.firstByClass('day-nav-hamburger');
+        trigger.focus();
+        trigger._fire('click');
+        const menu = stubDocument.body.firstByClass('nav-menu');
+        const homeRow = navMenuRow(menu, 'Home');
+        const addRow = navMenuRow(menu, 'Add photos');
+        const divider = menu.firstByClass('nav-menu-divider');
+        assert.ok(divider, 'precondition: divider present');
+        // Open focuses Home.
+        assert.equal(stubDocument.activeElement, homeRow, 'open focuses Home');
+        // Tab → Add photos (divider skipped), Tab again → wraps to Home.
+        stubDocument._fire('keydown', { key: 'Tab', preventDefault() {} });
+        assert.equal(stubDocument.activeElement, addRow, 'Tab lands on Add photos, not the divider');
+        assert.notEqual(stubDocument.activeElement, divider, 'divider is never focused on Tab');
+        stubDocument._fire('keydown', { key: 'Tab', preventDefault() {} });
+        assert.equal(stubDocument.activeElement, homeRow, 'Tab wraps back to Home (only two focus stops)');
+        // Shift+Tab from Home wraps straight to Add photos (divider still skipped).
+        stubDocument._fire('keydown', { key: 'Tab', shiftKey: true, preventDefault() {} });
+        assert.equal(stubDocument.activeElement, addRow, 'Shift+Tab wraps to Add photos, never the divider');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('☰ menu rows each carry a leading nav-menu-icon SVG plus a nav-menu-label span', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root);
+        const menu = openNavMenu(root);
+        for (const label of ['Home', 'Add photos']) {
+          const row = navMenuRow(menu, label);
+          assert.ok(row, `${label} row present`);
+          // Leading child is the inline SVG icon (set via setAttribute → getAttribute).
+          const icon = row.children[0];
+          assert.ok(icon, `${label} row has a leading child`);
+          assert.equal(icon.tagName, 'SVG', `${label} row leads with an inline <svg> icon`);
+          assert.equal(icon.getAttribute('class'), 'nav-menu-icon',
+            `${label} icon carries the nav-menu-icon class`);
+          // The label lives in its own span (so textContent reads as the label).
+          const labelSpan = row.firstByClass('nav-menu-label');
+          assert.ok(labelSpan, `${label} row has a nav-menu-label span`);
+          assert.equal(labelSpan.textContent, label, `${label} span text matches the row label`);
+        }
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('☰ menu has exactly 2 nav-menu-item rows (divider is not counted as a row); Add derives disabled from addEnabled', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        // No handler → Add photos disabled (addEnabled false) even though trip started.
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root); // single-arg → no onAddPhotos
+        const menu = openNavMenu(root);
+        const rows = menu.byClass('nav-menu-item');
+        assert.equal(rows.length, 2, 'exactly two menu rows — the divider is a separate class');
+        assert.deepEqual(rows.map((r) => r.textContent), ['Home', 'Add photos'],
+          'rows are Home then Add photos');
+        assert.ok(!navMenuRow(menu, 'Home').disabled, 'Home always enabled (disabled is falsy)');
+        assert.equal(navMenuRow(menu, 'Add photos').disabled, true,
+          'Add photos disabled-state still derives from addEnabled (no handler → disabled)');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('☰ hamburger icon is an inline SVG containing exactly 3 LINE bars', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root);
+        const ham = root.firstByClass('day-nav-hamburger');
+        const icon = ham.children[0];
+        assert.ok(icon, 'trigger has a child icon');
+        assert.equal(icon.tagName, 'SVG', 'trigger icon is an inline <svg>');
+        // The three hamburger bars are <line> children (uppercased by the stub).
+        const bars = icon.children.filter((c) => c.tagName === 'LINE');
+        assert.equal(bars.length, 3, 'hamburger SVG draws exactly three bars (guards against a dropped bar)');
       } finally {
         setNow(null);
       }

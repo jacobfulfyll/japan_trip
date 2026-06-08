@@ -581,6 +581,94 @@ function el(tag, className, text) {
   return node;
 }
 
+// ---------------------------------------------------------------------------
+// Inline-SVG helpers (nav-bar icons). SVG elements MUST be created in the SVG
+// namespace via createElementNS — a plain createElement('svg') yields an inert
+// HTML-namespaced element that never renders. The class is set via
+// setAttribute('class', …) because an SVG element's `.className` is a read-only
+// SVGAnimatedString, not a writable string. Icons use stroke:currentColor /
+// fill:none so they inherit --brand-mid from the button.
+// ---------------------------------------------------------------------------
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** Create an SVG-namespaced element and apply a flat attribute map. */
+function svgEl(tag, attrs) {
+  const node = document.createElementNS(SVG_NS, tag);
+  if (attrs) {
+    for (const [name, value] of Object.entries(attrs)) {
+      if (value != null) node.setAttribute(name, String(value));
+    }
+  }
+  return node;
+}
+
+/**
+ * Build a stroke-style `<svg>` icon root on the shared 24×24 viewBox. All icons
+ * are fill:none + stroke:currentColor (inherit --brand-mid from the button),
+ * round caps, decorative (aria-hidden / not focusable). The caller passes only
+ * what varies (class, pixel size, stroke-width, optional stroke-linejoin) and
+ * appends the geometry children.
+ */
+function iconSvg({ className, size, strokeWidth, linejoin }) {
+  return svgEl('svg', {
+    class: className,
+    width: size,
+    height: size,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    'stroke-width': strokeWidth,
+    'stroke-linecap': 'round',
+    'stroke-linejoin': linejoin,
+    'aria-hidden': 'true',
+    focusable: 'false',
+  });
+}
+
+/**
+ * Three evenly-spaced horizontal lines, mathematically centered in a 24×24
+ * viewBox (lines at y = 7 / 12 / 17, x from 4 → 20). Replaces the Unicode ☰
+ * glyph so the hamburger renders identically across iOS/Android.
+ */
+function buildHamburgerIcon() {
+  const svg = iconSvg({ className: 'nav-icon', size: 22, strokeWidth: 2 });
+  for (const y of [7, 12, 17]) {
+    svg.appendChild(svgEl('line', { x1: 4, y1: y, x2: 20, y2: y }));
+  }
+  return svg;
+}
+
+/** Small leading icon for the menu "Home" row — a simple house outline. */
+function menuHomeIcon() {
+  const svg = iconSvg({ className: 'nav-menu-icon', size: 18, strokeWidth: 1.8, linejoin: 'round' });
+  svg.appendChild(svgEl('path', { d: 'M4 11.5 12 4l8 7.5' }));
+  svg.appendChild(svgEl('path', { d: 'M6 10v9h12v-9' }));
+  return svg;
+}
+
+/** Small leading icon for the menu "Add photos" row — a photo/landscape frame. */
+function menuPhotoIcon() {
+  const svg = iconSvg({ className: 'nav-menu-icon', size: 18, strokeWidth: 1.8, linejoin: 'round' });
+  svg.appendChild(svgEl('rect', { x: 3, y: 5, width: 18, height: 14, rx: 2 }));
+  svg.appendChild(svgEl('circle', { cx: 8.5, cy: 10, r: 1.5 }));
+  svg.appendChild(svgEl('path', { d: 'M5 17l4.5-4.5L13 16l3-3 3 3' }));
+  return svg;
+}
+
+/**
+ * Build a `.nav-menu-item` button with a leading icon + a text label span.
+ * Keeps the label in its own `.nav-menu-label` span so `textContent` still
+ * reads cleanly as the label (the SVG contributes no text).
+ */
+function buildMenuItem(text, icon) {
+  const btn = el('button', 'nav-menu-item');
+  btn.type = 'button';
+  btn.setAttribute('role', 'menuitem');
+  if (icon) btn.appendChild(icon);
+  btn.appendChild(el('span', 'nav-menu-label', text));
+  return btn;
+}
+
 /**
  * Return a URL only if it uses an http(s) scheme; otherwise null. Blocks
  * javascript:/data:/etc. so a malicious URL in the data can never become an
@@ -1814,27 +1902,32 @@ function ordinalSuffix(n) {
  * @returns {{ trigger: HTMLElement, destroy: () => void }}
  */
 function buildNavMenu({ onHome, onAddPhotos, addEnabled, currentIso }) {
-  const trigger = el('button', 'day-nav-btn day-nav-hamburger', '☰');
+  const trigger = el('button', 'day-nav-btn day-nav-hamburger');
   trigger.type = 'button';
   trigger.setAttribute('aria-label', 'Menu');
   trigger.setAttribute('aria-haspopup', 'menu');
   trigger.setAttribute('aria-expanded', 'false');
+  trigger.appendChild(buildHamburgerIcon());
 
   const menu = el('div', 'nav-menu');
   menu.hidden = true;
   menu.setAttribute('role', 'menu');
   menu.setAttribute('aria-label', 'Menu');
 
-  const homeRow = el('button', 'nav-menu-item', 'Home');
-  homeRow.type = 'button';
-  homeRow.setAttribute('role', 'menuitem');
+  const homeRow = buildMenuItem('Home', menuHomeIcon());
 
-  const addRow = el('button', 'nav-menu-item', 'Add photos');
-  addRow.type = 'button';
-  addRow.setAttribute('role', 'menuitem');
+  const addRow = buildMenuItem('Add photos', menuPhotoIcon());
   addRow.disabled = !addEnabled;
 
+  // Hairline divider between Home and Add photos. role="separator" is exposed
+  // but it is NOT in focusableItems() (which is keyed by identity), so the
+  // focus trap is unaffected.
+  const divider = el('div', 'nav-menu-divider');
+  divider.setAttribute('role', 'separator');
+  divider.setAttribute('aria-orientation', 'horizontal');
+
   menu.appendChild(homeRow);
+  menu.appendChild(divider);
   menu.appendChild(addRow);
 
   let isOpen = false;
