@@ -2,18 +2,7 @@
 
 ## Active Tasks
 
-### photo-upload-flow
-**Task**: One-tap "Add photos" → EXIF-bucketed by day, downscaled, unique overwrite-proof paths, best-effort dedup
-**Pipeline**: code-workflow
-**Branch**: task/photo-upload-flow
-**Worktree**: .worktree/photo-upload-flow
-**Base**: redesign-reminisce-view
-**Started**: 2026-06-08
-**Files**:
-- MOD: app.js
-- MOD: index.html
-- MOD: sw.js
-- MOD: sw.test.js
+_None._
 
 ---
 
