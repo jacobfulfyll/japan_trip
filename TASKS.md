@@ -2,7 +2,18 @@
 
 ## Active Tasks
 
-_None._
+### exclude-authored-from-reminisce
+**Task**: Reminisce gallery shows uploaded photos only — drop authored/stock photos
+**Pipeline**: code-workflow
+**Branch**: task/exclude-authored-from-reminisce
+**Worktree**: .worktree/exclude-authored-from-reminisce
+**Base**: main
+**Started**: 2026-06-08
+**Files**:
+- MOD: app.js
+- MOD: app.test.js
+- MOD: sw.js
+- MOD: sw.test.js
 
 ---
 
@@ -21,8 +32,6 @@ _None._
 
 ### Photo Journal & Nav Polish (v2.1)
 <!-- v2.1 polish/perf on the shipped photo journal + nav bar. All three touch app.js + bump sw.js CACHE_VERSION → MUTUALLY CONFLICTING; run SERIALLY, reconciling CACHE_VERSION to the next free value at each merge (currently v30 → v31, v32, v33; lockstep: sw.js:23 + sw.test.js:622 title + :625 assert). No two edit the same app.js lines. Merge offload-photo-downscale-to-worker LAST (only one touching the boot/photoService region). Each task also updates the "437 total" test-count claim in CLAUDE.md/README/CHANGELOG. -->
-- [ ] exclude-authored-from-reminisce: Reminisce gallery shows uploaded photos only — drop authored/stock photos (keep them in anticipation/plan hero) [P2] [moderate] [tier: opus:high] [conflicts: offload-photo-downscale-to-worker, polish-nav-bar] [code] [planned]
-  files: app.js (MOD), app.test.js (MOD), sw.js (MOD), sw.test.js (MOD)
 - [ ] polish-nav-bar: Centered inline-SVG hamburger, refined ☰ popover (divider/icons/caret, ≥44px rows), smaller chevrons [P2] [moderate] [tier: opus:high] [conflicts: offload-photo-downscale-to-worker, exclude-authored-from-reminisce] [design] [planned]
   files: app.js (MOD), index.html (MOD), sw.js (MOD), sw.test.js (MOD), app.test.js (MOD)
 
