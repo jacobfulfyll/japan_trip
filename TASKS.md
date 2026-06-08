@@ -2,7 +2,18 @@
 
 ## Active Tasks
 
-_None._
+### photo-upload-flow
+**Task**: One-tap "Add photos" → EXIF-bucketed by day, downscaled, unique overwrite-proof paths, best-effort dedup
+**Pipeline**: code-workflow
+**Branch**: task/photo-upload-flow
+**Worktree**: .worktree/photo-upload-flow
+**Base**: redesign-reminisce-view
+**Started**: 2026-06-08
+**Files**:
+- MOD: app.js
+- MOD: index.html
+- MOD: sw.js
+- MOD: sw.test.js
 
 ---
 
@@ -20,8 +31,6 @@ _None._
 <!-- Four-task plan (replaces the old photo-upload-flow + reminisce-photo-gallery). Serial critical path: nav-redesign → firebase-photo-rules → photo-upload-flow → reminisce-gallery-live. Tasks 1/3/4 all touch app.js + index.html (+ sw.js for #4) → run serially, reconciling sw.js CACHE_VERSION to the next free value at each merge. -->
 - [ ] firebase-photo-rules: Console — Storage/Firestore rules for trip-photos/** + photos/syncState (authed, size/type caps); confirm no composite index [P1] [simple] [tier: opus:high] [manual] [planned]
   files: external (Firebase console)
-- [ ] photo-upload-flow: One-tap "Add photos" → EXIF-bucketed by day, downscaled, unique overwrite-proof paths, best-effort dedup [P1] [complex] [tier: opus:high] [depends: nav-redesign, firebase-photo-rules] [conflicts: nav-redesign, reminisce-gallery-live] [code] [planned]
-  files: app.js (MOD), index.html (MOD), sw.js (MOD), sw.test.js (MOD)
 - [ ] reminisce-gallery-live: Reminisce gallery goes live — merge authored + uploaded photos per day, onSnapshot, offline-cached [P2] [moderate] [tier: opus:high] [depends: photo-upload-flow] [conflicts: nav-redesign, photo-upload-flow] [code] [planned]
   files: app.js (MOD), index.html (MOD), sw.js (MOD), sw.test.js (MOD)
 
