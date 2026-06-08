@@ -845,43 +845,107 @@
             backdrop-filter: blur(6px);
         }
 
+        /* Prev/next chevron group — sits on the trailing (right) edge. */
         .day-nav-group {
             display: flex;
             align-items: center;
-            gap: 18px;
-            grid-column: 2;
-            justify-self: center;
+            gap: 10px;
+            grid-column: 3;
+            justify-self: end;
         }
 
+        /* Shared base for the minimal circular nav buttons (☰ + ‹ ›). Each is a
+           ~34px glyph circle inside a 44px tap target, low-alpha blue border,
+           transparent fill, --brand-mid glyph, faded at rest. */
         .day-nav-btn {
-            font-family: inherit;
-            font-size: 0.95rem;
-            font-weight: 600;
-            color: var(--brand-deep);
-            background: var(--paper-btn);
-            border: 1px solid var(--line);
-            border-radius: 999px;
-            padding: 8px 16px;
-            cursor: pointer;
-            transition: background 0.18s ease, transform 0.18s ease, opacity 0.18s ease;
-        }
-
-        .day-nav-btn:hover:not(:disabled) { background: var(--card-solid); transform: translateY(-1px); }
-        .day-nav-btn:focus-visible { outline: 2px solid var(--brand-mid); outline-offset: 2px; }
-        .day-nav-btn:disabled { opacity: 0.4; cursor: default; }
-
-        /* Icon-only Home button — 44pt minimum tap target (HIG). Sits leading
-           of Prev with a subtle separator gap so it reads as a distinct action. */
-        .day-nav-home {
+            position: relative;
+            /* Contain the ::before stacking context so its negative z-index
+               drops the circle behind the glyph but NOT behind the nav bar. */
+            isolation: isolate;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            /* ≥44px transparent tap target (AC4). The visible ~34px circle is
+               drawn by ::before, so the glyph reads as a small circle while the
+               pointer/touch hit area stays a full 44px. */
             min-width: 44px;
             min-height: 44px;
-            padding: 8px 12px;
-            font-size: 1.1rem;
+            padding: 0;
+            font-family: inherit;
             line-height: 1;
-            justify-self: start;
+            color: var(--brand-mid);
+            background: transparent;
+            border: none;
+            cursor: pointer;
         }
 
+        /* The three nav buttons share the ~34px visual circle (border + rest
+           opacity + hover/focus fill), drawn on a centered ::before behind the
+           glyph. The button box itself stays 44px (the hit area); only this
+           pseudo-element is 34px (the visible chrome). */
+        .day-nav-hamburger,
+        .day-nav-prev,
+        .day-nav-next {
+            opacity: 0.65;
+            transition: opacity 0.18s ease;
+        }
+
+        .day-nav-hamburger::before,
+        .day-nav-prev::before,
+        .day-nav-next::before {
+            content: "";
+            position: absolute;
+            z-index: -1;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 34px;
+            height: 34px;
+            border: 1px solid rgba(18, 98, 143, 0.22);
+            border-radius: 999px;
+            background: transparent;
+            transition: background 0.18s ease, border-color 0.18s ease;
+        }
+
+        .day-nav-hamburger {
+            grid-column: 1;
+            justify-self: start;
+            font-size: 1.05rem;
+        }
+
+        .day-nav-prev,
+        .day-nav-next {
+            font-size: 1.4rem;
+            font-weight: 600;
+        }
+
+        .day-nav-hamburger:hover:not(:disabled),
+        .day-nav-hamburger:focus-visible,
+        .day-nav-prev:hover:not(:disabled),
+        .day-nav-prev:focus-visible,
+        .day-nav-next:hover:not(:disabled),
+        .day-nav-next:focus-visible {
+            opacity: 1;
+        }
+
+        /* Faint blue fill + brighter border on the visible circle (::before)
+           when the 44px button is hovered/keyboard-focused. */
+        .day-nav-hamburger:hover:not(:disabled)::before,
+        .day-nav-hamburger:focus-visible::before,
+        .day-nav-prev:hover:not(:disabled)::before,
+        .day-nav-prev:focus-visible::before,
+        .day-nav-next:hover:not(:disabled)::before,
+        .day-nav-next:focus-visible::before {
+            background: rgba(18, 98, 143, 0.08);
+            border-color: rgba(18, 98, 143, 0.4);
+        }
+
+        .day-nav-btn:focus-visible { outline: 2px solid var(--brand-mid); outline-offset: 2px; }
+        .day-nav-prev:disabled,
+        .day-nav-next:disabled { opacity: 0.3; cursor: default; }
+
         .day-nav-pos {
+            grid-column: 2;
             font-family: "Playfair Display", "Georgia", serif;
             font-size: 1.5rem;
             font-weight: 600;
@@ -892,10 +956,46 @@
             white-space: nowrap;
         }
 
-        .day-nav-btn .day-nav-arrow { display: inline; }
-        .day-nav-btn .day-nav-text { display: inline; }
-        .day-nav-prev .day-nav-arrow { margin-right: 6px; }
-        .day-nav-next .day-nav-arrow { margin-left: 6px; }
+        /* --- ☰ popover menu (body-mounted, position:fixed) -------------- */
+        .nav-menu {
+            min-width: 180px;
+            padding: 6px;
+            background: var(--paper-panel);
+            border: 1px solid var(--line);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-lg);
+            backdrop-filter: blur(6px);
+            z-index: 50;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .nav-menu[hidden] { display: none; }
+
+        .nav-menu-item {
+            display: block;
+            width: 100%;
+            text-align: left;
+            font-family: inherit;
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--brand-deep);
+            background: transparent;
+            border: none;
+            border-radius: 10px;
+            padding: 10px 14px;
+            cursor: pointer;
+            transition: background 0.15s ease;
+        }
+
+        .nav-menu-item:hover:not(:disabled),
+        .nav-menu-item:focus-visible {
+            background: rgba(18, 98, 143, 0.1);
+        }
+
+        .nav-menu-item:focus-visible { outline: 2px solid var(--brand-mid); outline-offset: -2px; }
+        .nav-menu-item:disabled { opacity: 0.4; cursor: default; }
 
         /* --- Evening "Prep for tomorrow" -------------------------------- */
         .evening-prep {
@@ -1136,19 +1236,11 @@
             .reminisce-empty-note { margin: 14px 16px 0; }
             .day-screen { gap: 10px; }
             .day-nav {
-                padding: 10px;
-                gap: 8px;
-                grid-template-columns: auto auto 1fr auto;
+                padding: 10px 12px;
+                gap: 10px;
             }
-            .day-nav-group { display: contents; }
-            .day-nav-home { grid-column: 1; min-width: 40px; min-height: 40px; padding: 6px 10px; font-size: 1.05rem; }
-            .day-nav-prev { grid-column: 2; justify-self: start; }
-            .day-nav-pos { grid-column: 3; font-size: 1.1rem; }
-            .day-nav-next { grid-column: 4; justify-self: end; }
-            .day-nav-btn { padding: 8px 12px; font-size: 1rem; font-weight: 700; }
-            .day-nav-btn .day-nav-text { display: none; }
-            .day-nav-prev .day-nav-arrow,
-            .day-nav-next .day-nav-arrow { margin: 0; }
+            .day-nav-group { gap: 8px; }
+            .day-nav-pos { font-size: 1.25rem; }
             .evening-prep { padding: 16px; }
             .overview-view { padding: 32px 18px; }
             .day-index-row { padding: 11px 12px; gap: 10px; grid-template-columns: minmax(68px, auto) 1fr auto; }

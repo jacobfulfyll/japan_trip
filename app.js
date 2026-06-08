@@ -512,6 +512,20 @@ export function pickLandingView(now = getNow()) {
   return { view: 'day', day: today, framing: frameForDay(todayIso, now) };
 }
 
+/**
+ * True once the trip has started (today is on or after TRIP.start, by local
+ * calendar day). Reads "now" only through getNow(). Gates the ☰ menu's "Add
+ * photos" row — disabled before the trip starts. Unparseable clock/start → false
+ * (fail closed).
+ * @param {Date} [now]
+ * @returns {boolean}
+ */
+function tripHasStarted(now = getNow()) {
+  const todayIso = localISODate(now);
+  const toStart = dayDelta(todayIso, getTrip().start); // >0 ⇒ trip is in the future
+  return toStart != null && toStart <= 0;
+}
+
 // ---------------------------------------------------------------------------
 // Geo helper (pure, exported for unit tests)
 // ---------------------------------------------------------------------------
@@ -1562,11 +1576,20 @@ export function renderOverview(daysUntil, onEnter) {
 // timer before mounting a new one (no orphaned intervals).
 let activeDayView = null;
 
-/** Stop + forget the active day-view (its slideshow timer). */
+// Tracks the live nav-bar's ☰ menu teardown so a re-render closes an open
+// popover + removes its global scroll/resize/key/outside-click listeners before
+// the nav DOM is wiped (no orphaned listeners after navigation).
+let activeNavMenuDestroy = null;
+
+/** Stop + forget the active day-view (its slideshow timer + open nav menu). */
 function stopActiveDayView() {
   if (activeDayView) {
     activeDayView.stop();
     activeDayView = null;
+  }
+  if (typeof activeNavMenuDestroy === 'function') {
+    activeNavMenuDestroy();
+    activeNavMenuDestroy = null;
   }
 }
 
@@ -1600,50 +1623,202 @@ function ordinalSuffix(n) {
 }
 
 /**
- * Build the prev/next navigation bar for the day at `index` in `dates`.
- * Buttons are clamped to the window ends. `onGo(index)` navigates.
- * `onHome()` returns to the trip overview; if omitted, the Home button is not rendered.
+ * Build the ☰ hamburger trigger + its body-mounted popover menu.
+ *
+ * The popover is mounted on `document.body` (NOT inside the nav) so it escapes
+ * the `.day-nav` `backdrop-filter` containing block, which would otherwise
+ * clip/mis-stack a fixed child. It is positioned from the trigger's bounding
+ * rect (browser-only — guarded so the Node test stub never throws). Mirrors
+ * buildLightbox's open/teardown/focus-trap pattern: focus moves into the menu
+ * on open and returns to ☰ on close; closes on Esc, outside-click, item
+ * activation, page scroll, and resize (a fixed popover detaches from ☰ when the
+ * page scrolls or the viewport resizes).
+ *
+ * Rows: "Home" → onHome(); "Add photos" → onAddPhotos(currentIso). The Add
+ * photos row is disabled when `addEnabled` is false (no handler / before the
+ * trip starts).
+ *
+ * @returns {{ trigger: HTMLElement, destroy: () => void }}
  */
-function buildNavBar(dates, index, onGo, onHome) {
+function buildNavMenu({ onHome, onAddPhotos, addEnabled, currentIso }) {
+  const trigger = el('button', 'day-nav-btn day-nav-hamburger', '☰');
+  trigger.type = 'button';
+  trigger.setAttribute('aria-label', 'Menu');
+  trigger.setAttribute('aria-haspopup', 'menu');
+  trigger.setAttribute('aria-expanded', 'false');
+
+  const menu = el('div', 'nav-menu');
+  menu.hidden = true;
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', 'Menu');
+
+  const homeRow = el('button', 'nav-menu-item', 'Home');
+  homeRow.type = 'button';
+  homeRow.setAttribute('role', 'menuitem');
+
+  const addRow = el('button', 'nav-menu-item', 'Add photos');
+  addRow.type = 'button';
+  addRow.setAttribute('role', 'menuitem');
+  addRow.disabled = !addEnabled;
+
+  menu.appendChild(homeRow);
+  menu.appendChild(addRow);
+
+  let isOpen = false;
+  let lastFocused = null;
+
+  function position() {
+    // Browser-only — the Node test stub has no getBoundingClientRect. Skip
+    // positioning there (open/close/rows logic still works without layout).
+    if (typeof trigger.getBoundingClientRect !== 'function') return;
+    const r = trigger.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.top = `${Math.round(r.bottom + 8)}px`;
+    menu.style.left = `${Math.round(r.left)}px`;
+  }
+
+  function focusableItems() {
+    return [homeRow, addRow].filter((b) => !b.disabled);
+  }
+
+  function onKey(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+    } else if (e.key === 'Tab') {
+      // Trap focus within the (1–2) enabled rows.
+      e.preventDefault();
+      const items = focusableItems();
+      if (!items.length) return;
+      const active = typeof document !== 'undefined' ? document.activeElement : null;
+      const i = items.indexOf(active);
+      const nextIdx = e.shiftKey
+        ? (i <= 0 ? items.length - 1 : i - 1)
+        : (i < 0 || i >= items.length - 1 ? 0 : i + 1);
+      items[nextIdx].focus();
+    }
+  }
+
+  function onOutside(e) {
+    if (e.target === trigger || trigger.contains?.(e.target)) return;
+    if (e.target === menu || menu.contains?.(e.target)) return;
+    close();
+  }
+
+  // A fixed popover positioned from the trigger rect detaches from ☰ on
+  // scroll/resize → close it rather than letting it float out of place.
+  function onReposition() {
+    close();
+  }
+
+  function open() {
+    if (isOpen) return;
+    isOpen = true;
+    lastFocused = typeof document !== 'undefined' ? document.activeElement : null;
+    if (!menu.parentNode && typeof document !== 'undefined' && document.body) {
+      document.body.appendChild(menu);
+    }
+    menu.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+    position();
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('click', onOutside, true);
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('scroll', onReposition, true);
+      window.addEventListener('resize', onReposition);
+    }
+    const items = focusableItems();
+    (items[0] ?? homeRow).focus();
+  }
+
+  function close(restoreFocus = true) {
+    if (!isOpen) return;
+    isOpen = false;
+    menu.hidden = true;
+    trigger.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('keydown', onKey);
+    document.removeEventListener('click', onOutside, true);
+    if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+      window.removeEventListener('scroll', onReposition, true);
+      window.removeEventListener('resize', onReposition);
+    }
+    if (menu.parentNode && typeof menu.parentNode.removeChild === 'function') {
+      menu.parentNode.removeChild(menu);
+    }
+    if (restoreFocus && lastFocused && typeof lastFocused.focus === 'function') {
+      lastFocused.focus();
+    }
+  }
+
+  trigger.addEventListener('click', () => {
+    if (isOpen) close();
+    else open();
+  });
+
+  homeRow.addEventListener('click', () => {
+    close(false);
+    if (typeof onHome === 'function') onHome();
+  });
+
+  addRow.addEventListener('click', () => {
+    if (addRow.disabled) return;
+    close(false);
+    if (typeof onAddPhotos === 'function') onAddPhotos(currentIso);
+  });
+
+  function destroy() {
+    close(false);
+  }
+
+  return { trigger, destroy };
+}
+
+/**
+ * Build the day navigation bar for the day at `index` in `dates`.
+ * Layout (grid `1fr auto 1fr`): ☰ hamburger left, centered day label, prev/next
+ * chevron circles right. Buttons are clamped to the window ends. `onGo(index)`
+ * navigates. `onHome()` returns to the trip overview. `onAddPhotos(iso)` (when
+ * provided + the trip has started) is the Add-photos seam in the ☰ menu.
+ *
+ * The ☰ menu is always rendered (it carries Home, which replaces the old
+ * top-left 🏠 button); the returned nav owns a `_destroyMenu` hook so the caller
+ * can tear down the popover + its global listeners on unmount.
+ */
+function buildNavBar(dates, index, onGo, onHome, onAddPhotos) {
   const nav = el('nav', 'day-nav');
   nav.setAttribute('aria-label', 'Day navigation');
 
-  let home = null;
-  if (typeof onHome === 'function') {
-    home = el('button', 'day-nav-btn day-nav-home', '🏠');
-    home.type = 'button';
-    home.setAttribute('aria-label', 'Trip overview');
-    home.addEventListener('click', () => onHome());
-  }
+  const iso = dates[index];
 
-  const prev = el('button', 'day-nav-btn day-nav-prev');
-  prev.type = 'button';
-  prev.disabled = index <= 0;
-  prev.setAttribute('aria-label', 'Previous day');
-  prev.appendChild(el('span', 'day-nav-arrow', '←'));
-  prev.appendChild(el('span', 'day-nav-text', 'Prev'));
-  prev.addEventListener('click', () => onGo(index - 1));
-
-  const next = el('button', 'day-nav-btn day-nav-next');
-  next.type = 'button';
-  next.disabled = index >= dates.length - 1;
-  next.setAttribute('aria-label', 'Next day');
-  next.appendChild(el('span', 'day-nav-text', 'Next'));
-  next.appendChild(el('span', 'day-nav-arrow', '→'));
-  next.addEventListener('click', () => onGo(index + 1));
+  // ☰ menu (leading child) — carries Home + Add photos.
+  const addEnabled = typeof onAddPhotos === 'function' && tripHasStarted();
+  const navMenu = buildNavMenu({ onHome, onAddPhotos, addEnabled, currentIso: iso });
+  nav._destroyMenu = navMenu.destroy;
 
   // Position label (e.g. "June 24th - Day 9") — derived, never authored.
-  const iso = dates[index];
   const dayObj = getDay(iso);
   const num = dayObj?.dayNumber ?? deriveDayNumber(iso);
   const label = el('span', 'day-nav-pos', formatNavLabel(iso, num));
 
+  // Prev/next — bare-glyph circular chevrons on the right.
+  const prev = el('button', 'day-nav-btn day-nav-prev', '‹');
+  prev.type = 'button';
+  prev.disabled = index <= 0;
+  prev.setAttribute('aria-label', 'Previous day');
+  prev.addEventListener('click', () => onGo(index - 1));
+
+  const next = el('button', 'day-nav-btn day-nav-next', '›');
+  next.type = 'button';
+  next.disabled = index >= dates.length - 1;
+  next.setAttribute('aria-label', 'Next day');
+  next.addEventListener('click', () => onGo(index + 1));
+
   const group = el('div', 'day-nav-group');
   group.appendChild(prev);
-  group.appendChild(label);
   group.appendChild(next);
 
-  if (home) nav.appendChild(home);
+  nav.appendChild(navMenu.trigger);
+  nav.appendChild(label);
   nav.appendChild(group);
   return nav;
 }
@@ -1702,7 +1877,7 @@ function scrollToTop() {
  * today's day — "tomorrow" is meaningful only relative to the actual current
  * day, so paging to a past/future day (or previewing pre-trip) hides it.
  */
-function mountDayAt(rootEl, dates, index, navigate, onHome) {
+function mountDayAt(rootEl, dates, index, navigate, onHome, onAddPhotos) {
   stopActiveDayView();
   rootEl.textContent = ''; // clear without innerHTML
   scrollToTop();
@@ -1714,7 +1889,9 @@ function mountDayAt(rootEl, dates, index, navigate, onHome) {
 
   const shell = el('div', 'day-screen');
 
-  shell.appendChild(buildNavBar(dates, index, navigate, onHome));
+  const nav = buildNavBar(dates, index, navigate, onHome, onAddPhotos);
+  activeNavMenuDestroy = nav._destroyMenu ?? null;
+  shell.appendChild(nav);
 
   const view = renderDay(day, framing);
   shell.appendChild(view.node);
@@ -1734,20 +1911,24 @@ function mountDayAt(rootEl, dates, index, navigate, onHome) {
  * from the clock. Returns a small controller ({ go, toIso, toOverview, destroy })
  * so the UI is testable and a future caller can drive it.
  * @param {HTMLElement} rootEl
+ * @param {{ onAddPhotos?: (iso: string) => void }} [opts] optional handlers.
+ *   `onAddPhotos(iso)` powers the ☰ menu's "Add photos" row (the seam a future
+ *   Firebase upload task wires); omitted → the row renders disabled.
  * @returns {{go:(i:number)=>void, toIso:(iso:string)=>void, toOverview:()=>void, destroy:()=>void} | undefined}
  */
-export function mountApp(rootEl) {
+export function mountApp(rootEl, opts = {}) {
   if (!rootEl) {
     console.warn('[app] mountApp called without a root element.');
     return undefined;
   }
 
+  const { onAddPhotos } = opts;
   const dates = tripWindowDates();
 
   const clampIndex = (i) => Math.max(0, Math.min(dates.length - 1, i));
   // Forward declarations so the inner navigators can reference each other.
   const navigate = (i) =>
-    mountDayAt(rootEl, dates, clampIndex(i), navigate, mountOverview);
+    mountDayAt(rootEl, dates, clampIndex(i), navigate, mountOverview, onAddPhotos);
   const toIso = (iso) => {
     const i = dates.indexOf(iso);
     if (i >= 0) navigate(i);

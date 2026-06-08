@@ -2926,19 +2926,41 @@ test('mountApp controller exposes toOverview() alongside go/toIso/destroy', () =
   });
 });
 
-test('day-nav bar renders a Home button (🏠) with the "Trip overview" aria-label', () => {
+// --- nav-redesign: the old top-left 🏠 button is now a ☰ hamburger menu. The
+// Home action moved into a body-mounted popover the ☰ trigger toggles; prev/next
+// are bare-glyph chevrons on the right. The blocks below assert the ☰ trigger,
+// the nav child order, and that the menu's "Home" row still reaches the overview.
+
+/** Open the day-nav ☰ menu by firing the hamburger trigger's click, returning
+ *  the body-mounted .nav-menu element. Asserts the menu opened. */
+function openNavMenu(root) {
+  const trigger = root.firstByClass('day-nav-hamburger');
+  assert.ok(trigger, 'precondition: hamburger trigger present');
+  trigger._fire('click');
+  const menu = stubDocument.body.firstByClass('nav-menu');
+  assert.ok(menu, 'menu mounted on document.body after ☰ click');
+  return menu;
+}
+
+/** Find a nav-menu-item row by its label ('Home' / 'Add photos'). */
+function navMenuRow(menu, label) {
+  return menu.byClass('nav-menu-item').find((b) => b.textContent === label) ?? null;
+}
+
+test('day-nav bar renders a ☰ hamburger trigger with menu aria wiring', () => {
   withDom(() => {
     withTimerSpies(() => {
       try {
         setNow(() => localDate(2026, 5, 24, 12, 0));
         const root = makeRoot();
         mountApp(root);
-        const home = root.firstByClass('day-nav-home');
-        assert.ok(home, 'home button rendered in the day-nav bar');
-        assert.equal(home.textContent, '🏠', 'home button shows the 🏠 icon');
-        assert.equal(home.getAttribute('aria-label'), 'Trip overview',
-          'home button is labeled for screen readers');
-        assert.equal(home.type, 'button', 'home button has type="button" (no form submit)');
+        const ham = root.firstByClass('day-nav-hamburger');
+        assert.ok(ham, 'hamburger trigger rendered in the day-nav bar');
+        assert.equal(ham.textContent, '☰', 'trigger shows the ☰ glyph');
+        assert.equal(ham.type, 'button', 'trigger has type="button" (no form submit)');
+        assert.ok(ham.getAttribute('aria-label'), 'trigger carries an aria-label');
+        assert.equal(ham.getAttribute('aria-haspopup'), 'menu', 'trigger advertises a menu popup');
+        assert.equal(ham.getAttribute('aria-expanded'), 'false', 'collapsed at rest');
       } finally {
         setNow(null);
       }
@@ -2946,7 +2968,7 @@ test('day-nav bar renders a Home button (🏠) with the "Trip overview" aria-lab
   });
 });
 
-test('Home button is the LEADING child of the day-nav bar (before Prev)', () => {
+test('☰ hamburger is the LEADING child of the day-nav bar (label then prev/next group)', () => {
   withDom(() => {
     withTimerSpies(() => {
       try {
@@ -2954,13 +2976,17 @@ test('Home button is the LEADING child of the day-nav bar (before Prev)', () => 
         const root = makeRoot();
         mountApp(root);
         const nav = root.firstByClass('day-nav');
-        // Children order: home, group(prev, label, next).
-        assert.ok(nav.children[0]._classList.contains('day-nav-home'),
-          'first nav child is the Home button');
-        assert.ok(nav.children[1]._classList.contains('day-nav-group'),
-          'second nav child is the prev/label/next group');
-        assert.ok(nav.children[1].children[0]._classList.contains('day-nav-prev'),
-          'group leads with the Prev button');
+        // Children order: [0] ☰ trigger, [1] position label, [2] prev/next group.
+        assert.ok(nav.children[0]._classList.contains('day-nav-hamburger'),
+          'first nav child is the ☰ hamburger trigger');
+        assert.ok(nav.children[1]._classList.contains('day-nav-pos'),
+          'second nav child is the position label');
+        assert.ok(nav.children[2]._classList.contains('day-nav-group'),
+          'third nav child is the prev/next group');
+        assert.ok(nav.children[2].children[0]._classList.contains('day-nav-prev'),
+          'group leads with the Prev chevron');
+        assert.ok(nav.children[2].children[1]._classList.contains('day-nav-next'),
+          'group ends with the Next chevron');
       } finally {
         setNow(null);
       }
@@ -2968,7 +2994,7 @@ test('Home button is the LEADING child of the day-nav bar (before Prev)', () => 
   });
 });
 
-test('Home button click replaces the day view with the overview (no day-nav chrome remains)', () => {
+test('☰ menu Home row replaces the day view with the overview (no day-nav chrome remains)', () => {
   withDom(() => {
     withTimerSpies(() => {
       try {
@@ -2976,8 +3002,9 @@ test('Home button click replaces the day view with the overview (no day-nav chro
         const root = makeRoot();
         mountApp(root);
         assert.ok(root.firstByClass('day-nav'), 'precondition: day-nav present');
-        // Click Home → overview takes over.
-        root.firstByClass('day-nav-home')._fire('click');
+        // Open the ☰ menu, then activate the Home row → overview takes over.
+        const menu = openNavMenu(root);
+        navMenuRow(menu, 'Home')._fire('click');
         assert.equal(root.firstByClass('day-nav'), null, 'day-nav removed');
         assert.ok(root.firstByClass('overview-view'), 'overview mounted');
         // Mid-trip overview shows "The adventure is underway." (no countdown num).
@@ -2990,15 +3017,16 @@ test('Home button click replaces the day view with the overview (no day-nav chro
   });
 });
 
-test('round-trip: Home → overview → tap a day-index row → that day view loads', () => {
+test('round-trip: ☰ Home → overview → tap a day-index row → that day view loads', () => {
   withDom(() => {
     withTimerSpies(() => {
       try {
         setNow(() => localDate(2026, 5, 24, 12, 0)); // start on Day 9
         const root = makeRoot();
         mountApp(root);
-        // Go home.
-        root.firstByClass('day-nav-home')._fire('click');
+        // Open the ☰ menu and go Home.
+        const menu = openNavMenu(root);
+        navMenuRow(menu, 'Home')._fire('click');
         assert.ok(root.firstByClass('overview-view'), 'on overview');
         // Tap a day-index row (rows are appended in tripWindowDates order:
         // 18 rows, Jun 16 → Jul 3 → Jun 25 = index 9 = Day 10).
@@ -3033,7 +3061,7 @@ test('toOverview() is callable as a programmatic API (same effect as the Home bu
   });
 });
 
-test('Home button works on the (now-authored) Hakone leg day-view', () => {
+test('☰ menu Home row works on the (now-authored) Hakone leg day-view', () => {
   withDom(() => {
     withTimerSpies(() => {
       try {
@@ -3042,9 +3070,8 @@ test('Home button works on the (now-authored) Hakone leg day-view', () => {
         const ctl = mountApp(root);
         ctl.toIso('2026-06-22'); // a now-authored Hakone day (was the unauthored leg)
         assert.ok(root.firstByClass('day-nav'), 'day-nav present on the day-view');
-        const home = root.firstByClass('day-nav-home');
-        assert.ok(home, 'home button present on the day-view');
-        home._fire('click');
+        const menu = openNavMenu(root);
+        navMenuRow(menu, 'Home')._fire('click');
         assert.ok(root.firstByClass('overview-view'), 'overview reachable from the day-view');
       } finally {
         setNow(null);
@@ -3053,7 +3080,7 @@ test('Home button works on the (now-authored) Hakone leg day-view', () => {
   });
 });
 
-test('Home button is rendered on EVERY framing (anticipation / plan / reminisce)', () => {
+test('☰ hamburger is rendered on EVERY framing (anticipation / plan / reminisce)', () => {
   withDom(() => {
     withTimerSpies(() => {
       try {
@@ -3062,19 +3089,18 @@ test('Home button is rendered on EVERY framing (anticipation / plan / reminisce)
         let root = makeRoot();
         let ctl = mountApp(root);
         ctl.toIso('2026-06-27'); // future
-        assert.ok(root.firstByClass('day-nav-home'), 'home button present in anticipation framing');
+        assert.ok(root.firstByClass('day-nav-hamburger'), 'hamburger present in anticipation framing');
 
         // plan: today
         root = makeRoot();
         mountApp(root);
-        assert.ok(root.firstByClass('day-nav-home'), 'home button present in plan framing');
+        assert.ok(root.firstByClass('day-nav-hamburger'), 'hamburger present in plan framing');
 
         // reminisce: past
-        ctl = mountApp(makeRoot()); // throwaway
         root = makeRoot();
         ctl = mountApp(root);
         ctl.toIso('2026-06-20'); // before today
-        assert.ok(root.firstByClass('day-nav-home'), 'home button present in reminisce framing');
+        assert.ok(root.firstByClass('day-nav-hamburger'), 'hamburger present in reminisce framing');
       } finally {
         setNow(null);
       }
@@ -3082,7 +3108,7 @@ test('Home button is rendered on EVERY framing (anticipation / plan / reminisce)
   });
 });
 
-test('pre-trip overview (boot-time) has no day-nav and no Home button (overview IS home)', () => {
+test('pre-trip overview (boot-time) has no day-nav and no ☰ hamburger (overview IS home)', () => {
   withDom(() => {
     withTimerSpies(() => {
       try {
@@ -3091,7 +3117,449 @@ test('pre-trip overview (boot-time) has no day-nav and no Home button (overview 
         mountApp(root);
         assert.ok(root.firstByClass('overview-view'), 'overview mounted');
         assert.equal(root.firstByClass('day-nav'), null, 'no day-nav on the overview');
-        assert.equal(root.firstByClass('day-nav-home'), null, 'no Home button on the overview itself');
+        // The old top-left Home button class no longer exists; assert both the
+        // legacy class and the new hamburger are absent on the overview itself.
+        assert.equal(root.firstByClass('day-nav-home'), null, 'no legacy Home button on the overview');
+        assert.equal(root.firstByClass('day-nav-hamburger'), null, 'no ☰ hamburger on the overview itself');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+// ===========================================================================
+// nav-redesign: ☰ hamburger menu behaviors (open/close/focus/rows).
+//
+// The popover mounts on document.body (NOT inside the nav) so the menu element
+// is read via stubDocument.body.firstByClass('nav-menu'). withDom gives a fresh
+// stubDocument.body + cleared document._listeners per run, so document-level
+// keydown/click listeners (Esc / outside-click) are driven via
+// stubDocument._fire('keydown'|'click', evt). Focus is reflected by
+// stubDocument.activeElement (StubElement.focus sets it).
+//
+// NOTE: window scroll/resize close is BROWSER-ONLY — `window` is undefined in
+// the Node stub, so buildNavMenu's window.addEventListener guard skips wiring
+// those listeners here. That path is covered by the real-browser VERIFY-APP
+// stage, not these unit tests.
+// ===========================================================================
+
+test('☰ menu starts CLOSED — no body-mounted .nav-menu until the trigger is clicked', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root);
+        assert.equal(stubDocument.body.firstByClass('nav-menu'), null,
+          'no menu on document.body before the ☰ is clicked');
+        assert.equal(root.firstByClass('day-nav-hamburger').getAttribute('aria-expanded'), 'false',
+          'trigger reports collapsed');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('☰ click OPENS the menu — body-mounted, visible, with Home + Add photos rows', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root);
+        const trigger = root.firstByClass('day-nav-hamburger');
+        trigger._fire('click');
+        const menu = stubDocument.body.firstByClass('nav-menu');
+        assert.ok(menu, 'menu mounted on document.body');
+        assert.equal(menu.hidden, false, 'menu is not hidden when open');
+        assert.equal(menu.getAttribute('role'), 'menu', 'menu has role="menu"');
+        assert.equal(trigger.getAttribute('aria-expanded'), 'true', 'trigger reports expanded');
+        const rows = menu.byClass('nav-menu-item');
+        assert.equal(rows.length, 2, 'two menu rows');
+        assert.deepEqual(rows.map((r) => r.textContent), ['Home', 'Add photos'],
+          'rows are Home then Add photos');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('☰ menu moves focus to the first enabled row on open and back to ☰ on close', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        // Mid-trip WITH an onAddPhotos handler → both rows enabled, first focusable is Home.
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root, { onAddPhotos: () => {} });
+        const trigger = root.firstByClass('day-nav-hamburger');
+        // A real click focuses the button; the stub's _fire does not, so mirror
+        // that here — open() snapshots document.activeElement as the restore target.
+        trigger.focus();
+        trigger._fire('click');
+        const menu = stubDocument.body.firstByClass('nav-menu');
+        const homeRow = navMenuRow(menu, 'Home');
+        assert.equal(stubDocument.activeElement, homeRow, 'focus moved to the first (Home) row on open');
+        // Close via Esc (restoreFocus true) → focus returns to ☰.
+        stubDocument._fire('keydown', { key: 'Escape', preventDefault() {} });
+        assert.equal(stubDocument.activeElement, trigger, 'focus restored to the ☰ trigger on close');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('Esc closes the ☰ menu (removed from body, aria-expanded false, focus on ☰)', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root);
+        const trigger = root.firstByClass('day-nav-hamburger');
+        // Mirror a real click focusing the button (the restore target on close).
+        trigger.focus();
+        trigger._fire('click');
+        assert.ok(stubDocument.body.firstByClass('nav-menu'), 'precondition: menu open');
+        stubDocument._fire('keydown', { key: 'Escape', preventDefault() {} });
+        assert.equal(stubDocument.body.firstByClass('nav-menu'), null, 'menu removed from body on Esc');
+        assert.equal(trigger.getAttribute('aria-expanded'), 'false', 'trigger collapsed after Esc');
+        assert.equal(stubDocument.activeElement, trigger, 'focus back on ☰ after Esc');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('outside-click closes the ☰ menu; clicking the trigger/menu does NOT close via the outside handler', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root);
+        const trigger = root.firstByClass('day-nav-hamburger');
+        trigger._fire('click');
+        const menu = stubDocument.body.firstByClass('nav-menu');
+        assert.ok(menu, 'precondition: menu open');
+
+        // A click whose target IS the trigger short-circuits onOutside (no close).
+        stubDocument._fire('click', { target: trigger });
+        assert.ok(stubDocument.body.firstByClass('nav-menu'), 'trigger-targeted click does not close via outside handler');
+        // A click whose target IS the menu also short-circuits (no close).
+        stubDocument._fire('click', { target: menu });
+        assert.ok(stubDocument.body.firstByClass('nav-menu'), 'menu-targeted click does not close via outside handler');
+
+        // A click on an unrelated node (the mount root) DOES close.
+        stubDocument._fire('click', { target: root });
+        assert.equal(stubDocument.body.firstByClass('nav-menu'), null, 'outside click closes the menu');
+        assert.equal(trigger.getAttribute('aria-expanded'), 'false', 'trigger collapsed after outside click');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('☰ re-click toggles the menu closed', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root);
+        const trigger = root.firstByClass('day-nav-hamburger');
+        trigger._fire('click'); // open
+        assert.ok(stubDocument.body.firstByClass('nav-menu'), 'open after first click');
+        trigger._fire('click'); // re-click toggles closed
+        assert.equal(stubDocument.body.firstByClass('nav-menu'), null, 'closed after re-click');
+        assert.equal(trigger.getAttribute('aria-expanded'), 'false', 'trigger collapsed after re-click');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('☰ menu Add photos row is DISABLED when no onAddPhotos handler is passed (mid-trip)', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0)); // trip has started
+        const root = makeRoot();
+        mountApp(root); // single-arg → no onAddPhotos handler
+        const menu = openNavMenu(root);
+        const addRow = navMenuRow(menu, 'Add photos');
+        assert.ok(addRow, 'Add photos row present');
+        assert.equal(addRow.disabled, true, 'Add photos disabled with no handler');
+        // Firing its click is a no-op (guarded on disabled) and must not throw.
+        assert.doesNotThrow(() => addRow._fire('click'), 'clicking the disabled row is inert');
+        // The disabled-row click must NOT close the menu (handler short-circuits).
+        assert.ok(stubDocument.body.firstByClass('nav-menu'), 'menu stays open after a disabled-row click');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('☰ menu Add photos row is ENABLED and fires onAddPhotos(viewedIso) when a handler is present & trip started', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0)); // Jun 24, trip in progress
+        const root = makeRoot();
+        const calls = [];
+        const ctl = mountApp(root, { onAddPhotos: (iso) => calls.push(iso) });
+        ctl.toIso('2026-06-24'); // pin the viewed day to a known ISO
+        const menu = openNavMenu(root);
+        const addRow = navMenuRow(menu, 'Add photos');
+        assert.equal(addRow.disabled, false, 'Add photos enabled with handler + trip started');
+        addRow._fire('click');
+        assert.deepEqual(calls, ['2026-06-24'], 'onAddPhotos called with the viewed day ISO');
+        assert.equal(stubDocument.body.firstByClass('nav-menu'), null, 'menu closed after activating Add photos');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('☰ menu Add photos row is DISABLED before the trip starts even with a handler (tripHasStarted gate)', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        // Pin "now" before Jun 16, 2026 (trip start). pickLandingView would land
+        // on the overview, so force a day view via toIso to exercise the menu.
+        setNow(() => localDate(2026, 5, 10, 12, 0)); // Jun 10 — pre-trip
+        const root = makeRoot();
+        const calls = [];
+        const ctl = mountApp(root, { onAddPhotos: (iso) => calls.push(iso) });
+        ctl.toIso('2026-06-24'); // force a day view pre-trip
+        assert.ok(root.firstByClass('day-nav'), 'day view forced pre-trip');
+        const menu = openNavMenu(root);
+        const addRow = navMenuRow(menu, 'Add photos');
+        assert.equal(addRow.disabled, true, 'Add photos disabled before the trip starts');
+        addRow._fire('click');
+        assert.deepEqual(calls, [], 'disabled Add photos does not fire the handler');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('☰ menu Add photos threads the CURRENTLY-VIEWED day ISO (not a hardcoded constant) after navigating off the landing day', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0)); // lands on Jun 24 (Day 9)
+        const root = makeRoot();
+        const calls = [];
+        const ctl = mountApp(root, { onAddPhotos: (iso) => calls.push(iso) });
+        // Navigate to a day OTHER than the landing day so a stale hardcoded ISO
+        // would diverge from the viewed day.
+        ctl.toIso('2026-06-27'); // Day 12 — not the landing day
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'June 27th - Day 12',
+          'precondition: viewing the non-default day');
+        const menu = openNavMenu(root);
+        navMenuRow(menu, 'Add photos')._fire('click');
+        assert.deepEqual(calls, ['2026-06-27'],
+          'onAddPhotos received the ISO of the day actually being viewed, not the landing day');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+// --- nav-redesign: ☰ menu Tab focus-trap (buildNavMenu.onKey, app.js ~1684) ---
+// On Tab the menu cycles focus forward through the enabled rows and wraps at the
+// end; Shift+Tab cycles backward and wraps at the start. Both preventDefault the
+// native tab so focus never escapes the open popover. Focus is reflected by
+// stubDocument.activeElement; the stub's _fire('click') does NOT set focus, so we
+// rely on open() focusing the first enabled row as the known starting point.
+
+test('☰ menu Tab focus-trap cycles forward through enabled rows and wraps last → first', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        // Mid-trip WITH onAddPhotos → both rows enabled (Home, Add photos).
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root, { onAddPhotos: () => {} });
+        const trigger = root.firstByClass('day-nav-hamburger');
+        trigger.focus();
+        trigger._fire('click');
+        const menu = stubDocument.body.firstByClass('nav-menu');
+        const homeRow = navMenuRow(menu, 'Home');
+        const addRow = navMenuRow(menu, 'Add photos');
+        assert.equal(stubDocument.activeElement, homeRow, 'focus starts on the first (Home) row');
+
+        let prevented = false;
+        // Tab from Home → Add photos.
+        stubDocument._fire('keydown', { key: 'Tab', shiftKey: false, preventDefault() { prevented = true; } });
+        assert.equal(prevented, true, 'Tab preventDefault()s the native tab');
+        assert.equal(stubDocument.activeElement, addRow, 'Tab advances Home → Add photos');
+
+        // Tab from the LAST enabled row wraps back to the first.
+        stubDocument._fire('keydown', { key: 'Tab', shiftKey: false, preventDefault() {} });
+        assert.equal(stubDocument.activeElement, homeRow, 'Tab wraps from the last row back to the first');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('☰ menu Shift+Tab focus-trap cycles backward through enabled rows and wraps first → last', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root, { onAddPhotos: () => {} });
+        const trigger = root.firstByClass('day-nav-hamburger');
+        trigger.focus();
+        trigger._fire('click');
+        const menu = stubDocument.body.firstByClass('nav-menu');
+        const homeRow = navMenuRow(menu, 'Home');
+        const addRow = navMenuRow(menu, 'Add photos');
+        assert.equal(stubDocument.activeElement, homeRow, 'focus starts on the first (Home) row');
+
+        let prevented = false;
+        // Shift+Tab from the FIRST row wraps backward to the last enabled row.
+        stubDocument._fire('keydown', { key: 'Tab', shiftKey: true, preventDefault() { prevented = true; } });
+        assert.equal(prevented, true, 'Shift+Tab preventDefault()s the native tab');
+        assert.equal(stubDocument.activeElement, addRow, 'Shift+Tab wraps from the first row to the last');
+
+        // Shift+Tab from the last row moves back to the first.
+        stubDocument._fire('keydown', { key: 'Tab', shiftKey: true, preventDefault() {} });
+        assert.equal(stubDocument.activeElement, homeRow, 'Shift+Tab moves Add photos → Home');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('☰ menu Tab focus-trap keeps focus on the single enabled row when Add photos is disabled', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        // Mid-trip, NO onAddPhotos handler → only Home is enabled → focusableItems()
+        // has a single entry, so Tab/Shift+Tab keep focus on Home (no throw, no escape).
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root); // single-arg → Add photos disabled
+        const trigger = root.firstByClass('day-nav-hamburger');
+        trigger.focus();
+        trigger._fire('click');
+        const menu = stubDocument.body.firstByClass('nav-menu');
+        const homeRow = navMenuRow(menu, 'Home');
+        assert.equal(navMenuRow(menu, 'Add photos').disabled, true, 'precondition: Add photos disabled');
+        assert.equal(stubDocument.activeElement, homeRow, 'focus starts on Home (the only enabled row)');
+
+        // Tab stays on Home (only one focusable item) and must not throw.
+        assert.doesNotThrow(
+          () => stubDocument._fire('keydown', { key: 'Tab', shiftKey: false, preventDefault() {} }),
+          'Tab with one enabled row does not throw');
+        assert.equal(stubDocument.activeElement, homeRow, 'Tab keeps focus on the single enabled row');
+        // Shift+Tab likewise.
+        assert.doesNotThrow(
+          () => stubDocument._fire('keydown', { key: 'Tab', shiftKey: true, preventDefault() {} }),
+          'Shift+Tab with one enabled row does not throw');
+        assert.equal(stubDocument.activeElement, homeRow, 'Shift+Tab keeps focus on the single enabled row');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('backward-compat: single-arg mountApp(root) returns a controller and renders the ☰ day-nav', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        const ctl = mountApp(root); // no opts — the existing 28 call-sites contract
+        assert.ok(ctl && typeof ctl.go === 'function' && typeof ctl.toIso === 'function',
+          'controller returned with go/toIso');
+        assert.ok(root.firstByClass('day-nav'), 'day-nav rendered');
+        assert.ok(root.firstByClass('day-nav-hamburger'), 'hamburger rendered with no opts');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('prev/next chevrons keep their contract: bare glyphs, end-clamped disabled, click navigates', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 16, 12, 0)); // land on Day 1 (first index)
+        const root = makeRoot();
+        mountApp(root);
+        const prev = root.firstByClass('day-nav-prev');
+        const next = root.firstByClass('day-nav-next');
+        assert.equal(prev.textContent, '‹', 'prev is the bare ‹ glyph');
+        assert.equal(next.textContent, '›', 'next is the bare › glyph');
+        assert.equal(prev.disabled, true, 'prev disabled at index 0');
+        assert.equal(next.disabled, false, 'next enabled at index 0');
+        // Clicking next navigates (position label changes).
+        next._fire('click');
+        assert.equal(root.firstByClass('day-nav-pos').textContent, 'June 17th - Day 2',
+          'next chevron click advances the day view');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('navigation tears down an OPEN ☰ menu — no orphaned popover left on document.body', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        const ctl = mountApp(root);
+        // Open the menu on the current day view.
+        root.firstByClass('day-nav-hamburger')._fire('click');
+        assert.ok(stubDocument.body.firstByClass('nav-menu'), 'precondition: menu open');
+        // Navigate to another day → stopActiveDayView/activeNavMenuDestroy should
+        // tear down the popover before the next view mounts.
+        ctl.toIso('2026-06-25');
+        assert.equal(stubDocument.body.firstByClass('nav-menu'), null,
+          'open menu torn down on navigation (no orphaned popover)');
+        // The new day view still has a fresh, functional hamburger.
+        assert.ok(root.firstByClass('day-nav-hamburger'), 'new day view rendered its own ☰');
+      } finally {
+        setNow(null);
+      }
+    });
+  });
+});
+
+test('navigation via a chevron click also tears down an open ☰ menu', () => {
+  withDom(() => {
+    withTimerSpies(() => {
+      try {
+        setNow(() => localDate(2026, 5, 24, 12, 0));
+        const root = makeRoot();
+        mountApp(root);
+        root.firstByClass('day-nav-hamburger')._fire('click');
+        assert.ok(stubDocument.body.firstByClass('nav-menu'), 'precondition: menu open');
+        root.firstByClass('day-nav-next')._fire('click'); // navigate forward a day
+        assert.equal(stubDocument.body.firstByClass('nav-menu'), null,
+          'chevron navigation tore down the open menu');
       } finally {
         setNow(null);
       }

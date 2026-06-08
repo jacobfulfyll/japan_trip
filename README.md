@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← tests for the data/API/nav layer (node --test; 307 total with sw.test.js).
+app.test.js    ← tests for the data/API/nav layer (node --test; 359 total with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -218,7 +218,7 @@ screens import them.
 
 | Function                | Returns / effect                                              |
 |-------------------------|--------------------------------------------------------------|
-| `mountApp(rootEl)`      | **Primary mount entry point** (what the bootstrap calls). Boots the date/time-aware controller: picks a landing view, renders it, and wires a day-nav bar (Home / prev / position / next) that pages across the full 18-day trip window (Jun 16 – Jul 3). Returns `{ go(index), toIso(iso), toOverview(), destroy() }`. `toOverview()` re-mounts the 18-day overview from any day view (the Home button calls this). |
+| `mountApp(rootEl, opts = {})` | **Primary mount entry point** (what the bootstrap calls). Boots the date/time-aware controller: picks a landing view, renders it, and wires a day-nav bar — a **☰ hamburger menu** (left) carrying **Home** and **Add photos** rows, a centered position label, and **prev/next circular chevrons** (right) — that pages across the full 18-day trip window (Jun 16 – Jul 3). `opts.onAddPhotos(iso)` is an optional handler for the Add-photos menu row; when absent (or before the trip starts) the row is disabled. Returns `{ go(index), toIso(iso), toOverview(), destroy() }`. `toOverview()` re-mounts the 18-day overview from any day view (reachable via ☰ → Home). |
 | `pickLandingView(now?)` | Decides what to show on open. Before the trip: `{ view: 'overview', day: null, daysUntil }`. During: `{ view: 'day', day, framing }` for today's day in its lifecycle framing. After: `{ view: 'day', day, framing: 'reminisce' }` for the last day (overview fallback if no days authored). Defaults `now` to `getNow()`. |
 | `frameForDay(day, now?)` | Returns `'anticipation'` (future day), `'plan'` (today), or `'reminisce'` (past day), comparing calendar dates in local time. Accepts a day object or an ISO string. Bad input returns `'plan'`. Defaults `now` to `getNow()`. |
 | `isEveningWindow(now, window?)` | Returns `true` during the evening window defined by `TRIP.eveningWindow` (default 9 pm – 4 am, midnight-wrapping). Defaults `window` to `getTrip().eveningWindow`. |
@@ -238,7 +238,7 @@ When the page loads, `mountApp` calls `pickLandingView` to choose the opening sc
 - **Jun 16 – Jul 3** (during the trip): today's day view in its lifecycle framing — `'anticipation'` in the morning, `'plan'` through the day, `'reminisce'` once the day has passed.
 - **After Jul 3** (post-trip): the last authored day in `'reminisce'` framing.
 
-The nav bar's prev/next arrows page through all 18 dates. All days are now authored; if a day is ever removed, the app renders a placeholder rather than crashing.
+The nav bar's prev/next chevrons page through all 18 dates. All days are now authored; if a day is ever removed, the app renders a placeholder rather than crashing. The trip overview is reachable at any time via ☰ → Home in the nav bar.
 
 #### Evening "Prep for tomorrow" button
 
@@ -356,7 +356,7 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The test suite (**342 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The test suite (**359 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),
@@ -366,7 +366,8 @@ the pre-trip home screen (`renderOverview` countdown states, day-index rows, tod
 the time-travel override layer (`parseNowOverride`, `resolveNowOverride`, precedence, clear tokens),
 collapsible day-parts (`bucketPlanByDayPart` bucketing, `dayParts` validation, day-part section rendering),
 Hakone content contracts (Romancecar terminus/reserved, transit minutes, veg coverage, lodging consistency, contiguous 18-day span),
-and the auth gate (login form present + native-submit guard).
+the auth gate (login form present + native-submit guard),
+and the ☰ nav menu (hamburger popover, Home/Add-photos rows, focus trap, `opts.onAddPhotos` seam).
 
 ## Deploy
 
