@@ -2,7 +2,18 @@
 
 ## Active Tasks
 
-_None._
+### auth-password-gate
+**Task**: Password-only landing via one shared account, persistent sessions, auth-gated rules
+**Pipeline**: code-workflow
+**Branch**: task/auth-password-gate
+**Worktree**: .worktree/auth-password-gate
+**Base**: redesign-reminisce-view
+**Started**: 2026-06-07
+**Files**:
+- MOD: index.html
+- MOD: app.js
+- NEW: firebase-config.js (tracked, non-secret config — see CONTEXT arch-correction A)
+- MOD: sw.js (cache Firebase SDK for offline boot — see CONTEXT arch-correction B)
 
 ---
 
@@ -17,8 +28,6 @@ _None._
   files: external (restaurant reservation)
 
 ### Firebase Photo Journal (v2 — after v1)
-- [ ] auth-password-gate: Password-only landing via one shared account, persistent sessions, auth-gated rules [P2] [moderate] [tier: opus:medium] [depends: firebase-project-setup] [conflicts: photo-upload-flow] [code] [planned]
-  files: index.html (MOD), app.js (MOD)
 - [ ] photo-upload-flow: One-tap photo sync (evening-window) → uploads everything since last sync, EXIF-bucketed by day, deduped [P2] [complex] [tier: opus:high] [depends: auth-password-gate, date-time-aware-navigation] [conflicts: auth-password-gate] [code] [planned]
   files: index.html (MOD), app.js (MOD)
 - [ ] reminisce-photo-gallery: Reminisce shows all travelers' photos per day, live + offline-cached [P2] [moderate] [tier: opus:medium] [depends: photo-upload-flow, day-view-screen] [code] [planned]
