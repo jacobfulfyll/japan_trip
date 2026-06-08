@@ -36,3 +36,4 @@
 - [x] firebase-project-setup: Console setup — project, Storage/Firestore/Auth, shared account, Blaze + budget -- manual, completed 2026-06-07
 - [x] auth-password-gate Password-only Firebase auth gate (shared account, persistent sessions, offline-safe SDK caching, auth-gated rules) -- 2026-06-07
 - [~] reminisce-photo-gallery: superseded — Firebase Photo Journal v2 re-scoped from 2 tasks into 4 (nav-redesign, firebase-photo-rules, photo-upload-flow, reminisce-gallery-live) via /reggie-init-tasks -- restructured 2026-06-08
+- [x] nav-redesign Hamburger menu (Home + Add photos) + minimal right-side circular chevrons; exposes the onAddPhotos seam -- 2026-06-08

@@ -2,18 +2,7 @@
 
 ## Active Tasks
 
-### nav-redesign
-**Task**: Hamburger menu (Home + Add photos) + minimal right-side circular chevrons; exposes the onAddPhotos seam
-**Pipeline**: code-workflow
-**Branch**: task/nav-redesign
-**Worktree**: .worktree/nav-redesign
-**Base**: redesign-reminisce-view
-**Started**: 2026-06-08
-**Files**:
-- MOD: app.js
-- MOD: index.html
-- MOD: sw.js
-- MOD: sw.test.js
+_None._
 
 ---
 
