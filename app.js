@@ -1995,6 +1995,909 @@ export function renderInto(rootEl, day = getDay('2026-06-24'), framing = 'plan')
   activeDayView = view;
 }
 
+// ===========================================================================
+// Photo upload flow (photo-upload-flow)
+//
+// One-tap "Add photos": foreground multi-select picker → read each photo's EXIF
+// capture date → bucket by trip day → downscale → upload to Firebase Storage →
+// write a Firestore metadata doc; deduped and overwrite-proof.
+//
+// Architecture mirrors the auth gate: every Firebase/DOM/FileReader boundary is
+// an INJECTED dependency of `wirePhotoSync(deps)`, so the orchestration is
+// unit-testable with stubs and `node --test` stays network-free. The pure cores
+// (`readCaptureDate`, `exifDateTimeString`, `compositeKey`, `decideFile`) take
+// no DOM/Firebase and are exported for direct unit tests.
+//
+// SECURITY: all user-derived strings reach the DOM via textContent/createElement
+// (the el() helper) — never innerHTML. Storage paths are sanitized; the EXIF
+// date STRING is used directly (no Date() conversion → no device-tz day drift).
+// ===========================================================================
+
+// ---- EXIF capture-date parser (pure core) ---------------------------------
+
+/**
+ * Read EXIF `DateTimeOriginal` (tag 0x9003, in the Exif sub-IFD) from a JPEG's
+ * bytes and return the raw EXIF datetime string `"YYYY:MM:DD HH:MM:SS"`, or null
+ * if absent/unparseable. Pure: takes an ArrayBuffer (or ArrayBuffer-like with a
+ * byteLength) and returns a string|null — no DOM, no I/O.
+ *
+ * Walks: SOI `FFD8` → scan APP segments for APP1 `FFE1` carrying `"Exif\0\0"` →
+ * read the TIFF header endianness (`II`=little, `MM`=big) → IFD0 → follow the
+ * Exif-IFD pointer (tag 0x8769) → read 0x9003. Falls back to IFD0's weaker
+ * `DateTime` (0x0132) only if the sub-IFD date is missing. Bounds-checked
+ * throughout (a truncated/garbage buffer returns null, never throws).
+ *
+ * @param {ArrayBuffer | ArrayBufferView} buffer
+ * @returns {string | null} raw EXIF datetime, e.g. "2026:06:25 23:30:00"
+ */
+export function readExifDateTimeOriginal(buffer) {
+  let bytes;
+  try {
+    if (buffer instanceof Uint8Array) bytes = buffer;
+    else if (buffer && typeof buffer.byteLength === 'number') bytes = new Uint8Array(buffer);
+    else return null;
+  } catch {
+    return null;
+  }
+  const len = bytes.length;
+  if (len < 4) return null;
+  // SOI marker FFD8.
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+
+  // Scan APP segments for APP1 (FFE1) that begins with "Exif\0\0".
+  let p = 2;
+  let tiffStart = -1;
+  while (p + 4 <= len) {
+    if (bytes[p] !== 0xff) { p += 1; continue; } // resync on stray padding
+    const marker = bytes[p + 1];
+    // Standalone markers (no length): RST0–7, SOI, EOI, TEM.
+    if (marker === 0xd8 || marker === 0xd9 || marker === 0x01 ||
+        (marker >= 0xd0 && marker <= 0xd7)) { p += 2; continue; }
+    const segLen = (bytes[p + 2] << 8) | bytes[p + 3];
+    if (segLen < 2) return null; // malformed length
+    const segStart = p + 4;
+    if (marker === 0xe1) {
+      // APP1 — check for the "Exif\0\0" signature.
+      if (segStart + 6 <= len &&
+          bytes[segStart] === 0x45 && bytes[segStart + 1] === 0x78 &&
+          bytes[segStart + 2] === 0x69 && bytes[segStart + 3] === 0x66 &&
+          bytes[segStart + 4] === 0x00 && bytes[segStart + 5] === 0x00) {
+        tiffStart = segStart + 6;
+        break;
+      }
+    }
+    if (marker === 0xda) break; // SOS — image data starts; no EXIF beyond.
+    p += 2 + segLen;
+  }
+  if (tiffStart < 0 || tiffStart + 8 > len) return null;
+
+  // TIFF header: byte-order ("II"/"MM"), magic 0x002A, IFD0 offset.
+  const b0 = bytes[tiffStart];
+  const b1 = bytes[tiffStart + 1];
+  let little;
+  if (b0 === 0x49 && b1 === 0x49) little = true;       // "II"
+  else if (b0 === 0x4d && b1 === 0x4d) little = false;  // "MM"
+  else return null;
+
+  const u16 = (off) => little
+    ? bytes[off] | (bytes[off + 1] << 8)
+    : (bytes[off] << 8) | bytes[off + 1];
+  const u32 = (off) => {
+    const v = little
+      ? bytes[off] | (bytes[off + 1] << 8) | (bytes[off + 2] << 16) | (bytes[off + 3] << 24)
+      : (bytes[off] << 24) | (bytes[off + 1] << 16) | (bytes[off + 2] << 8) | bytes[off + 3];
+    return v >>> 0; // unsigned
+  };
+
+  if (u16(tiffStart + 2) !== 0x002a) return null; // TIFF magic
+  const ifd0Off = u32(tiffStart + 4);
+  const ifd0 = tiffStart + ifd0Off;
+  if (ifd0 + 2 > len) return null;
+
+  // Read an ASCII value for a tag in the IFD at `ifdOff`. Returns the trimmed
+  // string, or null. Handles inline (≤4 byte) and offset values.
+  const readAscii = (ifdOff, wantTag) => {
+    if (ifdOff + 2 > len) return null;
+    const count = u16(ifdOff);
+    let e = ifdOff + 2;
+    for (let i = 0; i < count; i += 1, e += 12) {
+      if (e + 12 > len) return null;
+      const tag = u16(e);
+      if (tag !== wantTag) continue;
+      const type = u16(e + 2);
+      const num = u32(e + 4);
+      if (type !== 2 || num === 0) return null; // ASCII only
+      const valOff = num <= 4 ? e + 8 : tiffStart + u32(e + 8);
+      if (valOff + num > len) return null;
+      let s = '';
+      for (let k = 0; k < num; k += 1) {
+        const c = bytes[valOff + k];
+        if (c === 0) break; // NUL terminator
+        s += String.fromCharCode(c);
+      }
+      s = s.trim();
+      return s || null;
+    }
+    return null;
+  };
+
+  // Find the Exif sub-IFD pointer (tag 0x8769) in IFD0.
+  const readPointer = (ifdOff, wantTag) => {
+    if (ifdOff + 2 > len) return 0;
+    const count = u16(ifdOff);
+    let e = ifdOff + 2;
+    for (let i = 0; i < count; i += 1, e += 12) {
+      if (e + 12 > len) return 0;
+      if (u16(e) === wantTag) return u32(e + 8);
+    }
+    return 0;
+  };
+
+  const exifIfdOff = readPointer(ifd0, 0x8769);
+  if (exifIfdOff) {
+    const subDate = readAscii(tiffStart + exifIfdOff, 0x9003); // DateTimeOriginal
+    if (subDate) return subDate;
+  }
+  // Weaker fallback: IFD0 DateTime (0x0132) — file-modification time, not capture.
+  return readAscii(ifd0, 0x0132);
+}
+
+/**
+ * Normalize a raw EXIF datetime string `"YYYY:MM:DD HH:MM:SS"` into a sortable
+ * string `"YYYY-MM-DD HH:MM:SS"` (dashes in the date, no timezone). Returns null
+ * if the input doesn't match the EXIF shape. NO Date() conversion — keeps the
+ * camera wall-clock verbatim so the bucket day never drifts by a timezone.
+ * @param {unknown} raw
+ * @returns {string | null}
+ */
+export function exifDateTimeString(raw) {
+  if (typeof raw !== 'string') return null;
+  const m = raw.trim().match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s] = m;
+  // Sanity bounds — reject impossible components (00 month/day, >23h etc).
+  const Y = +y, MO = +mo, D = +d, H = +h, MI = +mi, S = +s;
+  if (MO < 1 || MO > 12 || D < 1 || D > 31 || H > 23 || MI > 59 || S > 59) return null;
+  if (Y < 1970 || Y > 9999) return null;
+  return `${y}-${mo}-${d} ${h}:${mi}:${s}`;
+}
+
+/**
+ * Read a JPEG's bytes → normalized sortable EXIF datetime `"YYYY-MM-DD HH:MM:SS"`,
+ * or null. Convenience composition of readExifDateTimeOriginal + exifDateTimeString.
+ * @param {ArrayBuffer | ArrayBufferView} buffer
+ * @returns {string | null}
+ */
+export function readCaptureDate(buffer) {
+  return exifDateTimeString(readExifDateTimeOriginal(buffer));
+}
+
+/** Extract the bucket day "YYYY-MM-DD" from a normalized EXIF datetime, or null. */
+export function bucketDateFromExif(normalized) {
+  if (typeof normalized !== 'string') return null;
+  const m = normalized.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
+}
+
+// ---- Dedup composite key (pure core) --------------------------------------
+
+/**
+ * Best-effort dedup key for a photo, computed WITHOUT a decode (so a re-selected
+ * photo is skipped before any image decode/upload). Uses
+ * `(uploader, exifDateTime, originalFileSize)`. When `exifDateTime` is absent the
+ * key degrades to `(uploader, '', size)` — a deliberately weaker key (see the
+ * accepted trade-off): two distinct same-size no-EXIF photos could collide, which
+ * we accept over a wrong overwrite.
+ * @param {string} uploader
+ * @param {string|null|undefined} exifDateTime normalized "YYYY-MM-DD HH:MM:SS" or null
+ * @param {number} originalFileSize bytes
+ * @returns {string}
+ */
+export function compositeKey(uploader, exifDateTime, originalFileSize) {
+  const u = sanitizePathSegment(uploader);
+  const dt = typeof exifDateTime === 'string' ? exifDateTime : '';
+  const sz = Number.isFinite(originalFileSize) ? String(originalFileSize) : '0';
+  return `${u}|${dt}|${sz}`;
+}
+
+// ---- Path / identity helpers ----------------------------------------------
+
+/**
+ * Sanitize a string for safe use as a single Firebase Storage path segment:
+ * strip slashes, control chars, and Storage-reserved characters; collapse
+ * whitespace to "-"; cap length. The four traveler names are already clean — this
+ * is defensive (guards a stray pasted name). Empty result → "unknown".
+ * @param {unknown} s
+ * @returns {string}
+ */
+export function sanitizePathSegment(s) {
+  if (typeof s !== 'string') return 'unknown';
+  const cleaned = s
+    .normalize('NFC')
+    .replace(/[\x00-\x1f\x7f]/g, '')   // control chars
+    .replace(/[\/\\]/g, '')             // path separators
+    .replace(/[#?\[\]*]/g, '')          // Storage-reserved + glob chars
+    .replace(/\s+/g, '-')               // whitespace → dash
+    .replace(/^[.\-]+/, '')             // no leading dot/dash
+    .slice(0, 64)
+    .trim();
+  return cleaned || 'unknown';
+}
+
+const UPLOADER_KEY = 'jt:uploader';
+
+/**
+ * Read the persisted uploader identity from localStorage (key `jt:uploader`),
+ * or null. Guarded — localStorage can throw in Safari private mode; a throw
+ * degrades to "no stored identity" (ask again this session).
+ * @returns {string | null}
+ */
+export function getUploader() {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const v = localStorage.getItem(UPLOADER_KEY);
+    return typeof v === 'string' && v.trim() ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist the uploader identity. Guarded — a throw (private mode) is swallowed;
+ * the choice still works for the current session (the caller keeps it in memory).
+ * @param {string} name
+ * @returns {boolean} true if persisted
+ */
+export function setUploader(name) {
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    if (typeof name !== 'string' || !name.trim()) return false;
+    localStorage.setItem(UPLOADER_KEY, name);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ---- Per-file decision (pure core) ----------------------------------------
+
+/**
+ * Decide what to do with one already-prepared file descriptor, BEFORE any decode
+ * or upload. Pure: no DOM/Firebase. Returns a discriminated result:
+ *   { action: 'skip-window', date }   — bucket day is outside the trip window
+ *   { action: 'skip-dedup', key }     — composite key already present
+ *   { action: 'upload', date, key }   — proceed (downscale + upload)
+ *
+ * @param {object} d
+ * @param {string} d.uploader
+ * @param {string|null} d.exifDateTime normalized "YYYY-MM-DD HH:MM:SS" or null
+ * @param {string} d.date bucket day "YYYY-MM-DD" (already resolved by the caller)
+ * @param {number} d.size original file size in bytes
+ * @param {Set<string>} d.dedupSet keys already uploaded (preload + this batch)
+ * @param {Set<string>} d.windowSet allowed trip-window days (Set of ISO dates)
+ * @returns {{action:'skip-window'|'skip-dedup'|'upload', date?:string, key?:string}}
+ */
+export function decideFile({ uploader, exifDateTime, date, size, dedupSet, windowSet }) {
+  if (!windowSet.has(date)) return { action: 'skip-window', date };
+  const key = compositeKey(uploader, exifDateTime, size);
+  if (dedupSet.has(key)) return { action: 'skip-dedup', key };
+  return { action: 'upload', date, key };
+}
+
+/**
+ * Format the end-of-run summary line from tallies. Pure.
+ * @param {{added:number, dupes:number, skipped:number, errors:number, days:number}} t
+ * @returns {string}
+ */
+export function summarizeRun({ added, dupes, skipped, errors, days }) {
+  const parts = [];
+  parts.push(added === 0
+    ? 'No new photos added'
+    : `Added ${added} ${added === 1 ? 'photo' : 'photos'}${days ? ` across ${days} ${days === 1 ? 'day' : 'days'}` : ''}`);
+  if (dupes) parts.push(`${dupes} already in journal`);
+  if (skipped) parts.push(`${skipped} outside the trip skipped`);
+  if (errors) parts.push(`${errors} couldn’t be added`);
+  return parts.join(' · ');
+}
+
+// ---- Browser wrappers (DOM / File / Image — not unit-tested directly) ------
+
+/** Read a File/Blob to an ArrayBuffer via FileReader. Browser-only. */
+function fileToArrayBuffer(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(fr.error || new Error('read failed'));
+    fr.readAsArrayBuffer(file);
+  });
+}
+
+/**
+ * Resolve a file's normalized EXIF datetime + bucket date.
+ * Precedence: EXIF DateTimeOriginal string → File.lastModified → null (caller's
+ * no-EXIF batch path supplies the user-correctable default). NEVER uses Date()
+ * for the EXIF case. Returns { exifDateTime, date, fromExif }.
+ * @param {File} file
+ * @returns {Promise<{exifDateTime:string|null, date:string|null, fromExif:boolean}>}
+ */
+async function fileCaptureDate(file) {
+  let exifDateTime = null;
+  try {
+    const buf = await fileToArrayBuffer(file);
+    exifDateTime = readCaptureDate(buf);
+  } catch {
+    exifDateTime = null;
+  }
+  if (exifDateTime) {
+    return { exifDateTime, date: bucketDateFromExif(exifDateTime), fromExif: true };
+  }
+  // No EXIF → use lastModified as a best-effort hint for the bucket day, but mark
+  // it not-from-EXIF so the caller routes it through the user-correctable batch.
+  // lastModified is the camera/file mtime in device-local terms; localISODate is
+  // acceptable HERE (it's a hint the user can override), unlike for EXIF.
+  if (file && Number.isFinite(file.lastModified) && file.lastModified > 0) {
+    const lm = localISODate(new Date(file.lastModified));
+    return { exifDateTime: null, date: lm, fromExif: false };
+  }
+  return { exifDateTime: null, date: null, fromExif: false };
+}
+
+const MAX_DIMENSION = 2048;
+const JPEG_QUALITY = 0.85;
+
+/**
+ * Downscale + orientation-correct an image File to a JPEG Blob (~2048px max edge,
+ * quality ~0.85). Uses createImageBitmap(file, { imageOrientation: 'from-image' })
+ * so EXIF rotation is baked in. Browser-only. Bails to the ORIGINAL file on any
+ * decode/encode failure (HEIC the browser can't decode, etc.) — never throws.
+ * Returns { blob, downscaled }.
+ * @param {File} file
+ * @returns {Promise<{blob: Blob, downscaled: boolean}>}
+ */
+async function downscaleImage(file) {
+  try {
+    if (typeof createImageBitmap !== 'function') return { blob: file, downscaled: false };
+    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    const { width, height } = bitmap;
+    const scale = Math.min(1, MAX_DIMENSION / Math.max(width, height));
+    const w = Math.max(1, Math.round(width * scale));
+    const h = Math.max(1, Math.round(height * scale));
+    let canvas;
+    if (typeof OffscreenCanvas === 'function') canvas = new OffscreenCanvas(w, h);
+    else { canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h; }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) { bitmap.close?.(); return { blob: file, downscaled: false }; }
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close?.();
+    let blob;
+    if (typeof canvas.convertToBlob === 'function') {
+      blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: JPEG_QUALITY });
+    } else {
+      blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', JPEG_QUALITY));
+    }
+    if (!blob) return { blob: file, downscaled: false };
+    return { blob, downscaled: true };
+  } catch {
+    return { blob: file, downscaled: false };
+  }
+}
+
+/** Generate a UUID for the unique storage path. Falls back if crypto is absent. */
+function uuid() {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+  } catch { /* fall through */ }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+// ---- Body-mounted modal (lightbox focus-trap pattern) ---------------------
+
+let photoModalSeq = 0; // unique-id counter for aria-labelledby title ids
+
+/**
+ * Generic body-mounted modal sheet. Mirrors buildLightbox's open/teardown/focus-
+ * trap + body-mount (escapes the nav's backdrop-filter containing block). The
+ * caller fills `.modal-body`. Returns { node, open, close, destroy, bodyEl }.
+ * Focus is trapped across the modal's own focusable controls; Esc closes (unless
+ * `dismissible:false`). Browser-only at runtime, but constructed via el() so the
+ * Node DOM stub can build + drive it in tests.
+ */
+function buildModalSheet({ titleText, dismissible = true, onClose } = {}) {
+  const overlay = el('div', 'photo-modal');
+  overlay.hidden = true;
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+
+  const card = el('div', 'photo-modal-card');
+  if (titleText) {
+    const titleId = `photo-modal-title-${photoModalSeq++}`;
+    const h = el('h2', 'photo-modal-title', titleText);
+    h.id = titleId;
+    overlay.setAttribute('aria-labelledby', titleId);
+    card.appendChild(h);
+  }
+  const bodyEl = el('div', 'photo-modal-body');
+  card.appendChild(bodyEl);
+  overlay.appendChild(card);
+
+  let isOpen = false;
+  let lastFocused = null;
+
+  function focusables() {
+    return card.queryAll
+      ? card.queryAll((n) => isFocusable(n)) // test stub
+      : Array.from(card.querySelectorAll('button, [href], input, select, [tabindex]'))
+          .filter((n) => !n.disabled && n.tabIndex !== -1);
+  }
+
+  function onKey(e) {
+    if (dismissible && e.key === 'Escape') { e.preventDefault(); close(); return; }
+    if (e.key === 'Tab') {
+      const items = focusables();
+      if (!items.length) { e.preventDefault(); return; }
+      e.preventDefault();
+      const active = typeof document !== 'undefined' ? document.activeElement : null;
+      const i = items.indexOf(active);
+      const nextIdx = e.shiftKey
+        ? (i <= 0 ? items.length - 1 : i - 1)
+        : (i < 0 || i >= items.length - 1 ? 0 : i + 1);
+      items[nextIdx].focus();
+    }
+  }
+
+  function open() {
+    if (isOpen) return;
+    isOpen = true;
+    lastFocused = typeof document !== 'undefined' ? document.activeElement : null;
+    if (!overlay.parentNode && typeof document !== 'undefined' && document.body) {
+      document.body.appendChild(overlay);
+    }
+    overlay.hidden = false;
+    document.addEventListener('keydown', onKey);
+    const items = focusables();
+    (items[0] ?? card).focus?.();
+  }
+
+  function close(restoreFocus = true) {
+    if (!isOpen) return;
+    isOpen = false;
+    overlay.hidden = true;
+    document.removeEventListener('keydown', onKey);
+    if (overlay.parentNode && typeof overlay.parentNode.removeChild === 'function') {
+      overlay.parentNode.removeChild(overlay);
+    }
+    if (restoreFocus && lastFocused && typeof lastFocused.focus === 'function') lastFocused.focus();
+    if (typeof onClose === 'function') onClose();
+  }
+
+  function destroy() { close(false); }
+
+  return { node: overlay, card, bodyEl, open, close, destroy };
+}
+
+/** Crude focusable test for the Node stub (buttons/inputs that aren't disabled). */
+function isFocusable(n) {
+  if (!n || n.disabled) return false;
+  const tag = n.tagName;
+  return tag === 'BUTTON' || tag === 'INPUT' || tag === 'SELECT' || tag === 'A';
+}
+
+/**
+ * "Who's uploading?" prompt — a one-button-per-traveler picker. Resolves with the
+ * chosen name, or null if dismissed. Reads names from TRIP.travelers. Body-mounted.
+ * @param {string[]} travelers
+ * @returns {Promise<string|null>}
+ */
+function promptUploader(travelers) {
+  return new Promise((resolve) => {
+    const modal = buildModalSheet({ titleText: 'Who’s uploading?', dismissible: true,
+      onClose: () => resolve(resolved ? chosen : null) });
+    let resolved = false;
+    let chosen = null;
+    const intro = el('p', 'photo-modal-note', 'We’ll remember your pick on this device.');
+    modal.bodyEl.appendChild(intro);
+    const list = el('div', 'photo-uploader-choices');
+    (Array.isArray(travelers) ? travelers : []).forEach((name) => {
+      const btn = el('button', 'photo-uploader-choice', name);
+      btn.type = 'button';
+      btn.addEventListener('click', () => {
+        resolved = true;
+        chosen = name;
+        modal.close();
+      });
+      list.appendChild(btn);
+    });
+    modal.bodyEl.appendChild(list);
+    modal.open();
+  });
+}
+
+/**
+ * Date-correction prompt for a batch of no-EXIF photos: one date for the whole
+ * group (default = the currently-viewed day or today). Resolves with the chosen
+ * "YYYY-MM-DD", or null if cancelled. Body-mounted.
+ * @param {number} count number of no-EXIF photos in the batch
+ * @param {string} defaultIso default bucket date
+ * @returns {Promise<string|null>}
+ */
+function promptBatchDate(count, defaultIso) {
+  return new Promise((resolve) => {
+    let done = false;
+    const modal = buildModalSheet({ titleText: 'What day were these from?', dismissible: true,
+      onClose: () => { if (!done) resolve(null); } });
+    const note = el('p', 'photo-modal-note',
+      `${count} ${count === 1 ? 'photo has' : 'photos have'} no capture date. Pick the day they were taken.`);
+    modal.bodyEl.appendChild(note);
+
+    const input = el('input', 'photo-date-input');
+    input.type = 'date';
+    input.value = typeof defaultIso === 'string' ? defaultIso : '';
+    // Clamp the picker to the trip window so the date stays in-range.
+    const win = tripWindowDates();
+    if (win.length) { input.min = win[0]; input.max = win[win.length - 1]; }
+    modal.bodyEl.appendChild(input);
+
+    const actions = el('div', 'photo-modal-actions');
+    const cancel = el('button', 'photo-modal-btn photo-modal-btn-ghost', 'Skip these');
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => { done = true; resolve(null); modal.close(); });
+    const ok = el('button', 'photo-modal-btn', 'Add to this day');
+    ok.type = 'button';
+    ok.addEventListener('click', () => {
+      done = true;
+      resolve(input.value || defaultIso || null);
+      modal.close();
+    });
+    actions.appendChild(cancel);
+    actions.appendChild(ok);
+    modal.bodyEl.appendChild(actions);
+
+    modal.open();
+  });
+}
+
+/**
+ * Progress sheet: a live "Adding N of M…" line that swaps to a summary + Done
+ * button when finished. Body-mounted, NOT dismissible while running. Returns
+ * { setProgress(done,total), finish(summaryText), destroy }.
+ */
+function buildProgressSheet() {
+  const modal = buildModalSheet({ titleText: 'Adding photos', dismissible: false });
+  const status = el('p', 'photo-progress-status');
+  status.setAttribute('aria-live', 'polite');
+  status.textContent = 'Preparing…';
+  modal.bodyEl.appendChild(status);
+
+  const bar = el('div', 'photo-progress-bar');
+  const fill = el('div', 'photo-progress-fill');
+  bar.appendChild(fill);
+  modal.bodyEl.appendChild(bar);
+
+  const doneBtn = el('button', 'photo-modal-btn', 'Done');
+  doneBtn.type = 'button';
+  doneBtn.hidden = true;
+  doneBtn.addEventListener('click', () => modal.close());
+  modal.bodyEl.appendChild(doneBtn);
+
+  modal.open();
+
+  return {
+    setProgress(done, total) {
+      status.textContent = `Adding ${done} of ${total}…`;
+      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+      try { fill.style.width = `${pct}%`; } catch { /* stub has no style */ }
+    },
+    finish(summaryText) {
+      status.textContent = summaryText;
+      try { fill.style.width = '100%'; } catch { /* ignore */ }
+      doneBtn.hidden = false;
+      doneBtn.focus?.();
+    },
+    destroy: modal.destroy,
+  };
+}
+
+/**
+ * Show a transient error sheet (e.g. offline). Body-mounted, dismissible.
+ * @param {string} message
+ */
+function showPhotoError(message) {
+  const modal = buildModalSheet({ titleText: 'Couldn’t add photos', dismissible: true });
+  modal.bodyEl.appendChild(el('p', 'photo-modal-note', message));
+  const ok = el('button', 'photo-modal-btn', 'OK');
+  ok.type = 'button';
+  ok.addEventListener('click', () => modal.close());
+  modal.bodyEl.appendChild(ok);
+  modal.open();
+}
+
+// ---- Orchestrator (injected-seam, testable) -------------------------------
+
+/**
+ * Default browser file picker: a hidden multi-select <input type="file"> that
+ * resolves with the chosen File[] (or [] if cancelled). Resets `value` each call
+ * so re-selecting the SAME photos still fires `change`. Browser-only.
+ * @returns {Promise<File[]>}
+ */
+function pickFilesBrowser() {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.multiple = true;
+    input.style.position = 'fixed';
+    input.style.left = '-9999px';
+    let settled = false;
+    const done = (files) => { if (settled) return; settled = true; cleanup(); resolve(files); };
+    const onChange = () => done(input.files ? Array.from(input.files) : []);
+    // A 'cancel' event (supported in newer browsers) or a focus-return with no
+    // selection resolves to []. We listen for 'change'; if the user cancels, the
+    // promise resolves on the next picker (the input is discarded).
+    input.addEventListener('change', onChange);
+    input.addEventListener('cancel', () => done([]));
+    function cleanup() {
+      input.removeEventListener('change', onChange);
+      input.value = ''; // reset so an identical re-pick re-fires change next time
+      if (input.parentNode) input.parentNode.removeChild(input);
+    }
+    if (document.body) document.body.appendChild(input);
+    input.value = ''; // ensure a clean slate before opening
+    input.click();
+  });
+}
+
+/**
+ * Build the photo-sync orchestrator. Every external boundary is INJECTED so the
+ * whole flow is unit-testable with stubs (no Firebase, no real DOM/File). Returns
+ * `run(currentIso)` — the `onAddPhotos` handler.
+ *
+ * @param {object} deps
+ * @param {() => Promise<File[]>} deps.pickFiles open the picker → chosen files
+ * @param {(file:File) => Promise<{exifDateTime:string|null,date:string|null,fromExif:boolean}>} deps.readDate
+ * @param {(file:File) => Promise<{blob:Blob,downscaled:boolean}>} deps.downscale
+ * @param {(path:string, blob:Blob, onProgress?:(f:number)=>void) => Promise<string>} deps.uploadBlob upload → download URL
+ * @param {(docData:object) => Promise<void>} deps.writeDoc write the Firestore photos doc
+ * @param {(uploader:string) => Promise<Set<string>>} deps.readDedup preload existing composite keys
+ * @param {(uploader:string, lastUpload:string) => Promise<void>} deps.updateSyncState
+ * @param {() => string[]} deps.travelers list for the identity prompt
+ * @param {() => string|null} deps.getStoredUploader / @param {(name:string)=>void} deps.setStoredUploader
+ * @param {(names:string[]) => Promise<string|null>} deps.askUploader identity prompt
+ * @param {(count:number, defaultIso:string) => Promise<string|null>} deps.askBatchDate
+ * @param {() => {setProgress:Function,finish:Function,destroy:Function}} deps.progress progress sheet factory
+ * @param {(msg:string) => void} deps.onError surface a fatal/offline error
+ * @param {() => boolean} deps.isOnline
+ * @param {() => Date} deps.now clock seam (getNow)
+ * @param {() => string[]} deps.windowDates trip window ISO dates (tripWindowDates)
+ * @param {number} [deps.concurrency=3]
+ * @returns {{ run: (currentIso?:string) => Promise<object|undefined> }}
+ */
+export function wirePhotoSync(deps) {
+  const {
+    pickFiles, readDate, downscale, uploadBlob, writeDoc, readDedup,
+    updateSyncState, travelers, getStoredUploader, setStoredUploader,
+    askUploader, askBatchDate, progress, onError, isOnline, now, windowDates,
+    concurrency = 3,
+  } = deps;
+
+  let running = false; // re-entrancy latch — a double-tap is a no-op while busy.
+
+  async function resolveUploader() {
+    const stored = getStoredUploader();
+    if (stored) return stored;
+    const chosen = await askUploader(travelers());
+    if (chosen) setStoredUploader(chosen);
+    return chosen; // may be null if dismissed
+  }
+
+  async function run(currentIso) {
+    if (running) return undefined;
+    running = true;
+    try {
+      const uploader = await resolveUploader();
+      if (!uploader) return undefined; // dismissed identity prompt
+
+      const files = await pickFiles();
+      if (!files || files.length === 0) return undefined;
+
+      if (typeof isOnline === 'function' && !isOnline()) {
+        onError('You need an internet connection to add photos. Reconnect and try again.');
+        return undefined;
+      }
+
+      const cleanUploader = sanitizePathSegment(uploader);
+      const windowSet = new Set(windowDates());
+      // Soft client-side lastUpload bound is applied inside readDedup's consumer;
+      // here we just preload all of this uploader's keys (single-field query).
+      let dedupSet;
+      try {
+        dedupSet = await readDedup(uploader);
+      } catch (err) {
+        // Dedup preload failure is non-fatal — proceed without it (worst case: a
+        // duplicate, never a loss). But a network failure here likely means the
+        // uploads will fail too; surface it if offline.
+        dedupSet = new Set();
+        console.warn('[photos] dedup preload failed:', err);
+      }
+      if (!(dedupSet instanceof Set)) dedupSet = new Set(dedupSet || []);
+
+      // Phase 1: read capture dates (cheap, pre-decode). Partition into dated
+      // (EXIF or lastModified) vs. no-date files needing the batch-date prompt.
+      const prepared = [];
+      const noDate = [];
+      for (const file of files) {
+        let info;
+        try { info = await readDate(file); }
+        catch { info = { exifDateTime: null, date: null, fromExif: false }; }
+        const rec = { file, exifDateTime: info.exifDateTime, date: info.date, fromExif: info.fromExif };
+        if (!rec.date) noDate.push(rec);
+        else prepared.push(rec);
+      }
+
+      // No-EXIF / no-date batch → one user-correctable date for the whole group.
+      if (noDate.length) {
+        const fallback = (typeof currentIso === 'string' && currentIso)
+          || localISODate(now()) || windowDates()[0] || null;
+        const batchDate = await askBatchDate(noDate.length, fallback);
+        if (batchDate) {
+          noDate.forEach((rec) => { rec.date = batchDate; prepared.push(rec); });
+        }
+        // Cancelled → those files are dropped (skipped), never silently mis-dated.
+      }
+
+      if (prepared.length === 0) return undefined;
+
+      const ui = progress();
+      const tally = { added: 0, dupes: 0, skipped: 0, errors: 0 };
+      const daysAdded = new Set();
+      let completed = 0;
+      const total = prepared.length;
+      ui.setProgress(0, total);
+
+      // Per-file worker. Bounded concurrency via a shared cursor.
+      let cursor = 0;
+      const advance = () => { completed += 1; ui.setProgress(completed, total); };
+
+      async function worker() {
+        while (cursor < prepared.length) {
+          const rec = prepared[cursor++];
+          try {
+            const decision = decideFile({
+              uploader: cleanUploader,
+              exifDateTime: rec.exifDateTime,
+              date: rec.date,
+              size: rec.file.size,
+              dedupSet,
+              windowSet,
+            });
+            if (decision.action === 'skip-window') { tally.skipped += 1; continue; }
+            if (decision.action === 'skip-dedup') { tally.dupes += 1; continue; }
+
+            // Reserve the key NOW so two same-key files in one batch don't both upload.
+            dedupSet.add(decision.key);
+
+            const { blob } = await downscale(rec.file);
+            const path = `trip-photos/${rec.date}/${cleanUploader}/${uuid()}.jpg`;
+            const url = await uploadBlob(path, blob);
+            await writeDoc({
+              date: rec.date,
+              uploader,
+              storagePath: path,
+              url,
+              takenAt: rec.exifDateTime || `${rec.date} 00:00:00`,
+              size: rec.file.size,
+            });
+            tally.added += 1;
+            daysAdded.add(rec.date);
+          } catch (err) {
+            tally.errors += 1;
+            console.warn('[photos] file failed:', err);
+          } finally {
+            advance();
+          }
+        }
+      }
+
+      const workers = [];
+      const n = Math.max(1, Math.min(concurrency, prepared.length));
+      for (let i = 0; i < n; i += 1) workers.push(worker());
+      await Promise.all(workers);
+
+      // Update the soft last-sync hint (best-effort; never blocks the summary).
+      if (tally.added > 0) {
+        const latest = [...daysAdded].sort().pop();
+        try { await updateSyncState(uploader, latest); }
+        catch (err) { console.warn('[photos] syncState update failed:', err); }
+      }
+
+      const summary = summarizeRun({ ...tally, days: daysAdded.size });
+      ui.finish(summary);
+      return { ...tally, days: daysAdded.size };
+    } finally {
+      running = false;
+    }
+  }
+
+  return { run };
+}
+
+// Module-level handle to the live photo service, built ONCE in boot() after auth
+// resolves (onAuthStateChanged can fire again on sign-out/in). `mountTheApp` is
+// defined OUTSIDE boot(), so it reads this module-level reference to wire the
+// real onAddPhotos handler into mountApp.
+let photoService = null;
+
+/**
+ * Build the real onAddPhotos(currentIso) handler from a lazily-imported Firebase
+ * { db, storage } service + the firestore/storage SDK fn bag. Browser-only — all
+ * Firebase fns are injected (the SDK is dynamically imported in boot()). Returns
+ * the handler, or a no-op if the service is unavailable.
+ */
+function buildOnAddPhotos(service) {
+  if (!service) return undefined;
+  const { db, storage, fb } = service;
+  const {
+    collection, doc, setDoc, getDocs, query, where, serverTimestamp,
+    ref, uploadBytesResumable, getDownloadURL,
+  } = fb;
+
+  const sync = wirePhotoSync({
+    pickFiles: pickFilesBrowser,
+    readDate: fileCaptureDate,
+    downscale: downscaleImage,
+    uploadBlob: (path, blob) => new Promise((resolve, reject) => {
+      const task = uploadBytesResumable(ref(storage, path), blob, { contentType: 'image/jpeg' });
+      task.on('state_changed', null, reject, async () => {
+        try { resolve(await getDownloadURL(task.snapshot.ref)); }
+        catch (e) { reject(e); }
+      });
+    }),
+    writeDoc: (data) => setDoc(doc(collection(db, 'photos')), { ...data, createdAt: serverTimestamp() }),
+    readDedup: async (uploader) => {
+      const set = new Set();
+      const snap = await getDocs(query(collection(db, 'photos'), where('uploader', '==', uploader)));
+      snap.forEach((d) => {
+        const data = d.data();
+        // Reconstruct the SAME exifDateTime used to key this photo at upload:
+        //   takenAt = exifDateTime  (real EXIF, "YYYY-MM-DD HH:MM:SS")
+        //          || "<date> 00:00:00"  (the no-EXIF midnight sentinel)
+        // A trailing " 00:00:00" is treated as no-EXIF (key degrades to
+        // uploader+size) so the read-side key matches the write-side key. This
+        // collides only with a *real* midnight capture (rare, accepted). The
+        // lastUpload bound is applied CLIENT-side / informational only (no
+        // composite index) so a forgotten earlier day is never stranded.
+        const ta = typeof data.takenAt === 'string' ? data.takenAt : '';
+        const exifDt = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(ta) && !ta.endsWith(' 00:00:00')
+          ? ta
+          : null;
+        set.add(compositeKey(uploader, exifDt, data.size));
+      });
+      return set;
+    },
+    updateSyncState: (uploader, lastUpload) =>
+      setDoc(doc(db, 'syncState', sanitizePathSegment(uploader)), { lastUpload, updatedAt: serverTimestamp() }, { merge: true }),
+    travelers: () => (Array.isArray(getTrip().travelers) ? getTrip().travelers.slice() : []),
+    getStoredUploader: getUploader,
+    setStoredUploader: setUploader,
+    askUploader: promptUploader,
+    askBatchDate: promptBatchDate,
+    progress: buildProgressSheet,
+    onError: showPhotoError,
+    isOnline: () => (typeof navigator === 'undefined' ? true : navigator.onLine !== false),
+    now: getNow,
+    windowDates: () => tripWindowDates(),
+    concurrency: 3,
+  });
+
+  return (currentIso) => {
+    sync.run(currentIso).catch((e) => {
+      console.warn('[photos] run failed:', e);
+      showPhotoError('Something went wrong adding photos.');
+    });
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Bootstrap — guarded so a non-browser import (Node syntax check / unit test)
 // of the pure helpers never touches the DOM and never throws.
@@ -2054,6 +2957,13 @@ const SHARED_EMAIL = 'jacob.press3@gmail.com';
 const FIREBASE_SDK_VERSION = '10.12.5';
 const FIREBASE_APP_URL = `https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-app.js`;
 const FIREBASE_AUTH_URL = `https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-auth.js`;
+// Firestore + Storage SDKs (photo-upload-flow). Loaded lazily INSIDE boot()'s
+// browser-only block (never at module top level) so `node --test` stays
+// network-free. sw.js already runtime-caches www.gstatic.com/firebasejs/ → these
+// new imports need no sw.js route change (only a CACHE_VERSION bump for the
+// shell-file edit). Reuse FIREBASE_SDK_VERSION so all four SDKs stay in lockstep.
+const FIREBASE_FIRESTORE_URL = `https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-firestore.js`;
+const FIREBASE_STORAGE_URL = `https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-storage.js`;
 
 /**
  * Pure gating decision — exported for unit tests so QA can verify the gate with
@@ -2222,7 +3132,11 @@ if (typeof document !== 'undefined') {
 
   const mountTheApp = () => {
     const root = document.getElementById('app-root');
-    if (root) appController = mountApp(root);
+    // Wire the real Add-photos handler from the module-level photoService (built
+    // once in boot() after auth resolves). If the photo SDK failed to load, the
+    // handler is undefined → the ☰ "Add photos" row renders disabled (graceful).
+    const onAddPhotos = buildOnAddPhotos(photoService);
+    if (root) appController = mountApp(root, onAddPhotos ? { onAddPhotos } : {});
     // Surface the time-travel indicator (if an override resolved at load).
     // The banner is position:fixed, so it lives directly on <body>.
     if (ACTIVE_NOW_OVERRIDE && document.body) {
@@ -2286,11 +3200,67 @@ if (typeof document !== 'undefined') {
     const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);
 
+    // Build the photo service ONCE, lazily, from the SAME app instance (a second
+    // initializeApp would throw). onAuthStateChanged fires again on sign-out/in,
+    // so this is guarded against rebuilding. The firestore/storage SDKs are
+    // dynamically imported here (browser-only) — never at module top level —
+    // keeping `node --test` network-free. This task owns the FIRST Firestore
+    // init → it MUST use initializeFirestore(...persistentLocalCache) so the
+    // later gallery task gets offline cache (a plain getFirestore would make the
+    // retrofit throw "already initialized").
+    const ensurePhotoService = async () => {
+      if (photoService) return;
+      try {
+        const fs = await import(FIREBASE_FIRESTORE_URL);
+        const st = await import(FIREBASE_STORAGE_URL);
+        let db;
+        try {
+          // persistentLocalCache with no tabManager defaults to single-tab
+          // persistence (the right choice for an installed PWA). This is the
+          // FIRST + only Firestore init, so persistence is enabled here for the
+          // later gallery task — a plain getFirestore would make that retrofit
+          // throw "already initialized".
+          db = fs.initializeFirestore(app, {
+            localCache: fs.persistentLocalCache(/* default single-tab */),
+          });
+        } catch (e) {
+          // Already initialized (defensive — shouldn't happen since we own first
+          // init) → fall back to the existing instance.
+          console.warn('[photos] initializeFirestore fell back to getFirestore:', e);
+          db = fs.getFirestore(app);
+        }
+        const storage = st.getStorage(app);
+        photoService = {
+          db,
+          storage,
+          fb: {
+            collection: fs.collection,
+            doc: fs.doc,
+            setDoc: fs.setDoc,
+            getDocs: fs.getDocs,
+            query: fs.query,
+            where: fs.where,
+            serverTimestamp: fs.serverTimestamp,
+            ref: st.ref,
+            uploadBytesResumable: st.uploadBytesResumable,
+            getDownloadURL: st.getDownloadURL,
+          },
+        };
+      } catch (err) {
+        // Firestore/Storage SDK failed to load (offline + uncached). The auth gate
+        // still works; the Add-photos row just stays disabled (no handler).
+        console.warn('[photos] Firebase Firestore/Storage SDK failed to load:', err);
+        photoService = null;
+      }
+    };
+
     wireAuthGate({
       onAuthStateChanged: (cb) => onAuthStateChanged(auth, cb),
       signIn: (email, password) => signInWithEmailAndPassword(auth, email, password),
       overlay, form, passwordInput, submitBtn, errorEl,
-      onAuthed: mountTheApp,
+      // Build the photo service before mounting so the ☰ "Add photos" row is wired
+      // on first mount. ensurePhotoService is idempotent (guarded on photoService).
+      onAuthed: async () => { await ensurePhotoService(); mountTheApp(); },
       onSignedOut: teardownTheApp,
     });
   };

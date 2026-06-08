@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← tests for the data/API/nav layer (node --test; 359 total with sw.test.js).
+app.test.js    ← tests for the data/API/nav layer (node --test; 419 total with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -218,13 +218,31 @@ screens import them.
 
 | Function                | Returns / effect                                              |
 |-------------------------|--------------------------------------------------------------|
-| `mountApp(rootEl, opts = {})` | **Primary mount entry point** (what the bootstrap calls). Boots the date/time-aware controller: picks a landing view, renders it, and wires a day-nav bar — a **☰ hamburger menu** (left) carrying **Home** and **Add photos** rows, a centered position label, and **prev/next circular chevrons** (right) — that pages across the full 18-day trip window (Jun 16 – Jul 3). `opts.onAddPhotos(iso)` is an optional handler for the Add-photos menu row; when absent (or before the trip starts) the row is disabled. Returns `{ go(index), toIso(iso), toOverview(), destroy() }`. `toOverview()` re-mounts the 18-day overview from any day view (reachable via ☰ → Home). |
+| `mountApp(rootEl, opts = {})` | **Primary mount entry point** (what the bootstrap calls). Boots the date/time-aware controller: picks a landing view, renders it, and wires a day-nav bar — a **☰ hamburger menu** (left) carrying **Home** and **Add photos** rows, a centered position label, and **prev/next circular chevrons** (right) — that pages across the full 18-day trip window (Jun 16 – Jul 3). `opts.onAddPhotos(iso)` is the handler for the Add-photos menu row (receives the viewed day's ISO); when absent (or before the trip starts) the row is disabled. The bootstrap now wires a real handler (the photo-upload flow — see below). Returns `{ go(index), toIso(iso), toOverview(), destroy() }`. `toOverview()` re-mounts the 18-day overview from any day view (reachable via ☰ → Home). |
 | `pickLandingView(now?)` | Decides what to show on open. Before the trip: `{ view: 'overview', day: null, daysUntil }`. During: `{ view: 'day', day, framing }` for today's day in its lifecycle framing. After: `{ view: 'day', day, framing: 'reminisce' }` for the last day (overview fallback if no days authored). Defaults `now` to `getNow()`. |
 | `frameForDay(day, now?)` | Returns `'anticipation'` (future day), `'plan'` (today), or `'reminisce'` (past day), comparing calendar dates in local time. Accepts a day object or an ISO string. Bad input returns `'plan'`. Defaults `now` to `getNow()`. |
 | `isEveningWindow(now, window?)` | Returns `true` during the evening window defined by `TRIP.eveningWindow` (default 9 pm – 4 am, midnight-wrapping). Defaults `window` to `getTrip().eveningWindow`. |
 | `tripWindowDates(trip?)` | Returns an ordered ISO array of every date in the trip window (18 dates for Jun 16 – Jul 3). Returns `[]` if the window is inverted or unparseable. Defaults `trip` to `getTrip()`. |
 | `getNow()`              | Returns the current `Date` from the active clock provider. Degrades to `new Date()` if the provider throws or returns a non-Date. |
 | `setNow(fn\|null)`      | Overrides the clock: pass a zero-argument function that returns a `Date` to substitute a fixed or simulated time. Pass `null` to restore the wall clock. Used by the time-travel test mode and pinned in tests — do not call in production paths. |
+
+**Photo upload** — the ☰ menu's **Add photos** row is wired to a real upload flow
+(see "Adding photos" below). These exports are the testable pure cores + the
+injected-seam orchestrator behind it; downstream screens (the live gallery) import
+the same data shape:
+
+| Function                | Returns / effect                                              |
+|-------------------------|--------------------------------------------------------------|
+| `readCaptureDate(buffer)` | Reads a JPEG's EXIF `DateTimeOriginal` from an `ArrayBuffer` and returns a `YYYY-MM-DD` bucket-date string, or `null` if absent/unreadable. Exported for tests. |
+| `readExifDateTimeOriginal(buffer)` | Lower-level: walks the JPEG APP1/Exif sub-IFD and returns the raw EXIF datetime string (`"2026:06:25 23:30:00"`), or `null`. Exported for tests. |
+| `exifDateTimeString(raw)` | Normalizes a raw EXIF datetime into a sortable `"YYYY-MM-DD HH:MM:SS"` string (the `takenAt` field), or `null`. Exported for tests. |
+| `bucketDateFromExif(normalized)` | Extracts the `YYYY-MM-DD` day from a normalized EXIF datetime string. Exported for tests. |
+| `compositeKey(uploader, exifDateTime, originalFileSize)` | Builds the best-effort dedup key (`uploader + EXIF datetime + original file size`) — computable with no image decode, so re-adds skip before any upload. Exported for tests. |
+| `decideFile({ uploader, exifDateTime, date, size, dedupSet, windowSet })` | Pure per-file decision: keep / skip-out-of-window / skip-dedup. Exported for tests. |
+| `summarizeRun({ added, dupes, skipped, errors, days })` | Tallies a run into the end-summary string ("Added N across D days · M already in journal"). Exported for tests. |
+| `sanitizePathSegment(s)` | Defensively sanitizes a string for use in a Storage path segment (the uploader name). Exported for tests. |
+| `getUploader()` / `setUploader(name)` | Read/write the per-device uploader identity (`localStorage['jt:uploader']`), `localStorage`-throw-safe. Exported for tests. |
+| `wirePhotoSync(deps)` | The injected-seam orchestrator → `{ run(currentIso) }`. `deps` supplies the picker, EXIF reader, downscaler, upload/write/dedup functions (à la `wireAuthGate`), so the upload loop is unit-testable with stubs and no Firebase. The browser bootstrap wires the real Firebase-backed `deps`. |
 
 **Immutability / copy-safety:** everything the API hands back is deeply frozen,
 so callers can't accidentally corrupt the shared data. `getDays()` additionally
@@ -289,6 +307,38 @@ Navigate to `?now=clear` (or `?now=off` / `?now=real` / `?now=reset` / `?now=` w
 ### Active-override indicator
 
 When an override is active, `index.html` shows an unobtrusive banner with the simulated moment and a **Use real clock** link, so you can never accidentally forget the app is faking time.
+
+## Adding photos
+
+During the trip, the day-nav **☰** menu has an **Add photos** row. Tap it to
+contribute photos to the shared journal:
+
+1. The first time on a device, the app asks **"Who's uploading?"** (one of the
+   four travelers) and remembers your choice on that device.
+2. The native photo picker opens — select your recent shots (over-select freely)
+   and tap Add.
+3. Each photo is filed under the **day it was taken** (read from its EXIF capture
+   date), shrunk for a fast upload, and added to the shared journal. A progress
+   sheet and an end summary show what landed.
+
+A few deliberate behaviours:
+
+- **Nothing overwrites.** Every photo uploads to a unique path, so a photo can
+  never replace another — duplicates are possible, photo loss is not.
+- **Re-adding is safe.** Re-selecting photos you already uploaded is skipped
+  (best-effort dedup), so you can tap Add again without making copies.
+- **Correct day, no silent guesses.** When a photo has no readable capture date,
+  the app asks you to confirm a single date for that batch instead of filing it
+  on the wrong day. Photos taken outside the trip window are skipped.
+- **Add photos is only enabled once the trip has started.** Before Jun 16 the row
+  is disabled.
+
+Your **full-resolution originals stay in your camera roll** — the journal stores
+a downscaled copy for viewing, not a backup. Adding photos requires connectivity
+(there's no offline upload queue); an offline tap shows a clear error.
+
+> The viewing side — seeing everyone's uploaded photos in the day gallery — is a
+> separate, later piece of work. This flow gets photos *in*.
 
 ## PWA — install to your phone and use offline
 
@@ -356,7 +406,7 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The test suite (**359 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The test suite (**419 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),
@@ -367,7 +417,8 @@ the time-travel override layer (`parseNowOverride`, `resolveNowOverride`, preced
 collapsible day-parts (`bucketPlanByDayPart` bucketing, `dayParts` validation, day-part section rendering),
 Hakone content contracts (Romancecar terminus/reserved, transit minutes, veg coverage, lodging consistency, contiguous 18-day span),
 the auth gate (login form present + native-submit guard),
-and the ☰ nav menu (hamburger popover, Home/Add-photos rows, focus trap, `opts.onAddPhotos` seam).
+the ☰ nav menu (hamburger popover, Home/Add-photos rows, focus trap, `opts.onAddPhotos` seam),
+and the photo-upload flow (EXIF capture-date parsing against synthetic JPEG fixtures, trip-window filtering, composite-key dedup, run summaries, and the `wirePhotoSync` orchestrator via injected seams).
 
 ## Deploy
 

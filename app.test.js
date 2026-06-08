@@ -42,6 +42,17 @@ import {
   friendlyAuthError,
   wireAuthGate,
   installSubmitGuard,
+  readExifDateTimeOriginal,
+  readCaptureDate,
+  exifDateTimeString,
+  bucketDateFromExif,
+  compositeKey,
+  sanitizePathSegment,
+  getUploader,
+  setUploader,
+  decideFile,
+  summarizeRun,
+  wirePhotoSync,
 } from './app.js';
 import { TRIP, DAYS } from './data/days.js';
 
@@ -5010,4 +5021,932 @@ test('installSubmitGuard returns false for a missing/invalid form (no throw)', (
   assert.equal(installSubmitGuard(null), false);
   assert.equal(installSubmitGuard(undefined), false);
   assert.equal(installSubmitGuard({}), false, 'object without addEventListener is ignored');
+});
+
+// ===========================================================================
+// photo-upload-flow — EXIF capture-date parser + dedup/decision pure cores
+// + the injected-seam orchestrator (wirePhotoSync).
+//
+// Scope: app.js's photo-upload logic. The pure cores (readExifDateTimeOriginal,
+// exifDateTimeString, bucketDateFromExif, compositeKey, decideFile,
+// summarizeRun, sanitizePathSegment, getUploader/setUploader) are unit-tested
+// directly. The orchestrator (wirePhotoSync) is driven with STUBS for every
+// injected boundary — no real Firebase, no real DOM, no network. Tests stay
+// node:test + node:assert/strict only (no new deps).
+//
+// The EXIF tests hand-build synthetic JPEG+APP1/TIFF byte fixtures with the
+// `buildExifJpeg` helper below — small, fully-commented, deterministic.
+// ===========================================================================
+
+// --- Synthetic JPEG/EXIF fixture builder ------------------------------------
+//
+// Builds the *minimum* JPEG byte sequence the parser walks:
+//   SOI (FFD8) -> APP1 (FFE1) [ "Exif\0\0" + TIFF block ] -> EOI (FFD9)
+// The TIFF block holds IFD0 (with an optional Exif sub-IFD pointer 0x8769 and an
+// optional IFD0 DateTime 0x0132) -> the Exif sub-IFD (with an optional
+// DateTimeOriginal 0x9003). All datetime values are stored at offsets AFTER the
+// IFDs (ASCII, 20 bytes incl. NUL), since "YYYY:MM:DD HH:MM:SS\0" is 20 > 4.
+//
+// `endian`: 'II' (little) or 'MM' (big). The builder writes TIFF multi-byte
+// fields in the chosen order so we can prove both endiannesses parse.
+function buildExifJpeg({ dto = null, ifd0DateTime = null, endian = 'II' } = {}) {
+  const little = endian === 'II';
+
+  // Count IFD0 entries: 0x8769 pointer (if we have a DTO) + 0x0132 (if given).
+  const ifd0HasExifPtr = dto != null;
+  const ifd0HasDateTime = ifd0DateTime != null;
+  const ifd0Count = (ifd0HasExifPtr ? 1 : 0) + (ifd0HasDateTime ? 1 : 0);
+  const exifCount = dto != null ? 1 : 0;
+
+  const ifd0Start = 8;                       // right after the 8-byte TIFF header
+  const ifd0Size = 2 + ifd0Count * 12 + 4;   // count + entries + next-IFD ptr
+  const exifStart = ifd0Start + ifd0Size;
+  const exifSize = 2 + exifCount * 12 + 4;
+  let valueCursor = exifStart + exifSize;     // ASCII value blobs live past the IFDs
+
+  let dtoValueOff = -1;
+  let ifd0DtValueOff = -1;
+  if (dto != null) { dtoValueOff = valueCursor; valueCursor += 20; }
+  if (ifd0DateTime != null) { ifd0DtValueOff = valueCursor; valueCursor += 20; }
+
+  const tiff = new Uint8Array(valueCursor);
+
+  const setU16 = (off, v) => {
+    if (little) { tiff[off] = v & 0xff; tiff[off + 1] = (v >> 8) & 0xff; }
+    else { tiff[off] = (v >> 8) & 0xff; tiff[off + 1] = v & 0xff; }
+  };
+  const setU32 = (off, v) => {
+    if (little) {
+      tiff[off] = v & 0xff; tiff[off + 1] = (v >> 8) & 0xff;
+      tiff[off + 2] = (v >> 16) & 0xff; tiff[off + 3] = (v >> 24) & 0xff;
+    } else {
+      tiff[off] = (v >> 24) & 0xff; tiff[off + 1] = (v >> 16) & 0xff;
+      tiff[off + 2] = (v >> 8) & 0xff; tiff[off + 3] = v & 0xff;
+    }
+  };
+  const setAscii = (off, str) => {
+    for (let i = 0; i < str.length; i += 1) tiff[off + i] = str.charCodeAt(i) & 0xff;
+    tiff[off + str.length] = 0; // NUL terminator
+  };
+  // One IFD entry: tag(2) type(2) count(4) value/offset(4).
+  const setEntry = (off, tag, type, count, valueOrOffset) => {
+    setU16(off, tag);
+    setU16(off + 2, type);
+    setU32(off + 4, count);
+    setU32(off + 8, valueOrOffset);
+  };
+
+  // TIFF header: byte-order, magic 0x002A, IFD0 offset.
+  if (little) { tiff[0] = 0x49; tiff[1] = 0x49; } else { tiff[0] = 0x4d; tiff[1] = 0x4d; }
+  setU16(2, 0x002a);
+  setU32(4, ifd0Start);
+
+  // IFD0.
+  setU16(ifd0Start, ifd0Count);
+  let e = ifd0Start + 2;
+  if (ifd0HasExifPtr) { setEntry(e, 0x8769, 4, 1, exifStart); e += 12; } // type 4 LONG
+  if (ifd0HasDateTime) { setEntry(e, 0x0132, 2, 20, ifd0DtValueOff); e += 12; } // type 2 ASCII
+  setU32(ifd0Start + 2 + ifd0Count * 12, 0); // next-IFD = 0
+
+  // Exif sub-IFD.
+  setU16(exifStart, exifCount);
+  if (exifCount) setEntry(exifStart + 2, 0x9003, 2, 20, dtoValueOff); // DateTimeOriginal
+  setU32(exifStart + 2 + exifCount * 12, 0); // next-IFD = 0
+
+  // ASCII value blobs.
+  if (dto != null) setAscii(dtoValueOff, dto);
+  if (ifd0DateTime != null) setAscii(ifd0DtValueOff, ifd0DateTime);
+
+  // Wrap the TIFF block in APP1 ("Exif\0\0" + TIFF) between SOI and EOI.
+  const exifSig = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00]; // "Exif\0\0"
+  const app1SegLen = exifSig.length + tiff.length + 2;  // segLen INCLUDES the 2 length bytes
+  const out = [];
+  out.push(0xff, 0xd8);                                  // SOI
+  out.push(0xff, 0xe1);                                  // APP1 marker
+  out.push((app1SegLen >> 8) & 0xff, app1SegLen & 0xff); // segment length (big-endian per JPEG)
+  out.push(...exifSig);
+  out.push(...tiff);
+  out.push(0xff, 0xd9);                                  // EOI
+  return new Uint8Array(out);
+}
+
+// --- readExifDateTimeOriginal / readCaptureDate -----------------------------
+
+test('readExifDateTimeOriginal: DateTimeOriginal in the Exif sub-IFD, little-endian (II)', () => {
+  const buf = buildExifJpeg({ dto: '2026:06:25 23:30:00', endian: 'II' });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:06:25 23:30:00');
+  assert.equal(readCaptureDate(buf), '2026-06-25 23:30:00');
+});
+
+test('readExifDateTimeOriginal: DateTimeOriginal in the Exif sub-IFD, big-endian (MM)', () => {
+  const buf = buildExifJpeg({ dto: '2026:06:25 23:30:00', endian: 'MM' });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:06:25 23:30:00');
+  assert.equal(readCaptureDate(buf), '2026-06-25 23:30:00');
+});
+
+test('readExifDateTimeOriginal: falls back to IFD0 DateTime (0x0132) when no sub-IFD 0x9003', () => {
+  const buf = buildExifJpeg({ dto: null, ifd0DateTime: '2026:06:20 08:15:00', endian: 'II' });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:06:20 08:15:00');
+});
+
+test('readExifDateTimeOriginal: prefers sub-IFD 0x9003 over IFD0 0x0132 when both present', () => {
+  const buf = buildExifJpeg({ dto: '2026:06:25 23:30:00', ifd0DateTime: '2000:01:01 00:00:00', endian: 'II' });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:06:25 23:30:00');
+});
+
+test('readExifDateTimeOriginal: big-endian IFD0-only DateTime fallback', () => {
+  const buf = buildExifJpeg({ dto: null, ifd0DateTime: '2026:07:01 12:00:00', endian: 'MM' });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:07:01 12:00:00');
+});
+
+test('readExifDateTimeOriginal: no APP1 / non-Exif APP1 content -> null', () => {
+  // A bare JPEG: SOI + EOI, no APP1.
+  assert.equal(readExifDateTimeOriginal(new Uint8Array([0xff, 0xd8, 0xff, 0xd9])), null);
+  // An APP1 whose payload is NOT the "Exif\0\0" signature (e.g. XMP) -> ignored.
+  const notExif = new Uint8Array([
+    0xff, 0xd8,             // SOI
+    0xff, 0xe1, 0x00, 0x08, // APP1, segLen 8
+    0x68, 0x74, 0x74, 0x70, // "http" (XMP-ish, not "Exif\0\0")
+    0xff, 0xd9,             // EOI
+  ]);
+  assert.equal(readExifDateTimeOriginal(notExif), null);
+});
+
+test('readExifDateTimeOriginal: non-buffer / empty / too-short inputs -> null, no throw', () => {
+  assert.equal(readExifDateTimeOriginal(null), null);
+  assert.equal(readExifDateTimeOriginal(undefined), null);
+  assert.equal(readExifDateTimeOriginal('not a buffer'), null);
+  assert.equal(readExifDateTimeOriginal(42), null);
+  assert.equal(readExifDateTimeOriginal(new Uint8Array([])), null);
+  assert.equal(readExifDateTimeOriginal(new Uint8Array([0xff, 0xd8])), null); // SOI only
+  assert.equal(readExifDateTimeOriginal(new Uint8Array([0x00, 0x00, 0x00, 0x00])), null); // wrong SOI
+});
+
+test('readExifDateTimeOriginal: accepts an ArrayBuffer as well as a Uint8Array', () => {
+  const u8 = buildExifJpeg({ dto: '2026:06:25 23:30:00' });
+  const ab = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
+  assert.equal(readExifDateTimeOriginal(ab), '2026:06:25 23:30:00');
+});
+
+test('readExifDateTimeOriginal: truncated APP1 / TIFF bytes -> null, never throws', () => {
+  const full = buildExifJpeg({ dto: '2026:06:25 23:30:00' });
+  const truncated = full.slice(0, full.length - 14); // cuts into the TIFF IFDs / value blobs
+  assert.doesNotThrow(() => readExifDateTimeOriginal(truncated));
+  assert.equal(readExifDateTimeOriginal(truncated), null);
+  const noTiff = full.slice(0, 12); // right after the Exif signature, no TIFF header
+  assert.equal(readExifDateTimeOriginal(noTiff), null);
+});
+
+test('readExifDateTimeOriginal: bad TIFF byte-order marker -> null', () => {
+  const buf = buildExifJpeg({ dto: '2026:06:25 23:30:00' });
+  // SOI(2)+APP1marker(2)+segLen(2)+Exif\0\0(6) = offset 12 is the TIFF start.
+  buf[12] = 0x58; buf[13] = 0x58; // "XX" — neither II nor MM
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+// --- exifDateTimeString ------------------------------------------------------
+
+test('exifDateTimeString: normalizes EXIF colons to sortable dashes', () => {
+  assert.equal(exifDateTimeString('2026:06:25 23:30:00'), '2026-06-25 23:30:00');
+  assert.equal(exifDateTimeString('2026:06:25T23:30:00'), '2026-06-25 23:30:00');
+});
+
+test('exifDateTimeString: rejects malformed / out-of-range / non-string input -> null', () => {
+  assert.equal(exifDateTimeString(null), null);
+  assert.equal(exifDateTimeString(123), null);
+  assert.equal(exifDateTimeString('not a date'), null);
+  assert.equal(exifDateTimeString('2026-06-25 23:30:00'), null); // already-dashed isn't EXIF shape
+  assert.equal(exifDateTimeString('2026:13:25 23:30:00'), null); // month 13
+  assert.equal(exifDateTimeString('2026:00:25 23:30:00'), null); // month 0
+  assert.equal(exifDateTimeString('2026:06:00 23:30:00'), null); // day 0
+  assert.equal(exifDateTimeString('2026:06:25 24:30:00'), null); // hour 24
+  assert.equal(exifDateTimeString('2026:06:25 23:60:00'), null); // minute 60
+  assert.equal(exifDateTimeString('1969:06:25 23:30:00'), null); // year < 1970
+});
+
+// --- bucketDateFromExif ------------------------------------------------------
+
+test('bucketDateFromExif: extracts the YYYY-MM-DD day from a normalized datetime', () => {
+  assert.equal(bucketDateFromExif('2026-06-25 23:30:00'), '2026-06-25');
+  assert.equal(bucketDateFromExif('2026-07-03 00:00:00'), '2026-07-03');
+});
+
+test('bucketDateFromExif: non-string / malformed -> null', () => {
+  assert.equal(bucketDateFromExif(null), null);
+  assert.equal(bucketDateFromExif(undefined), null);
+  assert.equal(bucketDateFromExif(20260625), null);
+  assert.equal(bucketDateFromExif('nope'), null);
+});
+
+// --- compositeKey ------------------------------------------------------------
+
+test('compositeKey: full key from uploader + exifDateTime + size', () => {
+  assert.equal(
+    compositeKey('Jacob', '2026-06-25 23:30:00', 1234567),
+    'Jacob|2026-06-25 23:30:00|1234567',
+  );
+});
+
+test('compositeKey: no-EXIF degraded key uses an empty datetime slot (uploader||size)', () => {
+  assert.equal(compositeKey('Megan', null, 9999), 'Megan||9999');
+  assert.equal(compositeKey('Megan', undefined, 9999), 'Megan||9999');
+});
+
+test('compositeKey: two different-size no-EXIF photos get DISTINCT keys', () => {
+  assert.notEqual(compositeKey('Jacob', null, 1000), compositeKey('Jacob', null, 2000));
+});
+
+test('compositeKey: two SAME-size no-EXIF photos COLLIDE (documented trade-off)', () => {
+  // Accepted: a duplicate-skip over a wrong overwrite.
+  assert.equal(compositeKey('Jacob', null, 1000), compositeKey('Jacob', null, 1000));
+});
+
+test('compositeKey: non-finite size degrades to "0"', () => {
+  assert.equal(compositeKey('Jacob', null, NaN), 'Jacob||0');
+  assert.equal(compositeKey('Jacob', null, undefined), 'Jacob||0');
+});
+
+test('compositeKey: uploader is sanitized into the key (matches the written path)', () => {
+  assert.equal(compositeKey('a/b', '2026-06-25 23:30:00', 10), 'ab|2026-06-25 23:30:00|10');
+});
+
+// --- sanitizePathSegment -----------------------------------------------------
+
+test('sanitizePathSegment: clean traveler names pass through unchanged', () => {
+  assert.equal(sanitizePathSegment('Jacob'), 'Jacob');
+  assert.equal(sanitizePathSegment('Megan'), 'Megan');
+});
+
+test('sanitizePathSegment: collapses internal whitespace to a dash', () => {
+  assert.equal(sanitizePathSegment('Mary  Jane'), 'Mary-Jane');
+});
+
+test('sanitizePathSegment: neutralizes path traversal + separators', () => {
+  const out = sanitizePathSegment('../../etc/passwd');
+  assert.ok(!out.includes('/'), 'no forward slashes survive');
+  assert.ok(!out.includes('..'), 'no parent-dir traversal survives');
+  assert.equal(sanitizePathSegment('a/b\\c'), 'abc');
+  assert.equal(sanitizePathSegment('back\\slash'), 'backslash');
+});
+
+test('sanitizePathSegment: strips control chars + Storage-reserved/glob chars', () => {
+  assert.equal(sanitizePathSegment('na\x00me'), 'name');     // NUL
+  assert.equal(sanitizePathSegment('na\x1fme'), 'name');     // unit separator
+  // \t is a control char (\x00-\x1f), stripped entirely BEFORE the whitespace->dash
+  // collapse runs — so it vanishes rather than becoming a dash.
+  assert.equal(sanitizePathSegment('tab\there'), 'tabhere');
+  assert.equal(sanitizePathSegment('a#b?c[d]e*f'), 'abcdef'); // reserved + glob
+});
+
+test('sanitizePathSegment: strips leading dots/dashes (no hidden-file names)', () => {
+  assert.equal(sanitizePathSegment('...hidden'), 'hidden');
+  assert.equal(sanitizePathSegment('--dashed'), 'dashed');
+});
+
+test('sanitizePathSegment: empty / non-string / all-stripped -> "unknown"', () => {
+  assert.equal(sanitizePathSegment(''), 'unknown');
+  assert.equal(sanitizePathSegment(null), 'unknown');
+  assert.equal(sanitizePathSegment(123), 'unknown');
+  assert.equal(sanitizePathSegment('///'), 'unknown');
+});
+
+test('sanitizePathSegment: caps length at 64 chars', () => {
+  assert.equal(sanitizePathSegment('a'.repeat(200)).length, 64);
+});
+
+// --- decideFile --------------------------------------------------------------
+
+function makeDecideArgs(overrides = {}) {
+  return {
+    uploader: 'Jacob',
+    exifDateTime: '2026-06-25 23:30:00',
+    date: '2026-06-25',
+    size: 1000,
+    dedupSet: new Set(),
+    windowSet: new Set(['2026-06-25', '2026-06-26']),
+    ...overrides,
+  };
+}
+
+test('decideFile: in-window, non-duplicate -> upload with the right composite key', () => {
+  const res = decideFile(makeDecideArgs());
+  assert.equal(res.action, 'upload');
+  assert.equal(res.date, '2026-06-25');
+  assert.equal(res.key, 'Jacob|2026-06-25 23:30:00|1000');
+});
+
+test('decideFile: date outside the trip window -> skip-window (no key computed)', () => {
+  const res = decideFile(makeDecideArgs({ date: '2025-01-01' }));
+  assert.equal(res.action, 'skip-window');
+  assert.equal(res.date, '2025-01-01');
+  assert.equal(res.key, undefined);
+});
+
+test('decideFile: composite key already present -> skip-dedup', () => {
+  const key = 'Jacob|2026-06-25 23:30:00|1000';
+  const res = decideFile(makeDecideArgs({ dedupSet: new Set([key]) }));
+  assert.equal(res.action, 'skip-dedup');
+  assert.equal(res.key, key);
+});
+
+test('decideFile: window check precedes dedup (out-of-window dup is skip-window)', () => {
+  const key = 'Jacob||1000';
+  const res = decideFile(makeDecideArgs({
+    date: '2025-01-01', exifDateTime: null, dedupSet: new Set([key]),
+  }));
+  assert.equal(res.action, 'skip-window');
+});
+
+// --- summarizeRun ------------------------------------------------------------
+
+test('summarizeRun: added + days, plus dupes tally', () => {
+  assert.equal(
+    summarizeRun({ added: 18, dupes: 22, skipped: 0, errors: 0, days: 3 }),
+    'Added 18 photos across 3 days · 22 already in journal',
+  );
+});
+
+test('summarizeRun: singular forms (1 photo, 1 day)', () => {
+  assert.equal(
+    summarizeRun({ added: 1, dupes: 0, skipped: 0, errors: 0, days: 1 }),
+    'Added 1 photo across 1 day',
+  );
+});
+
+test('summarizeRun: zero added -> "No new photos added"', () => {
+  assert.equal(
+    summarizeRun({ added: 0, dupes: 0, skipped: 0, errors: 0, days: 0 }),
+    'No new photos added',
+  );
+  assert.equal(
+    summarizeRun({ added: 0, dupes: 5, skipped: 2, errors: 0, days: 0 }),
+    'No new photos added · 5 already in journal · 2 outside the trip skipped',
+  );
+});
+
+test('summarizeRun: includes the errors clause when present', () => {
+  const s = summarizeRun({ added: 2, dupes: 0, skipped: 0, errors: 3, days: 1 });
+  assert.match(s, /Added 2 photos across 1 day/);
+  assert.match(s, /3 couldn/); // "couldn't be added" (curly apostrophe)
+});
+
+test('summarizeRun: days=0 with added>0 omits the "across N days" clause', () => {
+  assert.equal(
+    summarizeRun({ added: 4, dupes: 0, skipped: 0, errors: 0, days: 0 }),
+    'Added 4 photos',
+  );
+});
+
+test('summarizeRun: ALL FOUR clauses present assemble in order, joined by " · "', () => {
+  // Each clause is covered individually above; this pins the full assembly —
+  // the order (added → dupes → skipped → errors) and the " · " separator — so a
+  // reordering or a dropped clause when every tally is non-zero fails here.
+  assert.equal(
+    summarizeRun({ added: 5, dupes: 3, skipped: 2, errors: 1, days: 2 }),
+    'Added 5 photos across 2 days · 3 already in journal · 2 outside the trip skipped · 1 couldn’t be added',
+  );
+});
+
+// --- getUploader / setUploader (localStorage seam) --------------------------
+
+function withLocalStorage(impl, fn) {
+  const prev = globalThis.localStorage;
+  globalThis.localStorage = impl;
+  try { return fn(); }
+  finally { globalThis.localStorage = prev; }
+}
+
+function makeMemoryStorage() {
+  const map = new Map();
+  return {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => { map.set(k, String(v)); },
+    removeItem: (k) => { map.delete(k); },
+    _map: map,
+  };
+}
+
+test('setUploader persists to localStorage and getUploader reads it back', () => {
+  withLocalStorage(makeMemoryStorage(), () => {
+    assert.equal(getUploader(), null, 'starts empty');
+    assert.equal(setUploader('Jacob'), true);
+    assert.equal(getUploader(), 'Jacob');
+    assert.equal(globalThis.localStorage._map.get('jt:uploader'), 'Jacob');
+  });
+});
+
+test('setUploader rejects empty/blank/non-string names (false, persists nothing)', () => {
+  withLocalStorage(makeMemoryStorage(), () => {
+    assert.equal(setUploader(''), false);
+    assert.equal(setUploader('   '), false);
+    assert.equal(setUploader(42), false);
+    assert.equal(getUploader(), null);
+  });
+});
+
+test('getUploader treats a blank stored value as no identity', () => {
+  const store = makeMemoryStorage();
+  store._map.set('jt:uploader', '   ');
+  withLocalStorage(store, () => {
+    assert.equal(getUploader(), null);
+  });
+});
+
+test('getUploader falls back to null when localStorage.getItem throws', () => {
+  const throwing = {
+    getItem() { throw new Error('private mode'); },
+    setItem() { throw new Error('private mode'); },
+  };
+  withLocalStorage(throwing, () => {
+    assert.doesNotThrow(() => getUploader());
+    assert.equal(getUploader(), null);
+  });
+});
+
+test('setUploader returns false (no throw) when localStorage.setItem throws', () => {
+  const throwing = {
+    getItem() { return null; },
+    setItem() { throw new Error('quota / private mode'); },
+  };
+  withLocalStorage(throwing, () => {
+    assert.doesNotThrow(() => setUploader('Jacob'));
+    assert.equal(setUploader('Jacob'), false);
+  });
+});
+
+// ===========================================================================
+// photo-upload-flow — orchestrator (wirePhotoSync) with injected stubs.
+//
+// Every external boundary is injected, so we drive the whole flow in Node with
+// no Firebase / no real DOM / no network. The harness below builds a `deps` bag
+// with spy stubs and sensible defaults; each scenario overrides what it needs.
+// ===========================================================================
+
+// A minimal File-like descriptor. The orchestrator only reads `.size` off it
+// (readDate/downscale are injected stubs, so the bytes are never touched).
+function fakeFile(name, size) {
+  return { name, size };
+}
+
+// Awaitable stub: yields a real macrotask before resolving so the JS scheduler
+// can interleave the bounded-concurrency workers (a synchronous mock would hide
+// any read-then-write race on the shared dedupSet / cursor).
+function asyncSpy(impl) {
+  const calls = [];
+  const fn = async (...args) => {
+    calls.push(args);
+    await new Promise((r) => setTimeout(r, 0));
+    return impl ? impl(...args) : undefined;
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+function syncSpy(impl) {
+  const calls = [];
+  const fn = (...args) => { calls.push(args); return impl ? impl(...args) : undefined; };
+  fn.calls = calls;
+  return fn;
+}
+
+// Build a deps bag. `files` is the picked batch; per-file capture-date info is
+// resolved from `dateFor(file)` (default: derive an in-window EXIF date by name).
+function makePhotoHarness(opts = {}) {
+  const {
+    files = [],
+    dateFor,                         // (file) => {exifDateTime,date,fromExif}
+    storedUploader = 'Jacob',
+    askUploaderResult = 'Jacob',
+    askBatchDateResult = null,
+    dedupPreload = new Set(),
+    isOnline = true,
+    uploadImpl,                      // (path, blob) => url | throws
+    windowDates = ['2026-06-25', '2026-06-26', '2026-06-27'],
+    now = new Date(2026, 5, 24, 12, 0, 0), // local Jun 24 noon (TZ-stable bucket)
+    concurrency = 3,
+  } = opts;
+
+  const progressSheet = {
+    setProgress: syncSpy(),
+    finish: syncSpy(),
+    destroy: syncSpy(),
+  };
+
+  const deps = {
+    pickFiles: asyncSpy(() => files),
+    readDate: asyncSpy((file) => (
+      dateFor ? dateFor(file)
+        // default: every file carries an EXIF date keyed off file.name's last char,
+        // mapping to one of the first two window days so a 2-file batch spans 2 days.
+        : { exifDateTime: `${file._exif}`, date: file._date, fromExif: true }
+    )),
+    downscale: asyncSpy((file) => ({ blob: { _blobFor: file.name }, downscaled: true })),
+    uploadBlob: asyncSpy(uploadImpl || ((path) => `https://cdn/${path}`)),
+    writeDoc: asyncSpy(() => undefined),
+    readDedup: asyncSpy(() => dedupPreload),
+    updateSyncState: asyncSpy(() => undefined),
+    travelers: syncSpy(() => ['Jacob', 'Megan', 'Aya', 'Ken']),
+    getStoredUploader: syncSpy(() => storedUploader),
+    setStoredUploader: syncSpy(),
+    askUploader: asyncSpy(() => askUploaderResult),
+    askBatchDate: asyncSpy(() => askBatchDateResult),
+    progress: syncSpy(() => progressSheet),
+    onError: syncSpy(),
+    isOnline: syncSpy(() => isOnline),
+    now: syncSpy(() => now),
+    windowDates: syncSpy(() => windowDates),
+    concurrency,
+  };
+
+  return { deps, progressSheet };
+}
+
+// A dated, in-window EXIF file: name -> {exifDateTime,date}.
+function datedFile(name, day, size, hhmmss = '12:00:00') {
+  const f = fakeFile(name, size);
+  f._exif = `${day} ${hhmmss}`;
+  f._date = day;
+  return f;
+}
+
+// Silence the orchestrator's per-file console.warn during a run (it warns on
+// each caught file error / dedup-preload failure). Returns the warn count.
+async function runQuiet(fn) {
+  const original = console.warn;
+  let count = 0;
+  console.warn = () => { count += 1; };
+  try { return { result: await fn(), warnCount: count }; }
+  finally { console.warn = original; }
+}
+
+// --- 1. Happy path -----------------------------------------------------------
+
+test('wirePhotoSync: happy path uploads each kept file once, buckets per day, finishes', async () => {
+  const files = [
+    datedFile('a.jpg', '2026-06-25', 1001),
+    datedFile('b.jpg', '2026-06-25', 1002),
+    datedFile('c.jpg', '2026-06-26', 1003), // a second trip day
+  ];
+  const { deps, progressSheet } = makePhotoHarness({ files });
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+
+  assert.deepEqual(result, { added: 3, dupes: 0, skipped: 0, errors: 0, days: 2 });
+  // One upload + one writeDoc per kept file.
+  assert.equal(deps.uploadBlob.calls.length, 3);
+  assert.equal(deps.writeDoc.calls.length, 3);
+  assert.equal(deps.downscale.calls.length, 3);
+
+  // Storage-before-Firestore ordering: every uploaded path is one writeDoc's
+  // storagePath, and the doc shape carries the sortable takenAt + size + url.
+  const docs = deps.writeDoc.calls.map((c) => c[0]);
+  for (const doc of docs) {
+    assert.match(doc.storagePath, /^trip-photos\/2026-06-2[56]\/Jacob\/[\w-]+\.jpg$/);
+    assert.equal(doc.uploader, 'Jacob');
+    assert.match(doc.takenAt, /^2026-06-2[56] 12:00:00$/);
+    assert.equal(doc.url, `https://cdn/${doc.storagePath}`); // url came back from uploadBlob
+    assert.ok(Number.isFinite(doc.size));
+  }
+  // Both days represented.
+  const days = new Set(docs.map((d) => d.date));
+  assert.deepEqual([...days].sort(), ['2026-06-25', '2026-06-26']);
+
+  // Completion: syncState updated with the latest day, summary surfaced.
+  assert.equal(deps.updateSyncState.calls.length, 1);
+  assert.deepEqual(deps.updateSyncState.calls[0], ['Jacob', '2026-06-26']);
+  assert.equal(progressSheet.finish.calls.length, 1);
+  assert.match(progressSheet.finish.calls[0][0], /Added 3 photos across 2 days/);
+});
+
+// --- 2. Skip outside window --------------------------------------------------
+
+test('wirePhotoSync: a file dated outside the window is skipped (no upload), counted', async () => {
+  const files = [
+    datedFile('in.jpg', '2026-06-25', 2001),
+    datedFile('out.jpg', '2030-01-01', 2002), // outside the trip window
+  ];
+  const { deps, progressSheet } = makePhotoHarness({ files });
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+
+  assert.deepEqual(result, { added: 1, dupes: 0, skipped: 1, errors: 0, days: 1 });
+  assert.equal(deps.uploadBlob.calls.length, 1, 'only the in-window file uploads');
+  // The skipped file never reaches downscale/upload.
+  const uploadedPaths = deps.uploadBlob.calls.map((c) => c[0]);
+  assert.ok(uploadedPaths.every((p) => p.includes('2026-06-25')));
+  assert.match(progressSheet.finish.calls[0][0], /1 outside the trip skipped/);
+});
+
+// --- 3. Skip dedup (preloaded key) BEFORE downscale/upload -------------------
+
+test('wirePhotoSync: a preloaded-dedup file is skipped before downscale/uploadBlob', async () => {
+  const dupFile = datedFile('dup.jpg', '2026-06-25', 3001);
+  const newFile = datedFile('new.jpg', '2026-06-25', 3002);
+  // Preload the dup's composite key (uploader is sanitized to 'Jacob').
+  const dupKey = compositeKey('Jacob', '2026-06-25 12:00:00', 3001);
+  const { deps } = makePhotoHarness({
+    files: [dupFile, newFile],
+    dedupPreload: new Set([dupKey]),
+  });
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+
+  assert.deepEqual(result, { added: 1, dupes: 1, skipped: 0, errors: 0, days: 1 });
+  // The dup never hit downscale OR uploadBlob.
+  assert.equal(deps.downscale.calls.length, 1, 'dup file is not downscaled');
+  assert.equal(deps.uploadBlob.calls.length, 1, 'dup file is not uploaded');
+  // The one upload is the NEW file (size 3002 in its doc).
+  assert.equal(deps.writeDoc.calls[0][0].size, 3002);
+});
+
+// --- 4. In-batch dedup (same composite key) ----------------------------------
+
+test('wirePhotoSync: two same-key files in one batch -> only one uploads', async () => {
+  // Identical uploader + exifDateTime + size -> identical composite key, even
+  // though they are distinct File objects.
+  const f1 = datedFile('same1.jpg', '2026-06-25', 4000);
+  const f2 = datedFile('same2.jpg', '2026-06-25', 4000);
+  const { deps } = makePhotoHarness({ files: [f1, f2] });
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+
+  // The key is reserved after the first, so the second is a dupe.
+  assert.equal(result.added, 1);
+  assert.equal(result.dupes, 1);
+  assert.equal(deps.uploadBlob.calls.length, 1, 'only one upload for the colliding pair');
+});
+
+// --- 5. Per-file error is non-fatal ------------------------------------------
+
+test('wirePhotoSync: one uploadBlob rejection lands in the error tally; others still upload', async () => {
+  const files = [
+    datedFile('ok1.jpg', '2026-06-25', 5001),
+    datedFile('boom.jpg', '2026-06-25', 5002),
+    datedFile('ok2.jpg', '2026-06-26', 5003),
+  ];
+  // The default downscale stub tags each blob with `_blobFor = file.name`, so
+  // uploadBlob can fail for exactly the one file whose blob came from boom.jpg.
+  const { deps, progressSheet } = makePhotoHarness({
+    files,
+    uploadImpl: (path, blob) => {
+      if (blob && blob._blobFor === 'boom.jpg') throw new Error('upload failed');
+      return `https://cdn/${path}`;
+    },
+  });
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+
+  assert.equal(result.errors, 1, 'the failing file is counted as an error');
+  assert.equal(result.added, 2, 'the other two still upload');
+  assert.equal(deps.writeDoc.calls.length, 2, 'only successful uploads write a doc');
+  // The run completed (no throw) and finished the progress sheet with a summary.
+  assert.equal(progressSheet.finish.calls.length, 1);
+});
+
+// --- 6. Re-entrancy guard ----------------------------------------------------
+
+test('wirePhotoSync: calling run() while a run is in flight is a no-op', async () => {
+  const files = [datedFile('a.jpg', '2026-06-25', 6001)];
+  const { deps } = makePhotoHarness({ files });
+  const { run } = wirePhotoSync(deps);
+
+  const first = run('2026-06-25');     // in flight (pickFiles awaits a macrotask)
+  const second = await run('2026-06-25'); // should bail immediately
+  assert.equal(second, undefined, 'the re-entrant call returns undefined');
+
+  await runQuiet(() => first);
+  // Only ONE logical run happened: one pickFiles, one upload.
+  assert.equal(deps.pickFiles.calls.length, 1, 'the second call never re-picked files');
+  assert.equal(deps.uploadBlob.calls.length, 1);
+
+  // After the first run settles, a fresh run is allowed again.
+  await runQuiet(() => run('2026-06-25'));
+  assert.equal(deps.pickFiles.calls.length, 2, 'a later run runs normally');
+});
+
+// --- 7. Offline --------------------------------------------------------------
+
+test('wirePhotoSync: offline surfaces a connectivity error and uploads nothing', async () => {
+  const files = [datedFile('a.jpg', '2026-06-25', 7001)];
+  const { deps } = makePhotoHarness({ files, isOnline: false });
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+
+  assert.equal(result, undefined);
+  assert.equal(deps.onError.calls.length, 1, 'an error was surfaced');
+  assert.match(deps.onError.calls[0][0], /internet connection/i);
+  assert.equal(deps.uploadBlob.calls.length, 0, 'no uploads attempted offline');
+  assert.equal(deps.writeDoc.calls.length, 0);
+});
+
+// --- 8. No-EXIF batch date ---------------------------------------------------
+
+test('wirePhotoSync: no-capture-date files use the askBatchDate result to bucket', async () => {
+  // Both files have NO capture date -> they route through the batch-date prompt.
+  const f1 = fakeFile('no1.jpg', 8001);
+  const f2 = fakeFile('no2.jpg', 8002);
+  const { deps } = makePhotoHarness({
+    files: [f1, f2],
+    dateFor: () => ({ exifDateTime: null, date: null, fromExif: false }),
+    askBatchDateResult: '2026-06-27', // the user picks a window day
+  });
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+
+  // askBatchDate consulted once with the count + a default ISO fallback.
+  assert.equal(deps.askBatchDate.calls.length, 1);
+  assert.equal(deps.askBatchDate.calls[0][0], 2, 'count of no-date files');
+  assert.equal(deps.askBatchDate.calls[0][1], '2026-06-25', 'default = currentIso');
+
+  assert.equal(result.added, 2);
+  assert.equal(result.days, 1);
+  // Both bucketed to the chosen batch date; no-EXIF takenAt uses the midnight sentinel.
+  const docs = deps.writeDoc.calls.map((c) => c[0]);
+  assert.ok(docs.every((d) => d.date === '2026-06-27'));
+  assert.ok(docs.every((d) => d.takenAt === '2026-06-27 00:00:00'));
+});
+
+test('wirePhotoSync: no-EXIF batch falls back to now() when currentIso is absent', async () => {
+  const f1 = fakeFile('no1.jpg', 8101);
+  // now() = local Jun 24 noon -> localISODate -> '2026-06-24' (TZ-stable, picked at noon).
+  const { deps } = makePhotoHarness({
+    files: [f1],
+    dateFor: () => ({ exifDateTime: null, date: null, fromExif: false }),
+    askBatchDateResult: '2026-06-25',
+    now: new Date(2026, 5, 24, 12, 0, 0),
+  });
+  const { run } = wirePhotoSync(deps);
+  await runQuiet(() => run()); // no currentIso -> now() fallback drives the default
+  assert.equal(deps.askBatchDate.calls.length, 1);
+  assert.equal(deps.askBatchDate.calls[0][1], '2026-06-24', 'default = localISODate(now())');
+});
+
+test('wirePhotoSync: cancelling the batch-date prompt drops those files (skipped, no upload)', async () => {
+  const f1 = fakeFile('no1.jpg', 8201);
+  const { deps } = makePhotoHarness({
+    files: [f1],
+    dateFor: () => ({ exifDateTime: null, date: null, fromExif: false }),
+    askBatchDateResult: null, // user cancelled
+  });
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+  assert.equal(result, undefined, 'nothing prepared -> early return');
+  assert.equal(deps.uploadBlob.calls.length, 0);
+});
+
+// --- 9. Uploader identity ----------------------------------------------------
+
+test('wirePhotoSync: no stored uploader -> askUploader once, persisted via setStoredUploader', async () => {
+  const files = [datedFile('a.jpg', '2026-06-25', 9001)];
+  const { deps } = makePhotoHarness({
+    files,
+    storedUploader: null,        // nothing remembered
+    askUploaderResult: 'Megan',  // user picks Megan
+  });
+  const { run } = wirePhotoSync(deps);
+  await runQuiet(() => run('2026-06-25'));
+
+  assert.equal(deps.askUploader.calls.length, 1, 'prompted once');
+  assert.deepEqual(deps.askUploader.calls[0][0], ['Jacob', 'Megan', 'Aya', 'Ken'], 'travelers passed');
+  assert.equal(deps.setStoredUploader.calls.length, 1, 'choice persisted');
+  assert.deepEqual(deps.setStoredUploader.calls[0], ['Megan']);
+  // The chosen uploader flows into the doc + path.
+  assert.equal(deps.writeDoc.calls[0][0].uploader, 'Megan');
+  assert.match(deps.writeDoc.calls[0][0].storagePath, /\/Megan\//);
+});
+
+test('wirePhotoSync: a stored uploader skips the identity prompt entirely', async () => {
+  const files = [datedFile('a.jpg', '2026-06-25', 9101)];
+  const { deps } = makePhotoHarness({ files, storedUploader: 'Aya' });
+  const { run } = wirePhotoSync(deps);
+  await runQuiet(() => run('2026-06-25'));
+
+  assert.equal(deps.askUploader.calls.length, 0, 'no prompt when already stored');
+  assert.equal(deps.setStoredUploader.calls.length, 0);
+  assert.equal(deps.writeDoc.calls[0][0].uploader, 'Aya');
+});
+
+test('wirePhotoSync: dismissing the identity prompt aborts before picking files', async () => {
+  const { deps } = makePhotoHarness({
+    files: [datedFile('a.jpg', '2026-06-25', 9201)],
+    storedUploader: null,
+    askUploaderResult: null, // dismissed
+  });
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+  assert.equal(result, undefined);
+  assert.equal(deps.pickFiles.calls.length, 0, 'no file picker opens without an identity');
+  assert.equal(deps.setStoredUploader.calls.length, 0);
+});
+
+// --- Misc orchestrator behaviors --------------------------------------------
+
+test('wirePhotoSync: an empty file pick is a graceful no-op (no progress sheet)', async () => {
+  const { deps, progressSheet } = makePhotoHarness({ files: [] });
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+  assert.equal(result, undefined);
+  assert.equal(deps.progress.calls.length, 0, 'no progress UI for an empty pick');
+  assert.equal(progressSheet.finish.calls.length, 0);
+});
+
+test('wirePhotoSync: a readDedup rejection is non-fatal (proceeds with an empty dedup set)', async () => {
+  const files = [datedFile('a.jpg', '2026-06-25', 10001)];
+  const { deps } = makePhotoHarness({ files });
+  deps.readDedup = asyncSpy(() => { throw new Error('firestore unreachable'); });
+  const sync = wirePhotoSync(deps);
+  const { result, warnCount } = await runQuiet(() => sync.run('2026-06-25'));
+  assert.equal(result.added, 1, 'still uploads despite the dedup-preload failure');
+  assert.ok(warnCount >= 1, 'the dedup failure was warned, not thrown');
+});
+
+test('wirePhotoSync: bounded concurrency never runs more than `concurrency` workers in flight', async () => {
+  // Six distinct in-window files, concurrency 3. Instrument the per-file critical
+  // section (downscale is the first await AFTER the dedup decision) to track how
+  // many workers are simultaneously past that gate. A barrier holds each worker in
+  // the in-flight region until the test releases it, so if the cap were broken all
+  // six would pile in at once. The orchestrator caps workers at min(concurrency,N),
+  // so maxInFlight must be exactly 3 (not 6).
+  const files = [
+    datedFile('p1.jpg', '2026-06-25', 12001),
+    datedFile('p2.jpg', '2026-06-25', 12002),
+    datedFile('p3.jpg', '2026-06-25', 12003),
+    datedFile('p4.jpg', '2026-06-25', 12004),
+    datedFile('p5.jpg', '2026-06-25', 12005),
+    datedFile('p6.jpg', '2026-06-25', 12006),
+  ];
+
+  let inFlight = 0;
+  let maxInFlight = 0;
+  // Each call enters the in-flight region, yields several macrotasks (giving the
+  // scheduler every chance to admit MORE workers if the cap were broken), records
+  // the peak, then exits self-releasing — so the batch always drains, no manual
+  // barrier to deadlock on. The orchestrator awaits this between the dedup
+  // decision and uploadBlob, so a yielding worker genuinely occupies a slot.
+  const gatedDownscale = async (file) => {
+    inFlight += 1;
+    if (inFlight > maxInFlight) maxInFlight = inFlight;
+    // Hold the slot across a few scheduler turns. If concurrency weren't bounded,
+    // all six files would pile into this region together and maxInFlight would be 6.
+    for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
+    inFlight -= 1;
+    return { blob: { _blobFor: file.name }, downscaled: true };
+  };
+
+  const { deps } = makePhotoHarness({ files, concurrency: 3 });
+  // Replace downscale with the gated async stub (keep .calls tracking via asyncSpy).
+  deps.downscale = asyncSpy(gatedDownscale);
+
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+
+  assert.equal(maxInFlight, 3, 'at most `concurrency` (3) workers in the in-flight region at once');
+  assert.ok(maxInFlight < files.length, 'the cap actually bounds — not all files run at once');
+  assert.equal(result.added, 6, 'all six still upload, just in bounded waves');
+  assert.equal(deps.uploadBlob.calls.length, 6);
+});
+
+test('wirePhotoSync: updateSyncState is NOT called when nothing was added', async () => {
+  // Single out-of-window file -> skipped, nothing added.
+  const files = [datedFile('out.jpg', '2030-01-01', 11001)];
+  const { deps } = makePhotoHarness({ files });
+  const sync = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => sync.run('2026-06-25'));
+  assert.equal(result.added, 0);
+  assert.equal(deps.updateSyncState.calls.length, 0, 'no syncState write on a no-op run');
+});
+
+// --- Progress bound: every file advances the counter EXACTLY once ------------
+// Regression for the double-advance bug: the skip-window / skip-dedup branches
+// used to call advance() explicitly AND again in the worker's finally (the
+// `continue` still runs the finally), so skipped/duped files bumped `completed`
+// twice -> the progress sheet showed "Adding 5 of 3..." and the fill bar
+// overshot 100%. Drive a batch with BOTH an out-of-window file and an in-batch
+// duplicate, capture every setProgress(done,total) call, and assert done never
+// exceeds total (and the final call lands exactly on total). FAILS against the
+// old double-advance code; PASSES with the single finally-block advance.
+test('wirePhotoSync: progress `done` never exceeds `total` across skips/dupes (single advance per file)', async () => {
+  const a = datedFile('a.jpg', '2026-06-25', 7001);
+  const dupA = datedFile('dup-a.jpg', '2026-06-25', 7001); // same uploader+exif+size -> same key as `a`
+  const out = datedFile('out.jpg', '2030-01-01', 7002);    // outside the trip window
+  const files = [a, dupA, out];
+  const { deps, progressSheet } = makePhotoHarness({ files });
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+
+  // Sanity: the batch really did exercise both skip branches.
+  assert.equal(result.added, 1, 'only the first unique in-window file uploads');
+  assert.equal(result.dupes, 1, 'the in-batch duplicate is a dupe');
+  assert.equal(result.skipped, 1, 'the out-of-window file is skipped');
+
+  const calls = progressSheet.setProgress.calls;
+  assert.ok(calls.length > 0, 'progress was reported');
+  for (const [done, total] of calls) {
+    assert.ok(done <= total, `progress done (${done}) must never exceed total (${total})`);
+  }
+  // The counter lands exactly on total: every file (uploaded, duped, skipped)
+  // advanced the bar exactly once.
+  const last = calls[calls.length - 1];
+  assert.equal(last[1], files.length, 'total is the prepared batch size');
+  assert.equal(last[0], last[1], 'final progress is done === total (no overshoot)');
 });
