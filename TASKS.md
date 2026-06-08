@@ -2,18 +2,7 @@
 
 ## Active Tasks
 
-### reminisce-gallery-live
-**Task**: Reminisce gallery goes live — merge authored + uploaded photos per day, onSnapshot, offline-cached
-**Pipeline**: code-workflow
-**Branch**: task/reminisce-gallery-live
-**Worktree**: .worktree/reminisce-gallery-live
-**Base**: redesign-reminisce-view
-**Started**: 2026-06-08
-**Files**:
-- MOD: app.js
-- MOD: index.html
-- MOD: sw.js
-- MOD: sw.test.js
+_None._
 
 ---
 
