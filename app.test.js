@@ -1874,41 +1874,59 @@ test('renderDay wraps the header in the blue memory frame ONLY in reminisce, and
   });
 });
 
-test('reminisce shows the empty-photo note for a day with no gallery photos', () => {
+test('reminisce shows the empty-photo note for a day with no uploaded photos (seam absent)', () => {
   withDom(() => {
-    const r = renderDay({ ...fullDayFixture(), photos: [] }, 'reminisce').node;
-    assert.ok(r.firstByClass('reminisce-empty-note'), 'no-photo day shows the empty note');
+    // Authored photos are EXCLUDED from the reminisce gallery — with the seam
+    // absent (no live uploads) even a photo-rich day shows the empty-state.
+    const r = renderDay(fullDayFixture(), 'reminisce').node;
+    assert.ok(r.firstByClass('reminisce-empty-note'), 'no-upload day shows the empty note');
     assert.equal(r.firstByClass('reminisce-gallery'), null, 'no gallery rendered when empty');
     assert.equal(r.firstByClass('reminisce-frame-seam').textContent, 'No photos yet');
   });
 });
 
-test('reminisce renders a clickable gallery from the day photos', () => {
+test('reminisce renders a clickable gallery from UPLOADED photos (via the live stub)', (t) => {
+  t.after(() => setSubscribePhotos(null));
   withDom(() => {
-    const r = renderDay(fullDayFixture(), 'reminisce').node; // fixture has 3 photos
-    const gallery = r.firstByClass('reminisce-gallery');
-    assert.ok(gallery, 'gallery present for a day with photos');
-    const thumbs = r.byClass('reminisce-photo');
-    assert.equal(thumbs.length, 3, 'one thumbnail per authored photo');
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce'); // 3 authored photos (EXCLUDED)
+    r.start();
+    stub.push([uploadedDoc(1), uploadedDoc(2), uploadedDoc(3)]);
+    const gallery = r.node.firstByClass('reminisce-gallery');
+    assert.ok(gallery, 'gallery present for a day with uploads');
+    const thumbs = r.node.byClass('reminisce-photo');
+    assert.equal(thumbs.length, 3, 'one thumbnail per uploaded photo (authored excluded)');
     assert.equal(thumbs[0].tagName, 'BUTTON', 'thumbnails are real buttons (focusable)');
-    assert.match(r.firstByClass('reminisce-frame-seam').textContent, /^3 photos$/);
+    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^3 photos$/);
     // The lightbox mounts on <body> only when opened — it must NOT be inside the view tree.
-    assert.equal(r.firstByClass('lightbox'), null, 'lightbox is not pre-mounted inside the day view');
+    assert.equal(r.node.firstByClass('lightbox'), null, 'lightbox is not pre-mounted inside the day view');
+    r.stop();
   });
 });
 
-test('reminisce gallery is capped at REMINISCE_GALLERY_MAX thumbnails', () => {
+test('reminisce gallery is capped at REMINISCE_GALLERY_MAX thumbnails (uploaded)', (t) => {
+  t.after(() => setSubscribePhotos(null));
   withDom(() => {
-    const photos = Array.from({ length: 15 }, (_, i) => ({ url: `https://example.com/${i}.jpg`, alt: `p${i}` }));
-    const r = renderDay({ ...fullDayFixture(), photos }, 'reminisce').node;
-    assert.equal(r.byClass('reminisce-photo').length, 12, 'capped at 12 of the 15 photos');
-    assert.match(r.firstByClass('reminisce-frame-seam').textContent, /^12 photos$/);
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    stub.push(Array.from({ length: 15 }, (_, i) => uploadedDoc(i)));
+    assert.equal(r.node.byClass('reminisce-photo').length, 12, 'capped at 12 of the 15 uploads');
+    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^12 photos$/);
+    r.stop();
   });
 });
 
-test('reminisce lightbox: tapping a thumbnail mounts it on <body>, Esc closes + restores focus', () => {
+test('reminisce lightbox: tapping a thumbnail mounts it on <body>, Esc closes + restores focus', (t) => {
+  t.after(() => setSubscribePhotos(null));
   withDom(() => {
-    const r = renderDay(fullDayFixture(), 'reminisce'); // 3 photos
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    stub.push([uploadedDoc(1), uploadedDoc(2), uploadedDoc(3)]); // 3 uploaded photos
     const thumb = r.node.byClass('reminisce-photo')[2]; // third photo
     thumb.focus();                                       // the element that "opens" it
     assert.equal(document.body.byClass('lightbox').length, 0, 'nothing mounted before tap');
@@ -1922,12 +1940,18 @@ test('reminisce lightbox: tapping a thumbnail mounts it on <body>, Esc closes + 
     document._fire('keydown', { key: 'Escape', preventDefault() {} });
     assert.equal(document.body.byClass('lightbox').length, 0, 'Esc unmounts the lightbox from <body>');
     assert.equal(document.activeElement, thumb, 'focus is restored to the originating thumbnail');
+    r.stop();
   });
 });
 
-test('reminisce lightbox: renderDay stop() tears down an open lightbox (no leak across navigation)', () => {
+test('reminisce lightbox: renderDay stop() tears down an open lightbox (no leak across navigation)', (t) => {
+  t.after(() => setSubscribePhotos(null));
   withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
     const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    stub.push([uploadedDoc(1), uploadedDoc(2), uploadedDoc(3)]);
     r.node.byClass('reminisce-photo')[0]._fire('click');
     assert.equal(document.body.byClass('lightbox').length, 1, 'open before navigation');
     r.stop(); // mountApp calls this before discarding the view
@@ -2098,22 +2122,22 @@ test('live: start() subscribes exactly once with day.date, and is idempotent', (
   });
 });
 
-test('live: a pushed snapshot re-renders the gallery (merged thumb count) and updates the seam text', (t) => {
+test('live: a pushed snapshot re-renders the gallery (uploaded thumb count) and updates the seam text', (t) => {
   t.after(() => setSubscribePhotos(null));
   withDom(() => {
     const stub = makeSubscribeStub();
     setSubscribePhotos(stub.subscribe);
-    const r = renderDay(fullDayFixture(), 'reminisce'); // 3 authored photos
+    const r = renderDay(fullDayFixture(), 'reminisce'); // 3 authored photos (EXCLUDED)
     r.start();
-    // Before the snapshot, only the 3 authored thumbnails are shown.
-    assert.equal(r.node.byClass('reminisce-photo').length, 3, 'authored-only before snapshot');
-    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^3 photos$/);
+    // Before the snapshot, NO thumbnails are shown (authored excluded; loading).
+    assert.equal(r.node.byClass('reminisce-photo').length, 0, 'no thumbs before snapshot');
+    assert.ok(r.node.firstByClass('reminisce-loading-note'), 'loading note before snapshot');
 
-    // Two uploaded docs arrive (distinct urls → no dedup with authored).
+    // Two uploaded docs arrive.
     stub.push([uploadedDoc(1), uploadedDoc(2)]);
 
-    assert.equal(r.node.byClass('reminisce-photo').length, 5, 'grid rebuilt to 3 authored + 2 uploaded');
-    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^5 photos$/);
+    assert.equal(r.node.byClass('reminisce-photo').length, 2, 'grid rebuilt to 2 uploaded (authored excluded)');
+    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^2 photos$/);
     r.stop();
   });
 });
@@ -2125,13 +2149,15 @@ test('live: stop() invokes the unsubscribe spy; a later push is a no-op (stub st
     setSubscribePhotos(stub.subscribe);
     const r = renderDay(fullDayFixture(), 'reminisce');
     r.start();
+    stub.push([uploadedDoc(1), uploadedDoc(2)]); // 2 uploaded thumbs
+    assert.equal(r.node.byClass('reminisce-photo').length, 2, '2 uploaded before unsubscribe');
     assert.equal(stub.unsubscribed, 0, 'not yet unsubscribed');
     r.stop();
     assert.equal(stub.unsubscribed, 1, 'stop() called the unsubscribe fn exactly once');
     // The real listener would not fire after unsubscribe; our stub clears cb on
     // unsubscribe, so a subsequent push is inert and must not throw / re-render.
-    assert.doesNotThrow(() => stub.push([uploadedDoc(1)]));
-    assert.equal(r.node.byClass('reminisce-photo').length, 3, 'grid unchanged after unsubscribe');
+    assert.doesNotThrow(() => stub.push([uploadedDoc(3)]));
+    assert.equal(r.node.byClass('reminisce-photo').length, 2, 'grid unchanged after unsubscribe');
   });
 });
 
@@ -2157,8 +2183,10 @@ test('live: a snapshot arriving while the lightbox is open defers the rebuild un
   withDom(() => {
     const stub = makeSubscribeStub();
     setSubscribePhotos(stub.subscribe);
-    const r = renderDay(fullDayFixture(), 'reminisce'); // 3 authored photos
+    const r = renderDay(fullDayFixture(), 'reminisce'); // authored excluded
     r.start();
+    // Seed an initial snapshot so there are thumbs to open the lightbox on.
+    stub.push([uploadedDoc(1), uploadedDoc(2), uploadedDoc(3)]);
     assert.equal(r.node.byClass('reminisce-photo').length, 3);
 
     // Open the lightbox on the first thumbnail.
@@ -2169,7 +2197,7 @@ test('live: a snapshot arriving while the lightbox is open defers the rebuild un
 
     // A snapshot arrives WHILE the viewer is open — the grid must NOT rebuild yet,
     // but the seam count may update to reflect the incoming total.
-    stub.push([uploadedDoc(1), uploadedDoc(2)]);
+    stub.push([uploadedDoc(1), uploadedDoc(2), uploadedDoc(3), uploadedDoc(4), uploadedDoc(5)]);
     assert.equal(
       r.node.byClass('reminisce-photo').length,
       3,
@@ -2198,37 +2226,40 @@ test('live: successive snapshots replace, not accumulate (latest snapshot wins)'
   withDom(() => {
     const stub = makeSubscribeStub();
     setSubscribePhotos(stub.subscribe);
-    const r = renderDay(fullDayFixture(), 'reminisce'); // 3 authored photos
+    const r = renderDay(fullDayFixture(), 'reminisce'); // authored excluded
     r.start();
 
-    // First snapshot: two uploads → 3 authored + 2 = 5.
+    // First snapshot: two uploads → 2.
     stub.push([uploadedDoc(1), uploadedDoc(2)]);
-    assert.equal(r.node.byClass('reminisce-photo').length, 5, 'first snapshot → 3 + 2');
+    assert.equal(r.node.byClass('reminisce-photo').length, 2, 'first snapshot → 2 uploaded');
 
     // Second snapshot brings a SINGLE different upload. The grid must reflect the
-    // latest snapshot (3 authored + 1 = 4), NOT the union of both snapshots (6).
+    // latest snapshot (1), NOT the union of both snapshots (3).
     stub.push([uploadedDoc(3)]);
     assert.equal(
       r.node.byClass('reminisce-photo').length,
-      4,
-      'second snapshot replaces the first (3 authored + 1 upload), not accumulates',
+      1,
+      'second snapshot replaces the first (1 upload), not accumulates',
     );
-    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^4 photos$/);
+    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^1 photo$/);
     r.stop();
   });
 });
 
-test('live: loading note shows for a zero-authored day until the first snapshot (then gallery)', (t) => {
+test('live: loading note shows until the first snapshot (then gallery), authored notwithstanding', (t) => {
   t.after(() => setSubscribePhotos(null));
   withDom(() => {
     const stub = makeSubscribeStub();
     setSubscribePhotos(stub.subscribe);
-    const r = renderDay({ ...fullDayFixture(), photos: [] }, 'reminisce');
+    // The day HAS authored photos, but they are excluded — so the gallery is
+    // uploads-only and shows the loading affordance until the first snapshot.
+    const r = renderDay(fullDayFixture(), 'reminisce');
     r.start();
-    // Seam present + zero authored → loading affordance, NOT the empty-note yet.
+    // Seam present → loading affordance, NOT the empty-note yet; seam reads "Loading…".
     assert.ok(r.node.firstByClass('reminisce-loading-note'), 'loading note before any snapshot');
     assert.equal(r.node.firstByClass('reminisce-empty-note'), null, 'no empty-note while loading');
     assert.equal(r.node.firstByClass('reminisce-gallery'), null, 'no gallery yet');
+    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^Loading…$/, 'seam neutral while loading');
 
     // First snapshot brings photos → loading note clears, gallery appears.
     stub.push([uploadedDoc(1), uploadedDoc(2)]);
@@ -2257,18 +2288,73 @@ test('live: an empty first snapshot clears the loading note and shows the empty-
   });
 });
 
-test('live: seam-absent regression — setSubscribePhotos(null) renders authored synchronously and start() does not subscribe', () => {
+test('live: seam-absent regression — setSubscribePhotos(null) renders the empty-state (authored excluded) and start() does not subscribe', () => {
   // No t.after here: this test does NOT install a seam (it explicitly detaches),
   // so there is nothing to leak. We still assert the absent-seam path is intact.
   setSubscribePhotos(null);
   withDom(() => {
-    const r = renderDay(fullDayFixture(), 'reminisce'); // 3 authored photos
-    // Synchronous authored-only render (byte-identical to the pre-live behavior).
-    assert.equal(r.node.byClass('reminisce-photo').length, 3, 'authored gallery renders synchronously');
-    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^3 photos$/);
+    const r = renderDay(fullDayFixture(), 'reminisce'); // 3 authored photos (EXCLUDED)
+    // Gallery is uploads-only and the seam is absent → empty-state, NO authored thumbs.
+    assert.equal(r.node.byClass('reminisce-photo').length, 0, 'no thumbs when the seam is absent (authored excluded)');
+    assert.equal(r.node.firstByClass('reminisce-gallery'), null, 'no gallery when the seam is absent');
+    assert.ok(r.node.firstByClass('reminisce-empty-note'), 'empty-note shown when the seam is absent');
+    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^No photos yet$/);
     assert.equal(r.node.firstByClass('reminisce-loading-note'), null, 'no loading note when the seam is absent');
     // start()/stop() must be safe no-ops on the live front (no stub to subscribe to).
     assert.doesNotThrow(() => { r.start(); r.stop(); });
+  });
+});
+
+test('live: a subscribe() that throws on start() falls back to the empty-state (clears "Loading…", no crash)', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    // A seam that throws synchronously when start() subscribes (e.g. rules not
+    // deployed / Firestore init error). The reminisce view must NOT crash, must
+    // clear the "Loading…" seam + loading-note, and must settle on the empty-state.
+    setSubscribePhotos(() => { throw new Error('subscription boom'); });
+    const r = renderDay(fullDayFixture(), 'reminisce'); // authored photos (EXCLUDED)
+    // Before start(): live seam present → "Loading…" + loading-note (no empty-note).
+    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^Loading…$/);
+    assert.ok(r.node.firstByClass('reminisce-loading-note'), 'loading note before start()');
+
+    assert.doesNotThrow(() => r.start(), 'a throwing subscribe must not crash start()');
+
+    assert.equal(r.node.firstByClass('reminisce-loading-note'), null, 'loading note cleared on subscribe failure');
+    assert.ok(r.node.firstByClass('reminisce-empty-note'), 'empty-note shown after subscribe failure');
+    assert.equal(r.node.byClass('reminisce-photo').length, 0, 'no thumbs after subscribe failure (authored excluded)');
+    assert.match(
+      r.node.firstByClass('reminisce-frame-seam').textContent,
+      /^No photos yet$/,
+      'seam falls back from "Loading…" to the real (empty) count on failure',
+    );
+    assert.doesNotThrow(() => r.stop());
+  });
+});
+
+test('live: authored photos NEVER leak into the gallery after a snapshot (uploads-only)', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    // fullDayFixture() has authored photos with known urls; capture them.
+    const day = fullDayFixture();
+    const authoredUrls = day.photos.map((p) => p.url);
+    assert.ok(authoredUrls.length >= 1, 'fixture has authored photos to guard against');
+
+    const r = renderDay(day, 'reminisce');
+    r.start();
+    stub.push([uploadedDoc(1), uploadedDoc(2)]); // 2 uploaded photos
+
+    const renderedSrcs = r.node
+      .firstByClass('reminisce-gallery')
+      .queryAll((n) => n.tagName === 'IMG')
+      .map((img) => img.src);
+    assert.equal(renderedSrcs.length, 2, 'only the uploaded thumbs render');
+    for (const authored of authoredUrls) {
+      assert.ok(!renderedSrcs.includes(authored), `authored url ${authored} must NOT appear in the gallery`);
+    }
+    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^2 photos$/);
+    r.stop();
   });
 });
 

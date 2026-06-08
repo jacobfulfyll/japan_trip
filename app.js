@@ -1088,32 +1088,24 @@ function buildLodging(lodging) {
 // busy day scannable on a phone instead of an endless scroll. Tune to taste.
 const REMINISCE_GALLERY_MAX = 12;
 
-/**
- * Photos to show in a day's reminisce gallery, capped at REMINISCE_GALLERY_MAX.
- * Source is the day's authored `photos` (the same set that feeds the hero on
- * non-reminisce framings). This is the seam the Firebase photo-journal (v2) will
- * extend — merging in travelers' uploaded photos for the day.
- */
-function reminisceGalleryPhotos(day) {
-  const photos = Array.isArray(day?.photos) ? day.photos : [];
-  return photos.slice(0, REMINISCE_GALLERY_MAX);
-}
-
 // ---------------------------------------------------------------------------
 // Live reminisce gallery (reminisce-gallery-live)
 //
-// The reminisce view merges hand-authored `day.photos` with travelers' UPLOADED
-// photos for the day (Firestore `photos` docs, written by photo-upload-flow),
-// LIVE via onSnapshot. The Firebase read layer is injected through a module-level
-// seam so `node --test` stays network-free and the seam-absent render path is
-// byte-identical to the authored-only original.
+// The reminisce view shows travelers' UPLOADED photos for the day only (Firestore
+// `photos` docs, written by photo-upload-flow), LIVE via onSnapshot. Authored/stock
+// `day.photos` are deliberately EXCLUDED from the gallery — they still drive the
+// anticipation/plan hero slideshow, but a past day reminisces only over the
+// travelers' own captures. The Firebase read layer is injected through a
+// module-level seam so `node --test` stays network-free; with the seam absent the
+// gallery renders the empty-state (no authored photos are injected).
 // ---------------------------------------------------------------------------
 
 /**
  * Injected `subscribePhotos(iso, cb)` seam. The bootstrap (boot()) wires this to
  * the live Firestore listener via the photoService; tests inject a stub. When it
  * is null (every existing test, and any non-Firebase host) renderDay's reminisce
- * branch renders the authored photos synchronously, exactly as before.
+ * branch renders the empty-state (the gallery is uploads-only; nothing is shown
+ * until a live snapshot arrives).
  * @type {((iso: string, cb: (docs: object[]) => void) => (() => void)) | null}
  */
 let subscribePhotosFn = null;
@@ -1397,10 +1389,11 @@ export function renderDay(day, framingName = 'plan') {
   let reminisceStop = () => {};
 
   if (isReminisce) {
-    // Authored photos are the SYNCHRONOUS source — rendered immediately so the
-    // seam-absent path is byte-identical to the original. The live layer (when the
-    // subscribePhotos seam is present) merges uploaded photos in on each snapshot.
-    const authoredPhotos = reminisceGalleryPhotos(day);
+    // The reminisce gallery is UPLOADS-ONLY: authored/stock `day.photos` are
+    // excluded here (they still drive the non-reminisce hero). There is no
+    // synchronous source — the gallery is empty until a live snapshot arrives, so
+    // `authoredPhotos` is bound to [] and fed to mergeGalleryPhotos([], docs).
+    const authoredPhotos = [];
     const live = !!subscribePhotosFn;
 
     // Wrap the header in the blue "memory frame" that flows into the gallery.
@@ -1412,7 +1405,6 @@ export function renderDay(day, framingName = 'plan') {
         ? `${count} ${count === 1 ? 'photo' : 'photos'}`
         : 'No photos yet';
     };
-    setSeam(authoredPhotos.length);
     frame.appendChild(seam);
     view.appendChild(frame);
 
@@ -1421,12 +1413,10 @@ export function renderDay(day, framingName = 'plan') {
     const galleryHost = el('div', 'reminisce-gallery-host');
     view.appendChild(galleryHost);
 
-    // `current` is the merged photo list currently shown. Authored-only at first;
-    // each snapshot recomputes it via mergeGalleryPhotos.
-    let current = authoredPhotos.map((p) => ({
-      url: safeUrl(p?.url),
-      alt: p?.alt ? String(p.alt) : '',
-    })).filter((p) => p.url);
+    // `current` is the uploaded photo list currently shown. Empty at first (no
+    // authored photos are injected); each snapshot recomputes it via
+    // mergeGalleryPhotos([], docs).
+    let current = [];
     let lightbox = null;
     let loadingNote = null;
 
@@ -1459,16 +1449,23 @@ export function renderDay(day, framingName = 'plan') {
       renderGallery(merged);
     };
 
-    // First snapshot is pending → with no authored photos, show a small on-theme
-    // loading affordance instead of the empty-note (the snapshot may add photos).
-    // Set loadingNote BEFORE the initial render so renderGallery's empty branch
-    // is suppressed (it skips the empty-note while a loadingNote is present).
-    if (live && current.length === 0) {
+    // The gallery is uploads-only, so it starts empty on EVERY day. When live, the
+    // first snapshot is still pending → show a small on-theme loading affordance
+    // instead of the empty-note (the snapshot may add photos), and let the seam
+    // read a neutral "Loading…" rather than the contradictory "No photos yet".
+    // Set loadingNote BEFORE the initial render so renderGallery's empty branch is
+    // suppressed (it skips the empty-note while a loadingNote is present).
+    if (live) {
       loadingNote = el('p', 'reminisce-loading-note', 'Gathering your photos…');
+      seam.textContent = 'Loading…';
+    } else {
+      // Seam absent: no live source → the gallery is empty for good. Show the
+      // empty-state count immediately.
+      setSeam(0);
     }
 
-    // Initial synchronous render (authored only) — identical to the original when
-    // the seam is absent.
+    // Initial render. When live this shows the loading note; when the seam is
+    // absent it shows the empty-state (no authored photos are injected).
     renderGallery(current);
     if (loadingNote && !loadingNote.parentNode) galleryHost.appendChild(loadingNote);
 
@@ -1484,7 +1481,8 @@ export function renderDay(day, framingName = 'plan') {
         } catch (e) {
           console.warn('[reminisce] live photo subscription failed:', e);
           loadingNote = null;
-          renderGallery(current); // fall back to authored-only
+          setSeam(current.length); // clear "Loading…" → real count (empty-state)
+          renderGallery(current); // fall back to whatever we have (empty)
         }
       };
       reminisceStop = () => {
