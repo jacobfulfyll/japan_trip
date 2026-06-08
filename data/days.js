@@ -42,15 +42,15 @@
 
 export const TRIP = {
   title: "Newly Weds in Japan!",
-  start: "2026-06-16",
-  end: "2026-07-03",
+  start: "2026-05-30",
+  end: "2026-06-16",
   travelers: ["Jacob", "Juliet", "James", "Megan"], // Megan is vegetarian
   eveningWindow: { startHour: 21, endHour: 4 }, // 9pm–4am → show tomorrow/prep
 };
 
 export const DAYS = [
   {
-    date: "2026-06-16",
+    date: "2026-05-30",
     base: "In transit",
     title: "Wheels Up — Montréal to Tokyo",
     intro:
@@ -88,7 +88,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-06-17",
+    date: "2026-05-31",
     base: "Tokyo",
     title: "Touchdown — Into Akasaka",
     intro:
@@ -164,7 +164,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-06-18",
+    date: "2026-06-01",
     base: "Tokyo",
     title: "Old Tokyo — Asakusa, Ueno & Electric Town",
     intro:
@@ -290,7 +290,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-06-19",
+    date: "2026-06-02",
     base: "Tokyo",
     title: "teamLab, Tokyo Tower & Ginza",
     intro:
@@ -382,7 +382,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-06-20",
+    date: "2026-06-03",
     base: "Tokyo",
     title: "Tsukiji Morning, Open Afternoon & Shinjuku Nightlife",
     intro:
@@ -494,7 +494,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-06-21",
+    date: "2026-06-04",
     base: "Tokyo",
     title: "Meiji, Omotesando & the Shibuya Scramble",
     intro:
@@ -616,7 +616,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-06-22",
+    date: "2026-06-05",
     base: "Hakone",
     title: "Up to the Mountains — the Romancecar to Hakone",
     intro:
@@ -701,7 +701,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-06-23",
+    date: "2026-06-06",
     base: "Hakone",
     title: "The Hakone Loop",
     intro:
@@ -821,7 +821,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-06-24",
+    date: "2026-06-07",
     base: "Kyoto",
     title: "Into Kyoto — Gion & Pontocho by Night",
     intro:
@@ -932,7 +932,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-06-25",
+    date: "2026-06-08",
     base: "Kyoto",
     title: "Fushimi Inari at First Light & the Higashiyama Lanes",
     intro:
@@ -1084,7 +1084,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-06-26",
+    date: "2026-06-09",
     base: "Kyoto",
     title: "Arashiyama Bamboo & the Golden Pavilion",
     intro:
@@ -1193,7 +1193,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-06-27",
+    date: "2026-06-10",
     base: "Kyoto",
     title: "Nara — the Great Buddha & the Deer",
     intro:
@@ -1306,7 +1306,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-06-28",
+    date: "2026-06-11",
     base: "Kyoto",
     title: "USJ & Osaka Nights",
     intro:
@@ -1436,7 +1436,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-06-29",
+    date: "2026-06-12",
     base: "Kyoto",
     title: "Ohara — Moss Gardens & Rice Fields",
     intro:
@@ -1549,7 +1549,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-06-30",
+    date: "2026-06-13",
     base: "Tokyo (from Kyoto)",
     title: "Kyoto → Tokyo: Goodbyes & the Prince Gallery",
     intro:
@@ -1630,7 +1630,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-07-01",
+    date: "2026-06-14",
     base: "Tokyo",
     title: "Old Edo & Elegant Central Tokyo",
     intro:
@@ -1705,7 +1705,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-07-02",
+    date: "2026-06-15",
     base: "Tokyo",
     title: "A Day to Slow Down — Spa & the Neighborhood",
     intro:
@@ -1771,7 +1771,7 @@ export const DAYS = [
   },
 
   {
-    date: "2026-07-03",
+    date: "2026-06-16",
     base: "Tokyo → home",
     title: "Last Morning & the Flight Home",
     intro:
