@@ -34,6 +34,9 @@
 
 ### Ungroomed
 
+<!-- Discovered-issue backlog (code). Surfaced by pipeline stages; not yet groomed into tasks. -->
+- [ ] harden-uploaded-url-origin: When `firebase-photo-rules` is finalized, constrain uploaded photo `url`s to the Firebase Storage origin (allowlist) instead of `safeUrl`'s any-https default — defence-in-depth for the reminisce gallery's user-generated content path. Not an XSS hole today (gated by write rules + `safeUrl` + textContent); a hardening. (surfaced by reminisce-gallery-live SECURITY-REVIEW)
+
 <!-- Real-world trip bookings, confirmations & pre-trip setup. Personal to-dos, not build tasks — kept as a deadline-ordered checklist, NOT formalized into pipelines. Today: Jun 3; trip: Jun 16–Jul 3. -->
 - [ ] register-visit-japan-web: Before Jun 16 — each of the 4 travelers registers their own Visit Japan Web account + QR (a single account with empty companions = paper-form lane); screenshot every QR before boarding (surfaced authoring author-travel-arrival)
 - [ ] (optional) reserve-jul2-farewell-dinner: ⏰ ~2–4 wk window is open now — IF you want a special farewell dinner Jul 2 (Ningyocho Imahan or Sushi Fukunaga)
