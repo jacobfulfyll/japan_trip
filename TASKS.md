@@ -2,18 +2,7 @@
 
 ## Active Tasks
 
-### exclude-authored-from-reminisce
-**Task**: Reminisce gallery shows uploaded photos only — drop authored/stock photos
-**Pipeline**: code-workflow
-**Branch**: task/exclude-authored-from-reminisce
-**Worktree**: .worktree/exclude-authored-from-reminisce
-**Base**: main
-**Started**: 2026-06-08
-**Files**:
-- MOD: app.js
-- MOD: app.test.js
-- MOD: sw.js
-- MOD: sw.test.js
+_None._
 
 ---
 

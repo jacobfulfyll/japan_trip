@@ -1,4 +1,5 @@
 # Completed Tasks
+- [x] exclude-authored-from-reminisce Reminisce gallery shows uploaded photos only — drop authored/stock photos (still in anticipation/plan hero) -- 2026-06-08
 - [x] mobile-tab-navigation Redesign tab nav as horizontal scroll strip, remove sound toggle -- 2026-03-05
 - [x] mobile-timeline-design Shrink timeline photo to banner, prioritize text content -- 2026-03-05
 - [x] data-model-and-scaffold Scaffold the no-build site (slim index.html + app.js render pipeline) around the EXISTING data/days.js -- 2026-05-24
