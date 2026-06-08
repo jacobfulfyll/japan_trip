@@ -2,7 +2,20 @@
 
 ## Active Tasks
 
-_None._
+### polish-nav-bar
+**Task**: Centered inline-SVG hamburger, refined ☰ popover (divider/icons/caret, ≥44px rows), smaller chevrons
+**Pipeline**: code-workflow
+**Branch**: task/polish-nav-bar
+**Worktree**: .worktree/polish-nav-bar
+**Base**: main
+**Started**: 2026-06-08
+**Files**:
+- MOD: app.js
+- MOD: index.html
+- MOD: sw.js
+- MOD: sw.test.js
+- MOD: app.test.js
+- MOD: CLAUDE.md, README.md, CHANGELOG.md
 
 ---
 
@@ -21,8 +34,6 @@ _None._
 
 ### Photo Journal & Nav Polish (v2.1)
 <!-- v2.1 polish/perf on the shipped photo journal + nav bar. All three touch app.js + bump sw.js CACHE_VERSION → MUTUALLY CONFLICTING; run SERIALLY, reconciling CACHE_VERSION to the next free value at each merge (currently v30 → v31, v32, v33; lockstep: sw.js:23 + sw.test.js:622 title + :625 assert). No two edit the same app.js lines. Merge offload-photo-downscale-to-worker LAST (only one touching the boot/photoService region). Each task also updates the "437 total" test-count claim in CLAUDE.md/README/CHANGELOG. -->
-- [ ] polish-nav-bar: Centered inline-SVG hamburger, refined ☰ popover (divider/icons/caret, ≥44px rows), smaller chevrons [P2] [moderate] [tier: opus:high] [conflicts: offload-photo-downscale-to-worker, exclude-authored-from-reminisce] [design] [planned]
-  files: app.js (MOD), index.html (MOD), sw.js (MOD), sw.test.js (MOD), app.test.js (MOD)
 
 ### Ungroomed
 
