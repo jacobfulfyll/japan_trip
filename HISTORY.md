@@ -42,3 +42,4 @@
 - [x] reminisce-gallery-live Reminisce gallery goes live — merge authored + uploaded photos per day, onSnapshot, offline-cached -- 2026-06-08
 - [x] firebase-photo-rules: Console — Storage/Firestore rules for trip-photos/** + photos/syncState (authed, size/type caps); confirmed no composite index -- manual, completed 2026-06-08
 - [x] offload-photo-downscale-to-worker Move image decode/downscale/encode into a Web Worker so bulk uploads don't freeze the UI (+ EXIF-read yield, main-thread fallback) -- 2026-06-08
+- [x] polish-nav-bar Centered inline-SVG hamburger, refined ☰ popover (divider/icons/caret, ≥44px rows), smaller chevrons -- 2026-06-08

@@ -2,20 +2,7 @@
 
 ## Active Tasks
 
-### polish-nav-bar
-**Task**: Centered inline-SVG hamburger, refined ☰ popover (divider/icons/caret, ≥44px rows), smaller chevrons
-**Pipeline**: code-workflow
-**Branch**: task/polish-nav-bar
-**Worktree**: .worktree/polish-nav-bar
-**Base**: main
-**Started**: 2026-06-08
-**Files**:
-- MOD: app.js
-- MOD: index.html
-- MOD: sw.js
-- MOD: sw.test.js
-- MOD: app.test.js
-- MOD: CLAUDE.md, README.md, CHANGELOG.md
+_None._
 
 ---
 
