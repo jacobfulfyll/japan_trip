@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← tests for the data/API/nav layer (node --test; 419 total with sw.test.js).
+app.test.js    ← tests for the data/API/nav layer (node --test; 437 total with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -205,7 +205,7 @@ screens import them.
 | `getDays()`             | A **fresh array** of all valid days, sorted by date ascending, each with `dayNumber`. Day objects are deeply frozen. |
 | `getDay(iso)`           | The day matching ISO date `iso`, or `null` if absent. Frozen. |
 | `getDayByNumber(n)`     | The day whose derived `dayNumber === n`, or `null` if absent (also `null` for non-finite `n`). Frozen. |
-| `renderDay(day, framing?)` | Returns `{ node, start, stop }`. `node` is the day-view DOM element (hero + plan + lodging + recommendations). `framing` is `'anticipation'`, `'plan'` (default), or `'reminisce'`. Call `start()` after mounting `node` to begin the hero slideshow; call `stop()` before discarding to avoid orphaned intervals. Null/absent `day` renders a graceful placeholder. |
+| `renderDay(day, framing?)` | Returns `{ node, start, stop }`. `node` is the day-view DOM element (hero + plan + lodging + recommendations). `framing` is `'anticipation'`, `'plan'` (default), or `'reminisce'`. Call `start()` after mounting `node` to begin the hero slideshow (and, on `'reminisce'`, the live photo subscription); call `stop()` before discarding to avoid orphaned intervals/listeners. Null/absent `day` renders a graceful placeholder. The `'reminisce'` framing drops the hero and shows a photo gallery — see "The reminisce gallery" below. |
 | `renderInto(rootEl, day?, framing?)` | Mounts a day view into `rootEl` (defaults to Jun 24, `'plan'` framing). Stops any prior view's slideshow before mounting. No-ops (warns) if `rootEl` is falsy. Backward compatible: `renderInto(root)` still works. Retained for standalone/testing use — `mountApp` is now what the bootstrap calls. |
 | `renderOverview(daysUntil, onEnter)` | Returns `{ node, start, stop }` for the pre-trip home screen. `daysUntil` is a number (days before departure), `0` (trip underway), or `null` (trip over). `node` is the home screen element — a live countdown header + tappable 18-day index where each row navigates to that day via `onEnter(iso)`. Call `start()` after mounting; call `stop()` before discarding. `mountApp` calls this automatically for the `{view:'overview'}` landing; you can also call it directly. |
 | `buildValidatedDays(days?, trip?)` | The validation core, exported for tests. Returns a frozen, sorted, validated array. You won't normally call this. |
@@ -225,6 +225,29 @@ screens import them.
 | `tripWindowDates(trip?)` | Returns an ordered ISO array of every date in the trip window (18 dates for Jun 16 – Jul 3). Returns `[]` if the window is inverted or unparseable. Defaults `trip` to `getTrip()`. |
 | `getNow()`              | Returns the current `Date` from the active clock provider. Degrades to `new Date()` if the provider throws or returns a non-Date. |
 | `setNow(fn\|null)`      | Overrides the clock: pass a zero-argument function that returns a `Date` to substitute a fixed or simulated time. Pass `null` to restore the wall clock. Used by the time-travel test mode and pinned in tests — do not call in production paths. |
+
+**Reminisce gallery (live)** — the `'reminisce'` framing's photo gallery merges authored + uploaded photos:
+
+| Function                | Returns / effect                                              |
+|-------------------------|--------------------------------------------------------------|
+| `mergeGalleryPhotos(authored, uploaded)` | Pure merge of a day's authored `photos` with its uploaded Firestore `photos` docs. Authored photos come first (in authored order), then uploaded photos sorted by `takenAt` ascending. Deduped by URL, capped at `REMINISCE_GALLERY_MAX` (12), each normalized to `{ url, alt }` (uploaded photos get `alt: "Photo by <uploader>"`). Every URL is validated through `safeUrl` — anything rejected is dropped. Exported for tests + the bootstrap. |
+| `setSubscribePhotos(fn)` | Wires (or clears) the live-photo subscription seam. `fn` is `(iso, cb) => unsubscribe` — `cb` receives the array of uploaded photo docs for that ISO date and is called on every change. The bootstrap wires this to the Firestore `onSnapshot` listener; pass `null` to detach. **When the seam is null** (every test, and any non-Firebase host), `renderDay`'s reminisce branch renders the authored photos synchronously, exactly as before — the live layer is purely additive. |
+
+### The reminisce gallery
+
+On a **past** day (the `'reminisce'` framing), `renderDay` drops the hero slideshow
+and shows a photo gallery instead. The gallery is **live and shared**: it merges
+the day's hand-authored `photos` with travelers' **uploaded** photos for that date
+(read from Firestore in real time), so a photo someone adds appears without a
+reload. Authored photos show first, then uploads in capture-time order, capped at
+12. Tapping a thumbnail opens a full-screen swipeable lightbox.
+
+`start()` opens the live subscription and `stop()` closes it. A new photo that
+arrives while the lightbox is open is applied when you close it (the open viewer is
+never disrupted). The gallery is offline-readable from the local cache after the
+first load. Live photos depend on the `firebase-photo-rules` deployment (the same
+rules that govern uploads); with no Firebase the gallery falls back to authored
+photos only.
 
 **Photo upload** — the ☰ menu's **Add photos** row is wired to a real upload flow
 (see "Adding photos" below). These exports are the testable pure cores + the
@@ -337,8 +360,9 @@ Your **full-resolution originals stay in your camera roll** — the journal stor
 a downscaled copy for viewing, not a backup. Adding photos requires connectivity
 (there's no offline upload queue); an offline tap shows a clear error.
 
-> The viewing side — seeing everyone's uploaded photos in the day gallery — is a
-> separate, later piece of work. This flow gets photos *in*.
+> The viewing side is live: uploaded photos appear in each past day's reminisce
+> gallery (see "The reminisce gallery" above), merged with the authored photos and
+> updated in real time. This flow gets photos *in*.
 
 ## PWA — install to your phone and use offline
 
@@ -360,9 +384,9 @@ The app shell — `index.html`, `app.js`, `data/days.js`, and icons — is preca
 on first visit, so the full itinerary loads with no network. Fonts and hero photos
 are cached the first time you load them (stale-while-revalidate), so
 previously-viewed photos (and the fonts) also load offline afterward. This
-runtime cache is capped at 60 entries (oldest evicted first), so it can't grow
-without bound over a long trip. Google Maps links still require a network
-connection.
+runtime cache is capped at 140 entries (oldest evicted first), so it can't grow
+without bound over a long trip — sized to keep several days of merged reminisce
+galleries warm offline. Google Maps links still require a network connection.
 
 ### Maintainer: bump `CACHE_VERSION` when you ship changes
 
@@ -406,7 +430,7 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The test suite (**419 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The test suite (**437 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),
@@ -418,7 +442,8 @@ collapsible day-parts (`bucketPlanByDayPart` bucketing, `dayParts` validation, d
 Hakone content contracts (Romancecar terminus/reserved, transit minutes, veg coverage, lodging consistency, contiguous 18-day span),
 the auth gate (login form present + native-submit guard),
 the ☰ nav menu (hamburger popover, Home/Add-photos rows, focus trap, `opts.onAddPhotos` seam),
-and the photo-upload flow (EXIF capture-date parsing against synthetic JPEG fixtures, trip-window filtering, composite-key dedup, run summaries, and the `wirePhotoSync` orchestrator via injected seams).
+the photo-upload flow (EXIF capture-date parsing against synthetic JPEG fixtures, trip-window filtering, composite-key dedup, run summaries, and the `wirePhotoSync` orchestrator via injected seams),
+and the live reminisce gallery (`mergeGalleryPhotos` ordering/dedup/cap, the `setSubscribePhotos` seam, snapshot re-render + seam count, deferred rebuild while the lightbox is open, and the seam-absent authored-only fallback).
 
 ## Deploy
 

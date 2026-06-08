@@ -53,6 +53,8 @@ import {
   decideFile,
   summarizeRun,
   wirePhotoSync,
+  mergeGalleryPhotos,
+  setSubscribePhotos,
 } from './app.js';
 import { TRIP, DAYS } from './data/days.js';
 
@@ -1005,7 +1007,7 @@ test('Jun 22 contains NO Amam reference (Amam Dacotan belongs to Jun 20/21 only)
     const haystack = [
       item.title, item.note,
       ...(item.recommendations ?? []).flatMap((r) => [r.name, r.con, ...(r.pros ?? [])]),
-    ].filter((s) => typeof s === 'string').join('   ');
+    ].filter((s) => typeof s === 'string').join('  ');
     assert.doesNotMatch(
       haystack, /Amam/i,
       `Jun 22 plan must not reference Amam (found in "${item.title}")`,
@@ -1929,6 +1931,343 @@ test('reminisce lightbox: renderDay stop() tears down an open lightbox (no leak 
     assert.equal(document.body.byClass('lightbox').length, 1, 'open before navigation');
     r.stop(); // mountApp calls this before discarding the view
     assert.equal(document.body.byClass('lightbox').length, 0, 'stop() removed the body-mounted lightbox');
+  });
+});
+
+// ===========================================================================
+// reminisce-gallery-live: mergeGalleryPhotos (pure) + the live subscription layer
+//
+// mergeGalleryPhotos is a pure function (no DOM). The live layer is driven through
+// renderDay('reminisce') with an injected subscribePhotos stub via
+// setSubscribePhotos(stub). EVERY test that injects a seam MUST reset it with
+// setSubscribePhotos(null) in teardown so it does not leak into the ~137 other
+// renderDay call sites (which all assume the seam is absent).
+// ===========================================================================
+
+// --- mergeGalleryPhotos (pure) ----------------------------------------------
+
+test('mergeGalleryPhotos: authored-only (empty uploaded) keeps authored order, mapped to {url, alt}', () => {
+  const authored = [
+    { url: 'https://example.com/a.jpg', alt: 'A' },
+    { url: 'https://example.com/b.jpg', alt: 'B' },
+  ];
+  const out = mergeGalleryPhotos(authored, []);
+  assert.deepEqual(out, [
+    { url: 'https://example.com/a.jpg', alt: 'A' },
+    { url: 'https://example.com/b.jpg', alt: 'B' },
+  ]);
+});
+
+test('mergeGalleryPhotos: uploaded are sorted by takenAt ascending regardless of input order', () => {
+  const uploaded = [
+    { url: 'https://example.com/late.jpg', uploader: 'Jo', takenAt: '2026-06-24 18:00:00' },
+    { url: 'https://example.com/early.jpg', uploader: 'Jo', takenAt: '2026-06-24 08:00:00' },
+    { url: 'https://example.com/mid.jpg', uploader: 'Jo', takenAt: '2026-06-24 12:00:00' },
+  ];
+  const out = mergeGalleryPhotos([], uploaded);
+  assert.deepEqual(out.map((p) => p.url), [
+    'https://example.com/early.jpg',
+    'https://example.com/mid.jpg',
+    'https://example.com/late.jpg',
+  ]);
+});
+
+test('mergeGalleryPhotos: authored block always precedes the uploaded block', () => {
+  const authored = [{ url: 'https://example.com/auth.jpg', alt: 'auth' }];
+  const uploaded = [
+    // takenAt that would sort BEFORE the authored if order were by time — it must
+    // still come after, because authored-first is unconditional.
+    { url: 'https://example.com/up.jpg', uploader: 'Jo', takenAt: '2000-01-01 00:00:00' },
+  ];
+  const out = mergeGalleryPhotos(authored, uploaded);
+  assert.deepEqual(out.map((p) => p.url), [
+    'https://example.com/auth.jpg',
+    'https://example.com/up.jpg',
+  ]);
+});
+
+test('mergeGalleryPhotos: an authored + uploaded sharing a url collapse to one (authored wins)', () => {
+  const authored = [{ url: 'https://example.com/dup.jpg', alt: 'authored alt' }];
+  const uploaded = [{ url: 'https://example.com/dup.jpg', uploader: 'Jo', takenAt: '2026-06-24 08:00:00' }];
+  const out = mergeGalleryPhotos(authored, uploaded);
+  assert.equal(out.length, 1, 'shared url collapses to a single entry');
+  assert.equal(out[0].alt, 'authored alt', 'authored entry wins (emitted first)');
+});
+
+test('mergeGalleryPhotos: two uploaded docs with the same url collapse to one', () => {
+  const uploaded = [
+    { url: 'https://example.com/same.jpg', uploader: 'Jo', takenAt: '2026-06-24 08:00:00' },
+    { url: 'https://example.com/same.jpg', uploader: 'Mo', takenAt: '2026-06-24 09:00:00' },
+  ];
+  const out = mergeGalleryPhotos([], uploaded);
+  assert.equal(out.length, 1, 'duplicate uploaded url collapses');
+  assert.equal(out[0].alt, 'Photo by Jo', 'first-sorted (earlier takenAt) wins');
+});
+
+test('mergeGalleryPhotos: caps at REMINISCE_GALLERY_MAX (12), retaining authored first', () => {
+  const authored = Array.from({ length: 5 }, (_, i) => ({ url: `https://example.com/a${i}.jpg`, alt: `a${i}` }));
+  const uploaded = Array.from({ length: 20 }, (_, i) => ({
+    url: `https://example.com/u${i}.jpg`,
+    uploader: 'Jo',
+    takenAt: `2026-06-24 ${String(i).padStart(2, '0')}:00:00`,
+  }));
+  const out = mergeGalleryPhotos(authored, uploaded);
+  assert.equal(out.length, 12, 'capped at REMINISCE_GALLERY_MAX');
+  // All 5 authored survive (authored-first), then the 7 earliest uploaded.
+  assert.deepEqual(out.slice(0, 5).map((p) => p.url), authored.map((p) => p.url));
+  assert.equal(out[5].url, 'https://example.com/u0.jpg', 'earliest uploaded comes right after authored');
+  assert.equal(out[11].url, 'https://example.com/u6.jpg', 'cap drops the later uploaded (u7..u19)');
+});
+
+test('mergeGalleryPhotos: uploaded alt is "Photo by <uploader>"; missing uploader → "Photo by a traveler"', () => {
+  const uploaded = [
+    { url: 'https://example.com/named.jpg', uploader: 'Megan', takenAt: '2026-06-24 08:00:00' },
+    { url: 'https://example.com/anon.jpg', takenAt: '2026-06-24 09:00:00' }, // no uploader
+  ];
+  const out = mergeGalleryPhotos([], uploaded);
+  assert.equal(out[0].alt, 'Photo by Megan');
+  assert.equal(out[1].alt, 'Photo by a traveler');
+});
+
+test('mergeGalleryPhotos: safeUrl rejects bad/missing uploaded urls; valid ones survive', () => {
+  const uploaded = [
+    { url: 'javascript:alert(1)', uploader: 'Jo', takenAt: '2026-06-24 08:00:00' }, // rejected
+    { url: undefined, uploader: 'Jo', takenAt: '2026-06-24 08:30:00' },             // rejected (missing)
+    { url: 'https://example.com/ok.jpg', uploader: 'Jo', takenAt: '2026-06-24 09:00:00' }, // kept
+  ];
+  const out = mergeGalleryPhotos([], uploaded);
+  assert.deepEqual(out.map((p) => p.url), ['https://example.com/ok.jpg'], 'only the safe url survives');
+});
+
+test('mergeGalleryPhotos: non-array / null inputs do not throw (defensive)', () => {
+  assert.doesNotThrow(() => {
+    assert.deepEqual(mergeGalleryPhotos(null, null), []);
+    assert.deepEqual(mergeGalleryPhotos(undefined, undefined), []);
+    assert.deepEqual(mergeGalleryPhotos('nope', 42), []);
+    // One side valid, the other garbage.
+    assert.deepEqual(
+      mergeGalleryPhotos([{ url: 'https://example.com/a.jpg', alt: 'A' }], 'garbage'),
+      [{ url: 'https://example.com/a.jpg', alt: 'A' }],
+    );
+  });
+});
+
+// --- Live subscription layer (withDom + injected stub subscribePhotos) -------
+//
+// A small stub: records the iso it was subscribed with, stores the snapshot
+// callback so a test can push docs, and returns a spy unsubscribe that records
+// its own invocation. installSubscribeStub() also asserts (via the t.after hook
+// the caller wires) that the seam is reset — but we rely on per-test t.after.
+
+function makeSubscribeStub() {
+  const stub = {
+    calls: [],          // each subscribe() call's iso
+    cb: null,           // latest snapshot callback
+    unsubscribed: 0,    // times the returned unsubscribe was invoked
+    subscribe(iso, cb) {
+      stub.calls.push(iso);
+      stub.cb = cb;
+      return () => { stub.unsubscribed += 1; stub.cb = null; };
+    },
+    // Push a snapshot to the live callback (no-op if unsubscribed/never started).
+    push(docs) { if (stub.cb) stub.cb(docs); },
+  };
+  return stub;
+}
+
+function uploadedDoc(i, uploader = 'Jo') {
+  return {
+    url: `https://example.com/u${i}.jpg`,
+    uploader,
+    takenAt: `2026-06-24 ${String(i).padStart(2, '0')}:00:00`,
+  };
+}
+
+test('live: start() subscribes exactly once with day.date, and is idempotent', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce'); // date 2026-06-24
+    assert.deepEqual(stub.calls, [], 'no subscription before start()');
+    r.start();
+    r.start(); // idempotent — must not subscribe again
+    assert.deepEqual(stub.calls, ['2026-06-24'], 'subscribed once, with day.date');
+    r.stop();
+  });
+});
+
+test('live: a pushed snapshot re-renders the gallery (merged thumb count) and updates the seam text', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce'); // 3 authored photos
+    r.start();
+    // Before the snapshot, only the 3 authored thumbnails are shown.
+    assert.equal(r.node.byClass('reminisce-photo').length, 3, 'authored-only before snapshot');
+    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^3 photos$/);
+
+    // Two uploaded docs arrive (distinct urls → no dedup with authored).
+    stub.push([uploadedDoc(1), uploadedDoc(2)]);
+
+    assert.equal(r.node.byClass('reminisce-photo').length, 5, 'grid rebuilt to 3 authored + 2 uploaded');
+    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^5 photos$/);
+    r.stop();
+  });
+});
+
+test('live: stop() invokes the unsubscribe spy; a later push is a no-op (stub stops calling back)', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    assert.equal(stub.unsubscribed, 0, 'not yet unsubscribed');
+    r.stop();
+    assert.equal(stub.unsubscribed, 1, 'stop() called the unsubscribe fn exactly once');
+    // The real listener would not fire after unsubscribe; our stub clears cb on
+    // unsubscribe, so a subsequent push is inert and must not throw / re-render.
+    assert.doesNotThrow(() => stub.push([uploadedDoc(1)]));
+    assert.equal(r.node.byClass('reminisce-photo').length, 3, 'grid unchanged after unsubscribe');
+  });
+});
+
+test('live: subscribe-on-start / unsubscribe-on-stop lifecycle (single subscribe, single unsubscribe)', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    assert.equal(stub.calls.length, 1);
+    assert.equal(stub.unsubscribed, 0);
+    r.stop();
+    assert.equal(stub.unsubscribed, 1);
+    // stop() is safe to call again (idempotent teardown) and does not double-unsub.
+    assert.doesNotThrow(() => r.stop());
+    assert.equal(stub.unsubscribed, 1, 'stop() after stop() does not re-invoke unsubscribe');
+  });
+});
+
+test('live: a snapshot arriving while the lightbox is open defers the rebuild until close', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce'); // 3 authored photos
+    r.start();
+    assert.equal(r.node.byClass('reminisce-photo').length, 3);
+
+    // Open the lightbox on the first thumbnail.
+    const thumb = r.node.byClass('reminisce-photo')[0];
+    thumb.focus();
+    thumb._fire('click');
+    assert.equal(document.body.byClass('lightbox').length, 1, 'lightbox open');
+
+    // A snapshot arrives WHILE the viewer is open — the grid must NOT rebuild yet,
+    // but the seam count may update to reflect the incoming total.
+    stub.push([uploadedDoc(1), uploadedDoc(2)]);
+    assert.equal(
+      r.node.byClass('reminisce-photo').length,
+      3,
+      'grid NOT rebuilt while the lightbox is open (deferred)',
+    );
+    assert.match(
+      r.node.firstByClass('reminisce-frame-seam').textContent,
+      /^5 photos$/,
+      'seam count updates immediately even when the rebuild is deferred',
+    );
+
+    // Close the lightbox via Esc → onClose fires → deferred rebuild applies.
+    document._fire('keydown', { key: 'Escape', preventDefault() {} });
+    assert.equal(document.body.byClass('lightbox').length, 0, 'lightbox closed');
+    assert.equal(
+      r.node.byClass('reminisce-photo').length,
+      5,
+      'deferred photos applied on close (grid rebuilt to merged count)',
+    );
+    r.stop();
+  });
+});
+
+test('live: successive snapshots replace, not accumulate (latest snapshot wins)', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce'); // 3 authored photos
+    r.start();
+
+    // First snapshot: two uploads → 3 authored + 2 = 5.
+    stub.push([uploadedDoc(1), uploadedDoc(2)]);
+    assert.equal(r.node.byClass('reminisce-photo').length, 5, 'first snapshot → 3 + 2');
+
+    // Second snapshot brings a SINGLE different upload. The grid must reflect the
+    // latest snapshot (3 authored + 1 = 4), NOT the union of both snapshots (6).
+    stub.push([uploadedDoc(3)]);
+    assert.equal(
+      r.node.byClass('reminisce-photo').length,
+      4,
+      'second snapshot replaces the first (3 authored + 1 upload), not accumulates',
+    );
+    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^4 photos$/);
+    r.stop();
+  });
+});
+
+test('live: loading note shows for a zero-authored day until the first snapshot (then gallery)', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay({ ...fullDayFixture(), photos: [] }, 'reminisce');
+    r.start();
+    // Seam present + zero authored → loading affordance, NOT the empty-note yet.
+    assert.ok(r.node.firstByClass('reminisce-loading-note'), 'loading note before any snapshot');
+    assert.equal(r.node.firstByClass('reminisce-empty-note'), null, 'no empty-note while loading');
+    assert.equal(r.node.firstByClass('reminisce-gallery'), null, 'no gallery yet');
+
+    // First snapshot brings photos → loading note clears, gallery appears.
+    stub.push([uploadedDoc(1), uploadedDoc(2)]);
+    assert.equal(r.node.firstByClass('reminisce-loading-note'), null, 'loading note cleared by first snapshot');
+    assert.ok(r.node.firstByClass('reminisce-gallery'), 'gallery present after snapshot with uploads');
+    assert.equal(r.node.byClass('reminisce-photo').length, 2);
+    r.stop();
+  });
+});
+
+test('live: an empty first snapshot clears the loading note and shows the empty-note', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay({ ...fullDayFixture(), photos: [] }, 'reminisce');
+    r.start();
+    assert.ok(r.node.firstByClass('reminisce-loading-note'), 'loading note before snapshot');
+
+    stub.push([]); // first snapshot, no uploaded photos
+    assert.equal(r.node.firstByClass('reminisce-loading-note'), null, 'loading note cleared');
+    assert.ok(r.node.firstByClass('reminisce-empty-note'), 'empty-note shown for an empty merged list');
+    assert.equal(r.node.firstByClass('reminisce-gallery'), null, 'no gallery for an empty list');
+    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^No photos yet$/);
+    r.stop();
+  });
+});
+
+test('live: seam-absent regression — setSubscribePhotos(null) renders authored synchronously and start() does not subscribe', () => {
+  // No t.after here: this test does NOT install a seam (it explicitly detaches),
+  // so there is nothing to leak. We still assert the absent-seam path is intact.
+  setSubscribePhotos(null);
+  withDom(() => {
+    const r = renderDay(fullDayFixture(), 'reminisce'); // 3 authored photos
+    // Synchronous authored-only render (byte-identical to the pre-live behavior).
+    assert.equal(r.node.byClass('reminisce-photo').length, 3, 'authored gallery renders synchronously');
+    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^3 photos$/);
+    assert.equal(r.node.firstByClass('reminisce-loading-note'), null, 'no loading note when the seam is absent');
+    // start()/stop() must be safe no-ops on the live front (no stub to subscribe to).
+    assert.doesNotThrow(() => { r.start(); r.stop(); });
   });
 });
 

@@ -730,6 +730,23 @@
             font-size: 0.88rem;
             line-height: 1.45;
         }
+        /* Live-gallery first-snapshot affordance: a quiet pulsing line on-theme.
+           Replaced by the photo grid (or empty-note) on the first snapshot. */
+        .reminisce-loading-note {
+            margin: 14px 20px 0;
+            text-align: center;
+            color: var(--ink-soft);
+            font-size: 0.88rem;
+            line-height: 1.45;
+            animation: reminisce-pulse 1.4s ease-in-out infinite;
+        }
+        @keyframes reminisce-pulse {
+            0%, 100% { opacity: 0.45; }
+            50% { opacity: 0.9; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .reminisce-loading-note { animation: none; opacity: 0.7; }
+        }
 
         /* --- Lightbox: full-screen swipeable photo viewer ---------------- */
         .lightbox {

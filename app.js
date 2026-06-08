@@ -1099,6 +1099,87 @@ function reminisceGalleryPhotos(day) {
   return photos.slice(0, REMINISCE_GALLERY_MAX);
 }
 
+// ---------------------------------------------------------------------------
+// Live reminisce gallery (reminisce-gallery-live)
+//
+// The reminisce view merges hand-authored `day.photos` with travelers' UPLOADED
+// photos for the day (Firestore `photos` docs, written by photo-upload-flow),
+// LIVE via onSnapshot. The Firebase read layer is injected through a module-level
+// seam so `node --test` stays network-free and the seam-absent render path is
+// byte-identical to the authored-only original.
+// ---------------------------------------------------------------------------
+
+/**
+ * Injected `subscribePhotos(iso, cb)` seam. The bootstrap (boot()) wires this to
+ * the live Firestore listener via the photoService; tests inject a stub. When it
+ * is null (every existing test, and any non-Firebase host) renderDay's reminisce
+ * branch renders the authored photos synchronously, exactly as before.
+ * @type {((iso: string, cb: (docs: object[]) => void) => (() => void)) | null}
+ */
+let subscribePhotosFn = null;
+
+/**
+ * Wire (or clear) the live photo subscription seam. Called once by boot() with
+ * the photoService-backed listener; pass null to detach (tests).
+ * @param {((iso: string, cb: (docs: object[]) => void) => (() => void)) | null} fn
+ */
+export function setSubscribePhotos(fn) {
+  subscribePhotosFn = typeof fn === 'function' ? fn : null;
+}
+
+/**
+ * Merge authored + uploaded photos for a day's reminisce gallery.
+ *
+ * Order: authored photos FIRST (in authored order), then uploaded photos sorted
+ * by `takenAt` ascending (the sortable capture-time string photo-upload-flow
+ * writes). The whole list is capped at REMINISCE_GALLERY_MAX.
+ *
+ * Dedup key: the resolved photo `url`. An authored photo and an uploaded doc that
+ * point at the same URL collapse to one (authored wins, since it is emitted
+ * first). Two uploaded docs with the same download URL (re-runs) also collapse.
+ * URL is the natural identity here — each Storage upload gets a unique download
+ * URL, and authored photos carry their own stable URLs.
+ *
+ * Each kept photo is normalized to `{ url, alt }` (what the gallery + lightbox
+ * consume). Uploaded docs get `alt: "Photo by <uploader>"`. URLs are validated
+ * with safeUrl(); anything safeUrl rejects (bad scheme, missing) is dropped —
+ * uploaded photos are user data.
+ *
+ * @param {Array<{url?: string, alt?: string}>} authored authored day.photos
+ * @param {Array<{url?: string, uploader?: string, takenAt?: string}>} uploaded Firestore photo docs
+ * @returns {Array<{url: string, alt: string}>}
+ */
+export function mergeGalleryPhotos(authored, uploaded) {
+  const seen = new Set();
+  const out = [];
+
+  const pushSafe = (rawUrl, alt) => {
+    const url = safeUrl(rawUrl);
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    out.push({ url, alt: alt ? String(alt) : '' });
+  };
+
+  const authoredList = Array.isArray(authored) ? authored : [];
+  authoredList.forEach((p) => pushSafe(p?.url, p?.alt));
+
+  const uploadedList = (Array.isArray(uploaded) ? uploaded : [])
+    .slice()
+    .sort((a, b) => {
+      const ta = typeof a?.takenAt === 'string' ? a.takenAt : '';
+      const tb = typeof b?.takenAt === 'string' ? b.takenAt : '';
+      if (ta < tb) return -1;
+      if (ta > tb) return 1;
+      return 0;
+    });
+  uploadedList.forEach((d) => {
+    const who = d?.uploader ? String(d.uploader) : 'a traveler';
+    pushSafe(d?.url, `Photo by ${who}`);
+  });
+
+  return out.slice(0, REMINISCE_GALLERY_MAX);
+}
+
 /**
  * Masonry photo grid of focusable buttons. `onOpen(index)` fires on activation.
  * XSS-safe: URLs pass through safeUrl(); text via textContent only.
@@ -1128,8 +1209,14 @@ function buildReminisceGallery(photos, onOpen) {
  * provides the swipe/momentum (no gesture JS); JS adds open-at-index, the live
  * counter, keyboard nav, and a focus trap. Returns { node, open(i), destroy() }.
  * Append `node` to the day-view root and wire `destroy` into renderDay's stop().
+ *
+ * `opts.onClose()` (optional) fires on a USER-driven close (Esc / × / backdrop) —
+ * NOT on destroy()-teardown. The live reminisce gallery uses it to apply a photo
+ * rebuild that arrived while the viewer was open (so an open lightbox is never
+ * yanked out from under the user). Omitted → no behavior change (existing callers).
  */
-function buildLightbox(photos, dayLabel) {
+function buildLightbox(photos, dayLabel, opts = {}) {
+  const onClose = typeof opts.onClose === 'function' ? opts.onClose : null;
   const overlay = el('div', 'lightbox');
   overlay.hidden = true;
   overlay.setAttribute('role', 'dialog');
@@ -1213,7 +1300,13 @@ function buildLightbox(photos, dayLabel) {
     if (restoreFocus && lastFocused && typeof lastFocused.focus === 'function') lastFocused.focus();
   }
 
-  function close() { teardown(true); }
+  function close() {
+    const wasOpen = isOpen;
+    teardown(true);
+    // Notify only on a real user-driven close of an open viewer — lets the live
+    // gallery apply a deferred snapshot rebuild now that the user has left.
+    if (wasOpen && onClose) onClose();
+  }
 
   function onKey(e) {
     if (e.key === 'Escape') { e.preventDefault(); close(); }
@@ -1252,7 +1345,7 @@ function buildLightbox(photos, dayLabel) {
     teardown(false);
   }
 
-  return { node: overlay, open, destroy };
+  return { node: overlay, open, destroy, isOpen: () => isOpen };
 }
 
 export function renderDay(day, framingName = 'plan') {
@@ -1297,29 +1390,111 @@ export function renderDay(day, framingName = 'plan') {
     headerBlock.appendChild(intro);
   }
 
-  // Lightbox teardown (set when the reminisce gallery is built); folded into stop().
-  let lightboxStop = () => {};
+  // Reminisce live-gallery lifecycle. Default no-ops so the non-reminisce return
+  // (and the seam-absent reminisce path) are unaffected; the live subscription is
+  // wired into these inside the reminisce branch only when the seam is present.
+  let reminisceStart = () => {};
+  let reminisceStop = () => {};
 
   if (isReminisce) {
+    // Authored photos are the SYNCHRONOUS source — rendered immediately so the
+    // seam-absent path is byte-identical to the original. The live layer (when the
+    // subscribePhotos seam is present) merges uploaded photos in on each snapshot.
+    const authoredPhotos = reminisceGalleryPhotos(day);
+    const live = !!subscribePhotosFn;
+
     // Wrap the header in the blue "memory frame" that flows into the gallery.
-    const galleryPhotos = reminisceGalleryPhotos(day);
     const frame = el('section', 'reminisce-frame');
     frame.appendChild(headerBlock);
     const seam = el('p', 'reminisce-frame-seam');
-    seam.textContent = galleryPhotos.length
-      ? `${galleryPhotos.length} ${galleryPhotos.length === 1 ? 'photo' : 'photos'}`
-      : 'No photos yet';
+    const setSeam = (count) => {
+      seam.textContent = count
+        ? `${count} ${count === 1 ? 'photo' : 'photos'}`
+        : 'No photos yet';
+    };
+    setSeam(authoredPhotos.length);
     frame.appendChild(seam);
     view.appendChild(frame);
 
-    if (galleryPhotos.length) {
-      // The lightbox mounts itself on <body> when opened (see buildLightbox); we
-      // only wire the gallery to it and fold its teardown into stop().
-      const lightbox = buildLightbox(galleryPhotos, day.title ?? '');
-      view.appendChild(buildReminisceGallery(galleryPhotos, (i) => lightbox.open(i)));
-      lightboxStop = lightbox.destroy;
+    // A stable host the gallery / empty-note / lightbox swap into. (Keeping a host
+    // node lets a snapshot re-render the grid without touching surrounding chrome.)
+    const galleryHost = el('div', 'reminisce-gallery-host');
+    view.appendChild(galleryHost);
+
+    // `current` is the merged photo list currently shown. Authored-only at first;
+    // each snapshot recomputes it via mergeGalleryPhotos.
+    let current = authoredPhotos.map((p) => ({
+      url: safeUrl(p?.url),
+      alt: p?.alt ? String(p.alt) : '',
+    })).filter((p) => p.url);
+    let lightbox = null;
+    let loadingNote = null;
+
+    // (Re)build the grid + lightbox over `photos`. Tears down any prior lightbox
+    // first (the lightbox captures its array at build time, so a stale one would
+    // open the wrong set). Empty list → the graceful empty-state note.
+    const renderGallery = (photos) => {
+      if (lightbox) { lightbox.destroy(); lightbox = null; }
+      galleryHost.textContent = '';
+      if (photos.length) {
+        // The lightbox mounts itself on <body> when opened (see buildLightbox); we
+        // only wire the gallery to it and fold its teardown into reminisceStop.
+        lightbox = buildLightbox(photos, day.title ?? '', { onClose: applyPending });
+        galleryHost.appendChild(buildReminisceGallery(photos, (i) => lightbox.open(i)));
+      } else if (!loadingNote) {
+        galleryHost.appendChild(el('p', 'reminisce-empty-note', 'Your trip photos from this day will live here.'));
+      }
+    };
+
+    // A snapshot can arrive while the user is inside the lightbox; defer the
+    // rebuild until they close it rather than yanking the open viewer away.
+    let pending = null;
+    function applyPending() {
+      if (pending) { const p = pending; pending = null; renderGallery(p); }
+    }
+    const applyMerged = (merged) => {
+      current = merged;
+      setSeam(merged.length);
+      if (lightbox && lightbox.isOpen()) { pending = merged; return; }
+      renderGallery(merged);
+    };
+
+    // First snapshot is pending → with no authored photos, show a small on-theme
+    // loading affordance instead of the empty-note (the snapshot may add photos).
+    // Set loadingNote BEFORE the initial render so renderGallery's empty branch
+    // is suppressed (it skips the empty-note while a loadingNote is present).
+    if (live && current.length === 0) {
+      loadingNote = el('p', 'reminisce-loading-note', 'Gathering your photos…');
+    }
+
+    // Initial synchronous render (authored only) — identical to the original when
+    // the seam is absent.
+    renderGallery(current);
+    if (loadingNote && !loadingNote.parentNode) galleryHost.appendChild(loadingNote);
+
+    if (live) {
+      let unsubscribe = null;
+      reminisceStart = () => {
+        if (unsubscribe) return; // idempotent
+        try {
+          unsubscribe = subscribePhotosFn(day.date, (docs) => {
+            loadingNote = null;
+            applyMerged(mergeGalleryPhotos(authoredPhotos, docs));
+          });
+        } catch (e) {
+          console.warn('[reminisce] live photo subscription failed:', e);
+          loadingNote = null;
+          renderGallery(current); // fall back to authored-only
+        }
+      };
+      reminisceStop = () => {
+        if (typeof unsubscribe === 'function') { try { unsubscribe(); } catch { /* ignore */ } }
+        unsubscribe = null;
+        if (lightbox) { lightbox.destroy(); lightbox = null; }
+      };
     } else {
-      view.appendChild(el('p', 'reminisce-empty-note', 'Your trip photos from this day will live here.'));
+      // Seam absent: nothing live to start; stop() still tears down the lightbox.
+      reminisceStop = () => { if (lightbox) { lightbox.destroy(); lightbox = null; } };
     }
   } else {
     view.appendChild(headerBlock);
@@ -1392,8 +1567,8 @@ export function renderDay(day, framingName = 'plan') {
 
   return {
     node: view,
-    start: hero.start,
-    stop: () => { hero.stop(); lightboxStop(); },
+    start: () => { hero.start(); reminisceStart(); },
+    stop: () => { hero.stop(); reminisceStop(); },
   };
 }
 
@@ -3136,6 +3311,14 @@ if (typeof document !== 'undefined') {
     // once in boot() after auth resolves). If the photo SDK failed to load, the
     // handler is undefined → the ☰ "Add photos" row renders disabled (graceful).
     const onAddPhotos = buildOnAddPhotos(photoService);
+    // Wire the live reminisce-gallery read seam (uploaded photos merge into past
+    // days). Absent service → setSubscribePhotos(null) keeps the authored-only
+    // synchronous render path. Bound so `this` resolves to the service.
+    setSubscribePhotos(
+      photoService && typeof photoService.subscribePhotos === 'function'
+        ? (iso, cb) => photoService.subscribePhotos(iso, cb)
+        : null,
+    );
     if (root) appController = mountApp(root, onAddPhotos ? { onAddPhotos } : {});
     // Surface the time-travel indicator (if an override resolved at load).
     // The banner is position:fixed, so it lives directly on <body>.
@@ -3240,10 +3423,21 @@ if (typeof document !== 'undefined') {
             getDocs: fs.getDocs,
             query: fs.query,
             where: fs.where,
+            onSnapshot: fs.onSnapshot,
             serverTimestamp: fs.serverTimestamp,
             ref: st.ref,
             uploadBytesResumable: st.uploadBytesResumable,
             getDownloadURL: st.getDownloadURL,
+          },
+          // Live read seam for the reminisce gallery: subscribe to all `photos`
+          // docs for an ISO date. Returns the unsubscribe fn. Offline reads come
+          // from persistentLocalCache (set at this same — first — Firestore init).
+          subscribePhotos(iso, cb) {
+            return fs.onSnapshot(
+              fs.query(fs.collection(db, 'photos'), fs.where('date', '==', iso)),
+              (snap) => cb(snap.docs.map((d) => d.data())),
+              (err) => console.warn('[reminisce] onSnapshot error:', err),
+            );
           },
         };
       } catch (err) {
