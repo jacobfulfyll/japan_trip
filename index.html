@@ -1154,6 +1154,126 @@
             .day-index-row { padding: 11px 12px; gap: 10px; grid-template-columns: minmax(68px, auto) 1fr auto; }
             .day-index-region { font-size: 0.9rem; }
         }
+
+        /* --- Auth gate overlay (auth-password-gate) ------------------------- */
+        .login-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            /* Fully opaque washi wash so no app content peeks through. */
+            background:
+                radial-gradient(circle at 22% 18%, rgba(206, 183, 154, 0.4) 0%, rgba(206, 183, 154, 0) 46%),
+                linear-gradient(155deg, rgba(243, 234, 221, 0.97), rgba(220, 205, 183, 0.97));
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+        }
+
+        .login-overlay[hidden] { display: none; }
+
+        .login-card {
+            width: min(420px, 100%);
+            background: var(--card-solid);
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-lg);
+            padding: 36px 30px 30px;
+            text-align: center;
+        }
+
+        .login-kicker {
+            font-size: 0.78rem;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: var(--brand-mid);
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        .login-title {
+            font-family: "Playfair Display", "Georgia", serif;
+            font-size: 1.9rem;
+            color: var(--brand-deep);
+            margin-bottom: 8px;
+        }
+
+        .login-sub {
+            color: var(--ink-soft);
+            font-size: 0.98rem;
+            margin-bottom: 22px;
+        }
+
+        .login-label {
+            display: block;
+            text-align: left;
+            font-size: 0.82rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--ink-soft);
+            margin-bottom: 6px;
+        }
+
+        .login-input {
+            width: 100%;
+            padding: 13px 14px;
+            font-size: 1.05rem;
+            font-family: inherit;
+            color: var(--ink);
+            background: rgba(255, 255, 255, 0.6);
+            border: 1px solid var(--line);
+            border-radius: var(--radius-md);
+            transition: border-color 0.18s ease, box-shadow 0.18s ease;
+        }
+
+        .login-input:focus {
+            outline: none;
+            border-color: var(--brand-mid);
+            box-shadow: 0 0 0 3px rgba(18, 98, 143, 0.18);
+        }
+
+        .login-submit {
+            width: 100%;
+            margin-top: 18px;
+            padding: 13px 16px;
+            font-size: 1.05rem;
+            font-weight: 700;
+            font-family: inherit;
+            color: #fbf3df;
+            background: linear-gradient(135deg, var(--brand-mid), var(--brand-deep));
+            border: none;
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            box-shadow: var(--shadow-md);
+            transition: transform 0.12s ease, opacity 0.18s ease;
+        }
+
+        .login-submit:hover { transform: translateY(-1px); }
+        .login-submit:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(243, 203, 114, 0.55);
+        }
+
+        .login-submit[disabled] {
+            cursor: progress;
+            opacity: 0.65;
+            transform: none;
+        }
+
+        .login-error {
+            margin-top: 16px;
+            color: #9a2b2b;
+            background: rgba(154, 43, 43, 0.08);
+            border: 1px solid rgba(154, 43, 43, 0.25);
+            border-radius: var(--radius-md);
+            padding: 10px 12px;
+            font-size: 0.92rem;
+        }
+
+        .login-error[hidden] { display: none; }
     </style>
 </head>
 <body>
@@ -1176,6 +1296,36 @@
       companion surfaces it. No aux-tab UI is rebuilt in this scaffold.
     -->
     <main id="app-root"></main>
+
+    <!--
+      Auth gate (auth-password-gate). A static, fully-covering login overlay:
+      one shared password unlocks the journal via Firebase Auth (signed in as a
+      single shared account; only the password is secret). app.js shows this
+      overlay first and reveals #app-root only once onAuthStateChanged reports a
+      user. The markup is static (no interpolation) — XSS-safe; the typed
+      password is never written to the DOM or persisted. Hidden by default
+      (hidden attribute); app.js removes it to display the gate when no session
+      exists, and re-hides it after sign-in.
+    -->
+    <div id="login-overlay" class="login-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="login-title">
+      <form id="login-form" class="login-card" novalidate onsubmit="return false">
+        <p class="login-kicker">Newly Weds in Japan</p>
+        <h1 id="login-title" class="login-title">Welcome back</h1>
+        <p class="login-sub">Enter the shared password to open the journal.</p>
+        <label for="login-password" class="login-label">Password</label>
+        <input
+          id="login-password"
+          class="login-input"
+          type="password"
+          name="password"
+          autocomplete="current-password"
+          aria-describedby="login-error"
+          required
+        />
+        <button id="login-submit" class="login-submit" type="submit">Enter</button>
+        <p id="login-error" class="login-error" role="alert" aria-live="polite" hidden></p>
+      </form>
+    </div>
 
     <script type="module" src="app.js"></script>
 

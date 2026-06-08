@@ -170,6 +170,7 @@ const PRECACHE_URLS = [
   '.',
   'index.html',
   'app.js',
+  'firebase-config.js',
   'data/days.js',
   'manifest.json',
   'img/icon-192.png',
@@ -585,6 +586,46 @@ test('cross-origin Google Fonts request is intercepted (stale-while-revalidate)'
 });
 
 // ===========================================================================
+// FETCH ROUTER — Firebase modular SDK (gstatic CDN, stale-while-revalidate)
+//
+// The auth gate loads the Firebase SDK from www.gstatic.com/firebasejs/<v>/...
+// via a dynamic import(). sw.js runtime-caches it so the gate boots offline
+// after the first online load. Note: fonts use a DIFFERENT host
+// (fonts.gstatic.com) — only the /firebasejs/ path on www.gstatic.com routes
+// here, so we also assert a non-matching gstatic path is NOT intercepted.
+// ===========================================================================
+
+test('Firebase SDK request (www.gstatic.com/firebasejs/) is runtime-cached (stale-while-revalidate)', async () => {
+  const { handlers, caches } = loadSW(async () => fakeResponse({ body: 'firebase-sdk-bytes' }));
+  const url = 'https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js';
+  const req = new FakeRequest(url, { mode: 'cors', destination: 'script' });
+  const event = makeFetchEvent(req);
+
+  handlers.fetch(event);
+  const res = await event._res;
+
+  assert.equal(event._responded, true, 'SDK request should be intercepted');
+  assert.equal(res.body, 'firebase-sdk-bytes');
+  assert.ok(caches._get(RUNTIME_CACHE, url), 'Firebase SDK response should be runtime-cached for offline boot');
+});
+
+test('a non-/firebasejs/ path on www.gstatic.com is NOT intercepted by the Firebase route', () => {
+  const { handlers } = loadSW(async () => fakeResponse());
+  // Same host, different path → falls through to "everything else" (not handled).
+  const req = new FakeRequest('https://www.gstatic.com/other/thing.js', { mode: 'cors', destination: 'script' });
+  const event = makeFetchEvent(req);
+
+  handlers.fetch(event);
+  assert.equal(event._responded, false, 'only the /firebasejs/ path should route to the SDK cache');
+});
+
+test('CACHE_VERSION is v24 (bumped for the auth-gate shell change: index.html + app.js)', () => {
+  // sw.test.js derives CACHE_VERSION from the sw.js literal; this pins the
+  // expected value so an accidental revert of the bump fails loudly.
+  assert.equal(CACHE_VERSION, 'v24');
+});
+
+// ===========================================================================
 // MANIFEST — structural validity + on-disk icons
 // ===========================================================================
 
@@ -673,4 +714,20 @@ test('service worker registration path is relative (works under the Pages subpat
   assert.ok(match, 'could not find the register() call');
   const path = match[1];
   assert.ok(!path.startsWith('/'), `registration path must be relative, got "${path}"`);
+});
+
+// The login form has no `action`, so a native submit (Enter) before app.js's JS
+// guard installs would GET index.html?password=<typed>, leaking the one shared
+// secret into the URL/history/referrer/SW navigation fetch. The static
+// onsubmit="return false" neutralizes that the instant the HTML parses — pin it
+// so a future markup edit can't silently drop the guard. (Belt; the JS-side
+// installSubmitGuard is the suspenders, covered behaviorally in app.test.js.)
+test('login form carries the synchronous onsubmit="return false" native-submit guard', () => {
+  const formTag = INDEX_SRC.match(/<form[^>]*id="login-form"[^>]*>/);
+  assert.ok(formTag, 'could not find the #login-form opening tag');
+  assert.match(
+    formTag[0],
+    /onsubmit="return false"/,
+    'the #login-form must hard-block native submission (no password leak into the URL)',
+  );
 });

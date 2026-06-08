@@ -14,12 +14,13 @@
 //   - same-origin app shell    → cache-first, fall back to network
 //   - cross-origin images      → stale-while-revalidate (cache viewed hero photos)
 //   - cross-origin Google Fonts→ stale-while-revalidate
+//   - Firebase SDK (gstatic)   → stale-while-revalidate (offline auth gate)
 //   - everything else (maps…)  → not intercepted (pass through)
 //
 // Every handler is wrapped defensively: any error falls back to a plain
 // fetch(request) so a service-worker bug can never block the page.
 
-const CACHE_VERSION = 'v23';
+const CACHE_VERSION = 'v24';
 const SHELL_CACHE = `app-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `runtime-${CACHE_VERSION}`;
 const EXPECTED_CACHES = [SHELL_CACHE, RUNTIME_CACHE];
@@ -35,6 +36,9 @@ const PRECACHE_URLS = [
   '.',
   'index.html',
   'app.js',
+  // app.js statically imports ./firebase-config.js at module top level, so the
+  // auth gate can't boot offline unless the config ships in the shell cache.
+  'firebase-config.js',
   'data/days.js',
   'manifest.json',
   'img/icon-192.png',
@@ -43,6 +47,15 @@ const PRECACHE_URLS = [
 ];
 
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
+
+// Firebase modular SDK is loaded from the gstatic CDN as pinned ES modules
+// (no build step). Runtime-cache it (stale-while-revalidate) so the auth gate
+// boots offline after the first online load — Firebase Auth persists the
+// session in IndexedDB, so onAuthStateChanged resolves the signed-in user with
+// no network once the SDK is cached. firebasejs is served from www.gstatic.com
+// under the /firebasejs/ path (fonts use fonts.gstatic.com — a different host).
+const FIREBASE_SDK_HOST = 'www.gstatic.com';
+const FIREBASE_SDK_PATH_PREFIX = '/firebasejs/';
 
 // ---------------------------------------------------------------------------
 // Install — precache the app shell, then take over immediately.
@@ -131,7 +144,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 6) Everything else (maps.google.com, etc.) → not intercepted.
+  // 6) Firebase modular SDK (gstatic CDN) → stale-while-revalidate, so the auth
+  //    gate boots offline after the first online load.
+  if (
+    url.hostname === FIREBASE_SDK_HOST &&
+    url.pathname.startsWith(FIREBASE_SDK_PATH_PREFIX)
+  ) {
+    event.respondWith(staleWhileRevalidate(request, RUNTIME_CACHE));
+    return;
+  }
+
+  // 7) Everything else (maps.google.com, etc.) → not intercepted.
 });
 
 // ---------------------------------------------------------------------------

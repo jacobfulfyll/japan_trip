@@ -38,6 +38,10 @@ import {
   parseNowOverride,
   resolveNowOverride,
   bucketPlanByDayPart,
+  shouldShowApp,
+  friendlyAuthError,
+  wireAuthGate,
+  installSubmitGuard,
 } from './app.js';
 import { TRIP, DAYS } from './data/days.js';
 
@@ -4184,4 +4188,358 @@ test('renderDay: transit missing an endpoint (no `to`) renders NO .plan-transit 
     assert.equal(node.firstByClass('plan-transit'), null,
       'buildTransitBlock should early-return null when from/to are not both populated');
   });
+});
+
+// ===========================================================================
+// auth-password-gate — the network-free auth seams exported by app.js.
+//
+// app.js gates the whole app behind a shared Firebase-Auth account. The real
+// SDK is loaded via a dynamic import() inside the browser-only boot block
+// (guarded by `typeof document !== 'undefined'`), so none of that runs under
+// `node --test`. The developer carved out three pure/injectable seams for us:
+//   - shouldShowApp(user)      — pure decision
+//   - friendlyAuthError(err)   — pure error mapping (must not leak codes/email)
+//   - wireAuthGate(deps)       — wiring driven by injected stubs (no SDK)
+// Real-browser concerns (the CDN SDK actually loading, the overlay's CSS
+// fade, focus behaviour in a live AT tree) belong to VERIFY-APP, not here.
+// ===========================================================================
+
+// The shared handle is hardcoded in app.js (SHARED_EMAIL) but not exported. We
+// assert friendly errors never leak it, so we pin the literal here.
+const SHARED_EMAIL = 'jacob.press3@gmail.com';
+
+// --- shouldShowApp ----------------------------------------------------------
+
+test('shouldShowApp returns true for a truthy auth user', () => {
+  assert.equal(shouldShowApp({ uid: 'abc123' }), true);
+  // Any non-empty object/string is "a user" as far as the gate cares.
+  assert.equal(shouldShowApp('user'), true);
+});
+
+test('shouldShowApp returns false for null (signed out)', () => {
+  assert.equal(shouldShowApp(null), false);
+});
+
+test('shouldShowApp returns false for undefined (no callback arg)', () => {
+  assert.equal(shouldShowApp(undefined), false);
+});
+
+// --- friendlyAuthError ------------------------------------------------------
+
+/** Assert a message is user-facing safe: never the raw code, never the email. */
+function assertNonLeaky(msg) {
+  assert.equal(typeof msg, 'string');
+  assert.ok(msg.length > 0, 'message should be non-empty');
+  assert.ok(!msg.includes('auth/'), `message must not leak a raw code: "${msg}"`);
+  assert.ok(!msg.includes(SHARED_EMAIL), `message must not leak the shared email: "${msg}"`);
+}
+
+test('friendlyAuthError maps auth/wrong-password to a friendly, non-leaky message', () => {
+  const msg = friendlyAuthError({ code: 'auth/wrong-password' });
+  assertNonLeaky(msg);
+  assert.match(msg, /password/i);
+});
+
+test('friendlyAuthError maps auth/invalid-credential to the same friendly password message', () => {
+  const msg = friendlyAuthError({ code: 'auth/invalid-credential' });
+  assertNonLeaky(msg);
+  assert.match(msg, /password/i);
+});
+
+test('friendlyAuthError maps auth/network-request-failed to a friendly network message', () => {
+  const msg = friendlyAuthError({ code: 'auth/network-request-failed' });
+  assertNonLeaky(msg);
+  assert.match(msg, /network|connection/i);
+});
+
+test('friendlyAuthError maps auth/too-many-requests to a friendly throttle message', () => {
+  const msg = friendlyAuthError({ code: 'auth/too-many-requests' });
+  assertNonLeaky(msg);
+  assert.match(msg, /too many|wait|moment/i);
+});
+
+test('friendlyAuthError returns a safe generic fallback for an unknown code', () => {
+  const msg = friendlyAuthError({ code: 'auth/some-brand-new-code' });
+  assertNonLeaky(msg);
+});
+
+test('friendlyAuthError returns a safe generic fallback for an empty/missing error', () => {
+  // null, undefined, {} and a bare Error all hit the default branch.
+  for (const err of [null, undefined, {}, new Error('boom'), 'string-error', 42]) {
+    assertNonLeaky(friendlyAuthError(err));
+  }
+});
+
+test('friendlyAuthError never echoes the raw code even when the code looks like a sentence', () => {
+  // Defensive: an attacker-influenced or odd error object must still be scrubbed.
+  const msg = friendlyAuthError({ code: 'auth/wrong-password — contact jacob.press3@gmail.com' });
+  assertNonLeaky(msg);
+});
+
+// --- wireAuthGate -----------------------------------------------------------
+
+/**
+ * Build the stub DOM surface wireAuthGate wires against, plus a capturing
+ * onAuthStateChanged stub and a controllable signIn stub. Returns everything a
+ * test needs to drive the gate deterministically (no SDK, no timers, no net).
+ */
+function makeGateHarness({ signInImpl } = {}) {
+  const overlay = new StubElement('div');
+  const form = new StubElement('form');
+  const passwordInput = new StubElement('input');
+  passwordInput.value = '';
+  const submitBtn = new StubElement('button');
+  const errorEl = new StubElement('p');
+  errorEl.hidden = true;
+
+  let authCb = null;
+  const onAuthStateChanged = (cb) => { authCb = cb; };
+
+  const signInCalls = [];
+  const signIn = (email, password) => {
+    signInCalls.push([email, password]);
+    return signInImpl ? signInImpl(email, password) : Promise.resolve({ uid: 'ok' });
+  };
+
+  const onAuthed = (() => {
+    const fn = (...a) => { fn.calls.push(a); };
+    fn.calls = [];
+    return fn;
+  })();
+  const onSignedOut = (() => {
+    const fn = (...a) => { fn.calls.push(a); };
+    fn.calls = [];
+    return fn;
+  })();
+
+  return {
+    overlay, form, passwordInput, submitBtn, errorEl,
+    onAuthStateChanged, signIn, signInCalls, onAuthed, onSignedOut,
+    deps: () => ({
+      onAuthStateChanged, signIn, overlay, form, passwordInput,
+      submitBtn, errorEl, onAuthed, onSignedOut,
+    }),
+    fireAuth: (user) => authCb(user),
+    submit: () => form._fire('submit', { preventDefault() {} }),
+  };
+}
+
+/** Let the submit handler's Promise.resolve().then().catch() chain settle. */
+async function flushMicrotasks() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+test('wireAuthGate shows the overlay immediately on wiring (before any callback)', () => {
+  withDom(() => {
+    const h = makeGateHarness();
+    wireAuthGate(h.deps());
+    assert.equal(h.overlay.hidden, false, 'gate must cover the app up-front');
+    // Nothing mounted yet — no user has appeared.
+    assert.equal(h.onAuthed.calls.length, 0);
+  });
+});
+
+test('wireAuthGate reveals the app and hides the overlay when a user appears', () => {
+  withDom(() => {
+    const h = makeGateHarness();
+    wireAuthGate(h.deps());
+    h.fireAuth({ uid: 'abc' });
+    assert.equal(h.overlay.hidden, true, 'overlay hidden once authed');
+    assert.equal(h.onAuthed.calls.length, 1, 'app mounted exactly once');
+  });
+});
+
+test('wireAuthGate mounts the app only once across repeated user callbacks', () => {
+  withDom(() => {
+    const h = makeGateHarness();
+    wireAuthGate(h.deps());
+    h.fireAuth({ uid: 'abc' });
+    h.fireAuth({ uid: 'abc' }); // token refresh re-fires the same user
+    assert.equal(h.onAuthed.calls.length, 1, 'onAuthed is idempotent');
+  });
+});
+
+test('wireAuthGate re-shows the overlay on sign-out after a prior sign-in', () => {
+  withDom(() => {
+    const h = makeGateHarness();
+    wireAuthGate(h.deps());
+    h.fireAuth({ uid: 'abc' });
+    assert.equal(h.overlay.hidden, true);
+    h.fireAuth(null); // signed out
+    assert.equal(h.overlay.hidden, false, 'overlay re-covers the app on sign-out');
+    assert.equal(h.onSignedOut.calls.length >= 1, true, 'onSignedOut invoked');
+  });
+});
+
+test('wireAuthGate submit calls signIn with (SHARED_EMAIL, password)', async () => {
+  await withDom(async () => {
+    const h = makeGateHarness();
+    wireAuthGate(h.deps());
+    h.passwordInput.value = 'hunter2';
+    h.submit();
+    await flushMicrotasks();
+    assert.equal(h.signInCalls.length, 1, 'signIn called once');
+    assert.deepEqual(h.signInCalls[0], [SHARED_EMAIL, 'hunter2']);
+  });
+});
+
+test('wireAuthGate submit disables submit while pending (no double-submit)', async () => {
+  await withDom(async () => {
+    // signIn that never resolves → the gate stays in the pending state.
+    const h = makeGateHarness({ signInImpl: () => new Promise(() => {}) });
+    wireAuthGate(h.deps());
+    h.passwordInput.value = 'hunter2';
+    h.submit();
+    await flushMicrotasks();
+    assert.equal(h.submitBtn.disabled, true, 'submit disabled while signing in');
+  });
+});
+
+test('wireAuthGate empty password does NOT call signIn and shows a prompt', () => {
+  withDom(() => {
+    const h = makeGateHarness();
+    wireAuthGate(h.deps());
+    h.passwordInput.value = ''; // nothing typed
+    h.submit();
+    assert.equal(h.signInCalls.length, 0, 'must not attempt sign-in with no password');
+    assert.equal(h.errorEl.hidden, false, 'an inline prompt should appear');
+    assert.ok(h.errorEl.textContent.length > 0);
+  });
+});
+
+test('wireAuthGate on sign-in rejection shows the friendly error, clears the field, re-enables submit', async () => {
+  await withDom(async () => {
+    const h = makeGateHarness({
+      signInImpl: () => Promise.reject({ code: 'auth/wrong-password' }),
+    });
+    wireAuthGate(h.deps());
+    h.passwordInput.value = 'bad-pass';
+    h.submit();
+    await flushMicrotasks();
+
+    // Friendly, non-leaky error surfaced.
+    assert.equal(h.errorEl.hidden, false, 'error region revealed');
+    assertNonLeaky(h.errorEl.textContent);
+    assert.match(h.errorEl.textContent, /password/i);
+    // Field cleared (never retain the typed password) and submit re-enabled.
+    assert.equal(h.passwordInput.value, '', 'password field cleared after failure');
+    assert.equal(h.submitBtn.disabled, false, 'submit re-enabled so the user can retry');
+  });
+});
+
+test('wireAuthGate does not throw when signIn throws synchronously', async () => {
+  await withDom(async () => {
+    const h = makeGateHarness({
+      signInImpl: () => { throw new Error('SDK exploded'); },
+    });
+    wireAuthGate(h.deps());
+    h.passwordInput.value = 'whatever';
+    assert.doesNotThrow(() => h.submit(), 'submit must swallow a thrown SDK error');
+    await flushMicrotasks();
+    // The synchronous throw is caught by the promise chain → friendly fallback.
+    assert.equal(h.errorEl.hidden, false);
+    assertNonLeaky(h.errorEl.textContent);
+    assert.equal(h.submitBtn.disabled, false, 'submit re-enabled after the failure');
+  });
+});
+
+test('wireAuthGate clears a stale error when a new submit begins', async () => {
+  await withDom(async () => {
+    const h = makeGateHarness({
+      signInImpl: () => new Promise(() => {}), // pending: lets us inspect mid-flight
+    });
+    wireAuthGate(h.deps());
+    // Seed a leftover error from a previous attempt.
+    h.errorEl.textContent = 'old error';
+    h.errorEl.hidden = false;
+    h.passwordInput.value = 'retry-pass';
+    h.submit();
+    await flushMicrotasks();
+    assert.equal(h.errorEl.textContent, '', 'prior error cleared on a fresh valid submit');
+  });
+});
+
+test('wireAuthGate tolerates a missing optional onSignedOut (no throw on sign-out)', () => {
+  withDom(() => {
+    const h = makeGateHarness();
+    const deps = h.deps();
+    delete deps.onSignedOut;
+    wireAuthGate(deps);
+    assert.doesNotThrow(() => h.fireAuth(null), 'sign-out must not require onSignedOut');
+  });
+});
+
+// After sign-out the bootstrap tears down #app-root (onSignedOut), so the
+// mount-once latch must reset to let a later re-sign-in re-mount the app — else
+// re-auth would un-hide an emptied root. (Pins the appMounted reset.)
+test('wireAuthGate re-mounts the app on re-sign-in after a sign-out', () => {
+  withDom(() => {
+    const h = makeGateHarness();
+    wireAuthGate(h.deps());
+    h.fireAuth({ uid: 'abc' });      // first sign-in → mount
+    assert.equal(h.onAuthed.calls.length, 1);
+    h.fireAuth(null);                // sign-out → teardown path
+    h.fireAuth({ uid: 'abc' });      // re-sign-in → must mount again
+    assert.equal(h.onAuthed.calls.length, 2, 'onAuthed fires again after a sign-out + re-sign-in');
+  });
+});
+
+// --- installSubmitGuard (pre-wire native-submission leak guard) --------------
+//
+// REGRESSION: in the async boot(), the gate is shown + the password focused
+// BEFORE the Firebase SDK import resolves; wireAuthGate (with the real submit
+// preventDefault) installs only AFTER those awaits. The #login-form has no
+// `action`, so a native submit during that window would GET index.html?password=
+// <typed>, leaking the one shared secret into the URL/history/referrer/SW fetch.
+// installSubmitGuard neutralizes native submission synchronously, independent of
+// the SDK import. These drive the guard directly through the DOM stub (no SDK).
+
+/** A synthetic submit event that records whether preventDefault was called. */
+function makeSubmitEvent() {
+  return { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+}
+
+test('installSubmitGuard makes a native form submit preventDefault (no leaky GET)', () => {
+  withDom(() => {
+    const form = new StubElement('form');
+    assert.equal(installSubmitGuard(form), true, 'guard reports it attached');
+    const evt = makeSubmitEvent();
+    form._fire('submit', evt);
+    assert.equal(evt.defaultPrevented, true, 'native submission is neutralized before any await');
+  });
+});
+
+test('installSubmitGuard is independent of wireAuthGate (guards the pre-wire window)', () => {
+  withDom(() => {
+    // Only the guard is installed — wireAuthGate has NOT run yet (the SDK import
+    // is still pending in the real boot). A submit must still be prevented.
+    const form = new StubElement('form');
+    installSubmitGuard(form);
+    const evt = makeSubmitEvent();
+    form._fire('submit', evt);
+    assert.equal(evt.defaultPrevented, true, 'submit blocked with no wireAuthGate handler present');
+  });
+});
+
+test('installSubmitGuard is harmless / idempotent alongside wireAuthGate', async () => {
+  await withDom(async () => {
+    const h = makeGateHarness();
+    installSubmitGuard(h.form);     // early guard
+    wireAuthGate(h.deps());         // real handler added on top
+    const evt = makeSubmitEvent();
+    h.passwordInput.value = 'hunter2';
+    h.form._fire('submit', evt);
+    await flushMicrotasks();        // let the sign-in microtask chain settle
+    // Both handlers ran; preventDefault stays asserted, sign-in still attempted.
+    assert.equal(evt.defaultPrevented, true, 'double preventDefault is fine');
+    assert.equal(h.signInCalls.length, 1, 'wireAuthGate still drives the sign-in');
+  });
+});
+
+test('installSubmitGuard returns false for a missing/invalid form (no throw)', () => {
+  assert.equal(installSubmitGuard(null), false);
+  assert.equal(installSubmitGuard(undefined), false);
+  assert.equal(installSubmitGuard({}), false, 'object without addEventListener is ignored');
 });

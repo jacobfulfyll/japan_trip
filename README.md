@@ -17,6 +17,21 @@ app.test.js    ← tests for the data/API/nav layer (node --test; 307 total with
 `data/days.js` is the single source of truth. Everything you see on the page
 comes from it.
 
+## Access — shared Firebase password
+
+The live site is protected by a single shared Firebase password. Visitors see a
+login form before any trip content loads. Enter the shared password to sign in;
+Firebase's default session persistence keeps you signed in across reloads on the
+same device.
+
+**The password is the only secret.** The Firebase web config (`firebase-config.js`)
+is committed to the repo — those values (API key, project ID, etc.) identify the
+Firebase project but carry no privileges on their own. The real access control is
+enforced server-side by Firebase Auth and Storage/Firestore security rules
+(`request.auth != null`). If you need to rotate the password, change it in the
+Firebase console under Authentication → Users for the shared account. The shared
+account email is the `SHARED_EMAIL` constant at the top of `app.js`.
+
 ## Editing the trip (the main thing you'll do)
 
 Open `data/days.js`. It exports two things:
@@ -341,7 +356,7 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The test suite (**307 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The test suite (**342 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),
@@ -350,7 +365,8 @@ the date/time-aware navigation layer (`frameForDay`, `pickLandingView`,
 the pre-trip home screen (`renderOverview` countdown states, day-index rows, today-highlighting),
 the time-travel override layer (`parseNowOverride`, `resolveNowOverride`, precedence, clear tokens),
 collapsible day-parts (`bucketPlanByDayPart` bucketing, `dayParts` validation, day-part section rendering),
-and Hakone content contracts (Romancecar terminus/reserved, transit minutes, veg coverage, lodging consistency, contiguous 18-day span).
+Hakone content contracts (Romancecar terminus/reserved, transit minutes, veg coverage, lodging consistency, contiguous 18-day span),
+and the auth gate (login form present + native-submit guard).
 
 ## Deploy
 

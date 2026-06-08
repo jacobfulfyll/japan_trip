@@ -17,6 +17,10 @@
 // data/days.js cannot inject markup (XSS-safe).
 
 import { TRIP, DAYS } from './data/days.js';
+// Firebase web config (tracked → ships on GitHub Pages). Pure local data, no
+// network/DOM, so importing it at module top level is Node-safe (the auth gate's
+// SDK import is dynamic + browser-only; see the bootstrap block at the bottom).
+import { firebaseConfig } from './firebase-config.js';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -1845,16 +1849,271 @@ function buildTimeTravelBanner(override) {
   return bar;
 }
 
+// ---------------------------------------------------------------------------
+// Auth gate (auth-password-gate)
+//
+// A password-only landing backed by ONE shared Firebase account. The login
+// overlay (static markup in index.html) covers the app until onAuthStateChanged
+// reports a user; Firebase's default browserLocalPersistence keeps each device
+// signed in across reloads. Security is enforced server-side by Firebase Auth +
+// the deployed Storage/Firestore rules (request.auth != null) — this UI gate is
+// convenience; the rules are the real lock.
+//
+// The Firebase SDK is loaded from the gstatic CDN via a DYNAMIC import() inside
+// the browser-only boot path below — never at module top level — so `node --test`
+// (which imports the pure helpers with no DOM/network) is unaffected.
+// ---------------------------------------------------------------------------
+
+// Hardcoded shared-account handle. The email in public client JS is fine — only
+// the password is secret. If the real shared account differs, edit this one line.
+const SHARED_EMAIL = 'jacob.press3@gmail.com';
+
+// Pinned Firebase modular SDK (gstatic CDN). Pinned (not @latest) and runtime-
+// cached by sw.js so the gate boots offline after the first online load.
+const FIREBASE_SDK_VERSION = '10.12.5';
+const FIREBASE_APP_URL = `https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-app.js`;
+const FIREBASE_AUTH_URL = `https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-auth.js`;
+
+/**
+ * Pure gating decision — exported for unit tests so QA can verify the gate with
+ * a stub and no network. Truthy auth-state user → reveal the app.
+ * @param {unknown} user the onAuthStateChanged argument (Firebase user or null)
+ * @returns {boolean}
+ */
+export function shouldShowApp(user) {
+  return Boolean(user);
+}
+
+/**
+ * Map a Firebase Auth error to a friendly, non-leaky message. Never surfaces raw
+ * Firebase error codes or the shared email to the user.
+ * @param {unknown} err
+ * @returns {string}
+ */
+export function friendlyAuthError(err) {
+  const code = err && typeof err === 'object' && 'code' in err ? String(err.code) : '';
+  switch (code) {
+    case 'auth/wrong-password':
+    case 'auth/invalid-credential':
+    case 'auth/invalid-login-credentials':
+    case 'auth/user-not-found':
+      return 'That password didn’t work. Try again.';
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Please wait a moment and try again.';
+    case 'auth/network-request-failed':
+      return 'Network problem. Check your connection and try again.';
+    default:
+      return 'Something went wrong signing in. Please try again.';
+  }
+}
+
+/**
+ * Synchronously neutralize native form submission on the login form.
+ *
+ * The `#login-form` has no `action`, so a native submit (Enter key) would issue
+ * a GET to `index.html?password=<typed>` — leaking the one shared secret into the
+ * URL, history, the referrer header, and the SW navigation fetch. This guard must
+ * run BEFORE the async SDK import resolves (and before `wireAuthGate` installs the
+ * real submit handler), so it is attached at DOM-ready independent of the SDK.
+ * The static `onsubmit="return false"` in index.html is the belt; this is the
+ * suspenders. Both are idempotent — the real handler's `preventDefault` is
+ * harmless on top of these.
+ *
+ * @param {HTMLFormElement|null} form the login form
+ * @returns {boolean} true if a listener was attached
+ */
+export function installSubmitGuard(form) {
+  if (!form || typeof form.addEventListener !== 'function') return false;
+  form.addEventListener('submit', (event) => {
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+  });
+  return true;
+}
+
+/**
+ * Wire the auth gate against an injected auth surface — the testable seam. Keeps
+ * the SDK boundary thin: tests pass stubs for everything, no network/SDK needed.
+ *
+ * @param {object} deps
+ * @param {(cb:(user:unknown)=>void)=>void} deps.onAuthStateChanged subscribe to auth state
+ * @param {(email:string, password:string)=>Promise<unknown>} deps.signIn sign-in fn
+ * @param {HTMLElement} deps.overlay the login overlay element (covers the app)
+ * @param {HTMLFormElement} deps.form the login form
+ * @param {HTMLInputElement} deps.passwordInput the password field
+ * @param {HTMLButtonElement} deps.submitBtn the submit button
+ * @param {HTMLElement} deps.errorEl the inline error region
+ * @param {()=>void} deps.onAuthed called once when a user first appears (mount app)
+ * @param {()=>void} [deps.onSignedOut] called when the user becomes null
+ */
+export function wireAuthGate(deps) {
+  const {
+    onAuthStateChanged, signIn, overlay, form, passwordInput,
+    submitBtn, errorEl, onAuthed, onSignedOut,
+  } = deps;
+
+  let appMounted = false;
+
+  const showError = (message) => {
+    if (!errorEl) return;
+    errorEl.textContent = message; // textContent only — XSS-safe
+    errorEl.hidden = false;
+  };
+  const clearError = () => {
+    if (!errorEl) return;
+    errorEl.textContent = '';
+    errorEl.hidden = true;
+  };
+  const setPending = (pending) => {
+    if (submitBtn) {
+      submitBtn.disabled = pending;
+      submitBtn.textContent = pending ? 'Signing in…' : 'Enter';
+    }
+    if (passwordInput) passwordInput.disabled = pending;
+  };
+
+  const showOverlay = () => {
+    if (overlay) overlay.hidden = false;
+    setPending(false);
+    if (passwordInput) {
+      // Focus the field for keyboard/AT users; never echo the value anywhere.
+      try { passwordInput.focus(); } catch { /* jsdom-less stub: ignore */ }
+    }
+  };
+  const hideOverlay = () => {
+    if (overlay) overlay.hidden = true;
+    if (passwordInput) passwordInput.value = ''; // drop the typed password
+    clearError();
+    setPending(false);
+  };
+
+  if (form) {
+    form.addEventListener('submit', (event) => {
+      if (event && typeof event.preventDefault === 'function') event.preventDefault();
+      const password = passwordInput ? passwordInput.value : '';
+      if (!password) {
+        showError('Please enter the password.');
+        return;
+      }
+      clearError();
+      setPending(true);
+      Promise.resolve()
+        .then(() => signIn(SHARED_EMAIL, password))
+        // Success path is handled by onAuthStateChanged (reveals the app).
+        .catch((err) => {
+          setPending(false);
+          showError(friendlyAuthError(err));
+          if (passwordInput) {
+            passwordInput.value = '';
+            try { passwordInput.focus(); } catch { /* ignore */ }
+          }
+        });
+    });
+  }
+
+  onAuthStateChanged((user) => {
+    if (shouldShowApp(user)) {
+      hideOverlay();
+      if (!appMounted) {
+        appMounted = true;
+        onAuthed();
+      }
+    } else {
+      showOverlay();
+      // Reset the mount-once latch so a later re-sign-in re-mounts the app (the
+      // onSignedOut teardown clears #app-root; without this reset, re-auth would
+      // un-hide an emptied root). The latch still prevents duplicate mounts while
+      // a session stays signed in — the normal flow.
+      appMounted = false;
+      if (typeof onSignedOut === 'function') onSignedOut();
+    }
+  });
+
+  // No user yet → show the gate immediately (don't wait for the async callback,
+  // which could leave the app briefly uncovered).
+  showOverlay();
+}
+
 if (typeof document !== 'undefined') {
-  const boot = () => {
+  // Holds the live mountApp controller so a sign-out can tear the app down
+  // (stop the active slideshow/lightbox + clear #app-root), leaving no stale
+  // focusable content behind the aria-modal gate.
+  let appController = null;
+
+  const mountTheApp = () => {
     const root = document.getElementById('app-root');
-    if (root) mountApp(root);
+    if (root) appController = mountApp(root);
     // Surface the time-travel indicator (if an override resolved at load).
     // The banner is position:fixed, so it lives directly on <body>.
     if (ACTIVE_NOW_OVERRIDE && document.body) {
       document.body.appendChild(buildTimeTravelBanner(ACTIVE_NOW_OVERRIDE));
     }
   };
+
+  // On sign-out, tear down the mounted app so nothing focusable lingers behind
+  // the overlay. Reuses mountApp's own destroy() (stops timers + clears root).
+  const teardownTheApp = () => {
+    if (appController && typeof appController.destroy === 'function') {
+      appController.destroy();
+    }
+    appController = null;
+  };
+
+  const boot = async () => {
+    const overlay = document.getElementById('login-overlay');
+    const form = document.getElementById('login-form');
+    const passwordInput = document.getElementById('login-password');
+    const submitBtn = document.getElementById('login-submit');
+    const errorEl = document.getElementById('login-error');
+
+    // No overlay in the DOM (e.g. a stripped/legacy shell) → fail open to the app
+    // rather than trapping the user behind a non-functional gate.
+    if (!overlay || !form || !passwordInput) {
+      mountTheApp();
+      return;
+    }
+
+    // Show the gate immediately while the SDK loads, so no content ever peeks.
+    overlay.hidden = false;
+    try { passwordInput.focus(); } catch { /* ignore */ }
+
+    // Neutralize native submission NOW — synchronously, before the first await.
+    // Until wireAuthGate installs the real handler (after the SDK import resolves),
+    // an Enter keypress would otherwise GET index.html?password=<typed>, leaking
+    // the shared secret into the URL/history/referrer/SW fetch. (Belt-and-suspenders
+    // with the static onsubmit="return false" in index.html.)
+    installSubmitGuard(form);
+
+    let initializeApp, getAuth, signInWithEmailAndPassword, onAuthStateChanged;
+    try {
+      ({ initializeApp } = await import(FIREBASE_APP_URL));
+      ({ getAuth, signInWithEmailAndPassword, onAuthStateChanged } =
+        await import(FIREBASE_AUTH_URL));
+    } catch (err) {
+      // SDK failed to load (offline + uncached, or CDN down). Surface a friendly
+      // message; the offline itinerary is unreachable until the gate can init,
+      // but the page never crashes.
+      console.warn('[auth] Firebase SDK failed to load:', err);
+      if (errorEl) {
+        errorEl.textContent =
+          'Couldn’t reach the sign-in service. Connect to the internet once to set up offline access.';
+        errorEl.hidden = false;
+      }
+      if (submitBtn) submitBtn.disabled = true;
+      return;
+    }
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+
+    wireAuthGate({
+      onAuthStateChanged: (cb) => onAuthStateChanged(auth, cb),
+      signIn: (email, password) => signInWithEmailAndPassword(auth, email, password),
+      overlay, form, passwordInput, submitBtn, errorEl,
+      onAuthed: mountTheApp,
+      onSignedOut: teardownTheApp,
+    });
+  };
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', boot);
   } else {
