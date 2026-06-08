@@ -18,9 +18,6 @@ _None._
 
 ### Firebase Photo Journal (v2 — after v1)
 <!-- Four-task plan (replaces the old photo-upload-flow + reminisce-photo-gallery). Serial critical path: nav-redesign → firebase-photo-rules → photo-upload-flow → reminisce-gallery-live. Tasks 1/3/4 all touch app.js + index.html (+ sw.js for #4) → run serially, reconciling sw.js CACHE_VERSION to the next free value at each merge. -->
-- [ ] firebase-photo-rules: Console — Storage/Firestore rules for trip-photos/** + photos/syncState (authed, size/type caps); confirm no composite index [P1] [simple] [tier: opus:high] [manual] [planned]
-  files: external (Firebase console)
-
 ### Ungroomed
 
 <!-- Discovered-issue backlog (code). Surfaced by pipeline stages; not yet groomed into tasks. -->

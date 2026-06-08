@@ -39,3 +39,4 @@
 - [x] nav-redesign Hamburger menu (Home + Add photos) + minimal right-side circular chevrons; exposes the onAddPhotos seam -- 2026-06-08
 - [x] photo-upload-flow One-tap "Add photos" — EXIF-bucketed by day, downscaled, unique overwrite-proof Storage paths, best-effort dedup, Firestore docs; wires the ☰ onAddPhotos seam; CACHE_VERSION v26→v27 -- 2026-06-08
 - [x] reminisce-gallery-live Reminisce gallery goes live — merge authored + uploaded photos per day, onSnapshot, offline-cached -- 2026-06-08
+- [x] firebase-photo-rules: Console — Storage/Firestore rules for trip-photos/** + photos/syncState (authed, size/type caps); confirmed no composite index -- manual, completed 2026-06-08
