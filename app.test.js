@@ -55,6 +55,7 @@ import {
   wirePhotoSync,
   mergeGalleryPhotos,
   setSubscribePhotos,
+  createWorkerDownscaler,
 } from './app.js';
 import { TRIP, DAYS } from './data/days.js';
 
@@ -6288,4 +6289,269 @@ test('wirePhotoSync: progress `done` never exceeds `total` across skips/dupes (s
   const last = calls[calls.length - 1];
   assert.equal(last[1], files.length, 'total is the prepared batch size');
   assert.equal(last[0], last[1], 'final progress is done === total (no overshoot)');
+});
+
+// --- EXIF-read yield (offload-photo-downscale-to-worker) ---------------------
+// The prepare loop now does `await new Promise(r=>setTimeout(r,0))` after each
+// readDate so a large multi-select doesn't block the UI for the whole batch.
+// readDate is sequential (one await per file), so the yield must not drop, skip,
+// or reorder files. This exercises a larger batch than the 2-3-file happy path to
+// confirm every file is still read, bucketed by its own day, and uploaded once.
+test('wirePhotoSync: EXIF-read yield preserves every file across a large batch (no drop/reorder)', async () => {
+  // 8 files spanning all three window days, interleaved so a bucketing bug would
+  // surface as a wrong per-day count, not just a wrong total.
+  const files = [
+    datedFile('f1.jpg', '2026-06-25', 9001),
+    datedFile('f2.jpg', '2026-06-26', 9002),
+    datedFile('f3.jpg', '2026-06-27', 9003),
+    datedFile('f4.jpg', '2026-06-25', 9004),
+    datedFile('f5.jpg', '2026-06-26', 9005),
+    datedFile('f6.jpg', '2026-06-27', 9006),
+    datedFile('f7.jpg', '2026-06-25', 9007),
+    datedFile('f8.jpg', '2026-06-26', 9008),
+  ];
+  const { deps } = makePhotoHarness({ files });
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+
+  // Every file is unique + in-window -> all 8 upload, none duped/skipped, 3 days.
+  assert.deepEqual(result, { added: 8, dupes: 0, skipped: 0, errors: 0, days: 3 });
+  assert.equal(deps.readDate.calls.length, 8, 'readDate ran once per file (yield did not skip any)');
+  assert.equal(deps.uploadBlob.calls.length, 8, 'every file uploaded exactly once');
+  assert.equal(deps.writeDoc.calls.length, 8, 'every file got a photos doc');
+
+  // The written docs cover each authored day with the right count — proves the
+  // yield between reads did not corrupt bucketing.
+  const dates = deps.writeDoc.calls.map(([doc]) => doc.date).sort();
+  const counts = dates.reduce((m, d) => (m[d] = (m[d] || 0) + 1, m), {});
+  assert.deepEqual(counts, { '2026-06-25': 3, '2026-06-26': 3, '2026-06-27': 2 });
+});
+
+// ===========================================================================
+// createWorkerDownscaler — the worker-pool dispatcher (offload-photo-downscale)
+//
+// Fake workers are plain objects with postMessage/onmessage/onerror/terminate —
+// no browser APIs. The real `spawn` (new Worker(...)) is injected, so this whole
+// dispatcher is testable in Node. A fake worker records every posted message and
+// lets the test drive replies by invoking `wkr.onmessage({ data })`.
+// ===========================================================================
+
+function makeFakeWorker() {
+  const posted = [];
+  const wkr = {
+    posted,
+    onmessage: null,
+    onerror: null,
+    terminated: false,
+    postMessage(msg) { posted.push(msg); },
+    terminate() { this.terminated = true; },
+    // Test helpers to drive the dispatcher's callbacks.
+    reply(data) { this.onmessage?.({ data }); },
+    fail() { this.onerror?.(new Error('worker crashed')); },
+  };
+  return wkr;
+}
+
+function makeFakeSpawn() {
+  const workers = [];
+  const spawn = () => {
+    const w = makeFakeWorker();
+    workers.push(w);
+    return w;
+  };
+  return { spawn, workers };
+}
+
+// Reuse the existing fakeFile(name, size) helper above for the worker tests.
+const wkrFile = (name) => fakeFile(name, 1234);
+
+test('createWorkerDownscaler: assigns a unique global id per downscale call', () => {
+  const { spawn, workers } = makeFakeSpawn();
+  const wd = createWorkerDownscaler({ spawn });
+  const f = wkrFile('a.jpg');
+  wd.downscale(f);
+  wd.downscale(f);
+  wd.downscale(f);
+  // The readiness probe posts no messages, so every posted entry across the pool
+  // is a downscale request. Ids must be globally unique (not per-worker).
+  const ids = [];
+  for (const w of workers) for (const m of w.posted) ids.push(m.id);
+  assert.equal(ids.length, 3, 'all three requests were dispatched');
+  assert.equal(new Set(ids).size, 3, 'every downscale call gets a distinct global id');
+});
+
+test('createWorkerDownscaler: {ok:true, blob} resolves to {blob, downscaled:true}', async () => {
+  const { spawn, workers } = makeFakeSpawn();
+  const wd = createWorkerDownscaler({ spawn });
+  const f = wkrFile('a.jpg');
+  const p = wd.downscale(f);
+  const { id } = workers[0].posted[0];
+  const blob = { fake: 'blob' };
+  workers[0].reply({ id, ok: true, blob });
+  const out = await p;
+  assert.deepEqual(out, { blob, downscaled: true });
+  assert.equal(wd._pendingSize(), 0, 'pending map drains after resolve');
+});
+
+test('createWorkerDownscaler: {ok:false} resolves to {blob:file, downscaled:false}', async () => {
+  const { spawn, workers } = makeFakeSpawn();
+  const wd = createWorkerDownscaler({ spawn });
+  const f = wkrFile('a.jpg');
+  const p = wd.downscale(f);
+  const { id } = workers[0].posted[0];
+  workers[0].reply({ id, ok: false });
+  const out = await p;
+  assert.deepEqual(out, { blob: f, downscaled: false }, 'bails to original file');
+});
+
+test('createWorkerDownscaler: a postMessage throw resolves to the original file', async () => {
+  const { spawn, workers } = makeFakeSpawn();
+  const wd = createWorkerDownscaler({ spawn });
+  // Make the first worker's postMessage throw.
+  workers[0].postMessage = () => { throw new Error('detached buffer'); };
+  const f = wkrFile('a.jpg');
+  const out = await wd.downscale(f);
+  assert.deepEqual(out, { blob: f, downscaled: false });
+  assert.equal(wd._pendingSize(), 0, 'failed post does not leak a pending entry');
+});
+
+test('createWorkerDownscaler: worker onerror resolves ALL pending to original + clears the map', async () => {
+  const { spawn, workers } = makeFakeSpawn();
+  const wd = createWorkerDownscaler({ spawn });
+  const f1 = wkrFile('1.jpg');
+  const f2 = wkrFile('2.jpg');
+  const f3 = wkrFile('3.jpg');
+  const p1 = wd.downscale(f1);
+  const p2 = wd.downscale(f2);
+  const p3 = wd.downscale(f3);
+  assert.equal(wd._pendingSize(), 3, 'three requests pending before the crash');
+  // Any single worker's onerror fails ALL pending entries (worker-pool-wide bail).
+  workers[0].fail();
+  const [o1, o2, o3] = await Promise.all([p1, p2, p3]);
+  assert.deepEqual(o1, { blob: f1, downscaled: false });
+  assert.deepEqual(o2, { blob: f2, downscaled: false });
+  assert.deepEqual(o3, { blob: f3, downscaled: false });
+  assert.equal(wd._pendingSize(), 0, 'the pending map is cleared after onerror');
+});
+
+test('createWorkerDownscaler: round-robins across the pool (workers[0],[1],[0])', () => {
+  const { spawn, workers } = makeFakeSpawn();
+  const wd = createWorkerDownscaler({ spawn, poolSize: 2 });
+  const f = wkrFile('a.jpg');
+  wd.downscale(f);
+  wd.downscale(f);
+  wd.downscale(f);
+  assert.equal(workers.length, 2, 'pool of 2 workers spawned');
+  assert.equal(workers[0].posted.length, 2, 'worker 0 got calls 1 and 3');
+  assert.equal(workers[1].posted.length, 1, 'worker 1 got call 2');
+});
+
+test('createWorkerDownscaler: timeout resolves to original; a LATE reply for that id is a no-op', async () => {
+  const { spawn, workers } = makeFakeSpawn();
+  // Tiny timeoutMs so the test stays fast (<100ms). The worker never replies in
+  // time → the timer fires and bails to the original file.
+  const wd = createWorkerDownscaler({ spawn, timeoutMs: 10 });
+  const f = wkrFile('slow.jpg');
+  const p = wd.downscale(f);
+  const { id } = workers[0].posted[0];
+  const out = await p;
+  assert.deepEqual(out, { blob: f, downscaled: false }, 'timeout bails to original');
+  assert.equal(wd._pendingSize(), 0, 'timed-out entry was deleted');
+  // A late reply for the timed-out id must NOT throw or double-resolve.
+  assert.doesNotThrow(() => workers[0].reply({ id, ok: true, blob: { late: true } }));
+  assert.equal(wd._pendingSize(), 0, 'late reply leaves the pending map empty');
+});
+
+test('createWorkerDownscaler: pending map shrinks back to empty after each resolve (no leak)', async () => {
+  const { spawn, workers } = makeFakeSpawn();
+  const wd = createWorkerDownscaler({ spawn });
+  assert.equal(wd._pendingSize(), 0, 'starts empty');
+  const f = wkrFile('a.jpg');
+  const p1 = wd.downscale(f);
+  assert.equal(wd._pendingSize(), 1, 'one in flight');
+  const id1 = workers[0].posted[0].id;
+  workers[0].reply({ id: id1, ok: true, blob: { b: 1 } });
+  await p1;
+  assert.equal(wd._pendingSize(), 0, 'drains after first resolve');
+  const p2 = wd.downscale(f);
+  assert.equal(wd._pendingSize(), 1, 'one in flight again (id reused slot, not orphaned)');
+  const id2 = workers[1].posted[0].id;
+  assert.notEqual(id2, id1, 'ids stay globally monotonic across resolves');
+  workers[1].reply({ id: id2, ok: false });
+  await p2;
+  assert.equal(wd._pendingSize(), 0, 'drains after second resolve');
+});
+
+test('createWorkerDownscaler: poolSize:1 dispatches every request to the single worker (cursor wraps mod 1)', async () => {
+  const { spawn, workers } = makeFakeSpawn();
+  const wd = createWorkerDownscaler({ spawn, poolSize: 1 });
+  assert.equal(workers.length, 1, 'a single worker is spawned');
+  const p1 = wd.downscale(wkrFile('a.jpg'));
+  const p2 = wd.downscale(wkrFile('b.jpg'));
+  assert.equal(workers[0].posted.length, 2, 'both requests went to the one worker');
+  // The cursor wraps `% 1` (== 0) without dividing by zero or orphaning a resolver.
+  const [m1, m2] = workers[0].posted;
+  assert.notEqual(m1.id, m2.id, 'each still gets a distinct global id');
+  workers[0].reply({ id: m1.id, ok: true, blob: { b: 1 } });
+  workers[0].reply({ id: m2.id, ok: false });
+  const [o1, o2] = await Promise.all([p1, p2]);
+  assert.equal(o1.downscaled, true);
+  assert.equal(o2.downscaled, false);
+  assert.equal(wd._pendingSize(), 0, 'both resolve, no leak on a single-worker pool');
+});
+
+test('createWorkerDownscaler: destroy() clears pending timers, terminates every worker, empties pending', async () => {
+  const cleared = [];
+  const setTimer = () => 'TIMER';                 // any non-null handle
+  const clearTimer = (h) => { cleared.push(h); };
+  const { spawn, workers } = makeFakeSpawn();
+  const wd = createWorkerDownscaler({ spawn, poolSize: 2, setTimer, clearTimer });
+  const p1 = wd.downscale(wkrFile('a.jpg'));
+  const p2 = wd.downscale(wkrFile('b.jpg'));
+  assert.equal(wd._pendingSize(), 2, 'two requests pending before destroy');
+
+  wd.destroy();
+
+  assert.equal(wd._pendingSize(), 0, 'destroy empties the pending map');
+  assert.ok(workers.every((w) => w.terminated), 'every worker was terminated');
+  // Two per-request timers + the readiness timer are all cleared.
+  assert.ok(cleared.includes('TIMER'), 'pending request timers were cleared');
+  assert.ok(cleared.length >= 3, 'per-request timers + the readiness timer all cleared');
+
+  // destroy() does NOT resolve the in-flight downscales (it abandons them); the
+  // contract is "no leaked timers / no live workers", not "settle pending". Assert
+  // it at least did not throw and the pending promises are simply abandoned.
+  void p1; void p2;
+  assert.doesNotThrow(() => wd.destroy(), 'destroy is idempotent / safe to call again');
+});
+
+test('createWorkerDownscaler: a {ready:false} message settles ready to false', async () => {
+  const { spawn, workers } = makeFakeSpawn();
+  const wd = createWorkerDownscaler({ spawn });
+  workers[0].reply({ ready: false });
+  assert.equal(await wd.ready, false, 'ready resolves to false on a {ready:false} message');
+});
+
+test('createWorkerDownscaler: a {ready:true} message settles ready to true; a later {ready:false} is a no-op', async () => {
+  const { spawn, workers } = makeFakeSpawn();
+  const wd = createWorkerDownscaler({ spawn });
+  workers[0].reply({ ready: true });
+  // A second readiness message after settle must not flip the already-resolved value.
+  workers[0].reply({ ready: false });
+  assert.equal(await wd.ready, true, 'first readiness wins; readiness is settle-once (idempotent)');
+});
+
+test('createWorkerDownscaler: handler reads a raw `e` payload when `e.data` is undefined', async () => {
+  const { spawn, workers } = makeFakeSpawn();
+  const wd = createWorkerDownscaler({ spawn });
+  const f = wkrFile('a.jpg');
+  const p = wd.downscale(f);
+  const { id } = workers[0].posted[0];
+  const blob = { fake: 'blob' };
+  // Some environments invoke onmessage with the payload directly (no .data wrapper).
+  // The handler does `e && e.data !== undefined ? e.data : e`, so a raw object resolves.
+  workers[0].onmessage({ id, ok: true, blob });
+  const out = await p;
+  assert.deepEqual(out, { blob, downscaled: true }, 'raw-`e` payload is unwrapped correctly');
+  assert.equal(wd._pendingSize(), 0, 'pending drains on a raw-payload reply');
 });

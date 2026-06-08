@@ -2557,6 +2557,128 @@ async function downscaleImage(file) {
   }
 }
 
+/**
+ * Build a pool-backed dispatcher that offloads downscaleImage's work to Web
+ * Workers (photo-worker.js). Returns `{ downscale, ready, destroy, _pendingSize }`.
+ *
+ * - `downscale(file)` matches downscaleImage's contract: resolves `{ blob, downscaled }`.
+ *   It NEVER throws and NEVER pends forever — on worker failure, timeout, or a
+ *   postMessage throw it resolves to the ORIGINAL `{ blob: file, downscaled: false }`.
+ * - `ready` is an always-settling promise: true once any worker posts `{ready:true}`,
+ *   false on any worker `onerror`, a `{ready:false}` from every worker, or a
+ *   readiness timeout. It never leaves it pending.
+ *
+ * `spawn` is injected (tests pass a fake that returns a plain object with
+ * postMessage/onmessage/onerror/terminate). MAX_DIMENSION/JPEG_QUALITY are passed
+ * in every message — the worker never hardcodes them (single source of truth).
+ *
+ * Pending requests live in ONE Map keyed by a GLOBAL monotonic id (not per-worker)
+ * so a second message to a worker can't orphan the first resolver.
+ *
+ * @param {{ spawn: () => Worker, poolSize?: number, timeoutMs?: number,
+ *           setTimer?: typeof setTimeout, clearTimer?: typeof clearTimeout }} opts
+ */
+export function createWorkerDownscaler({
+  spawn,
+  poolSize = 2,
+  timeoutMs = 8000,
+  setTimer = (typeof setTimeout !== 'undefined' ? setTimeout : null),
+  clearTimer = (typeof clearTimeout !== 'undefined' ? clearTimeout : null),
+} = {}) {
+  let nextId = 1;                       // global monotonic id
+  let cursor = 0;                       // round-robin pointer
+  const pending = new Map();            // id -> { resolve, file, timer }
+
+  // Cancel a timer handle iff there is one AND a clearTimer to call (both are
+  // seam-injectable / absent in non-timer environments — these guards are
+  // load-bearing, never drop them).
+  const cancelTimer = (t) => { if (t != null && clearTimer) clearTimer(t); };
+
+  let resolveReady;
+  const ready = new Promise((res) => { resolveReady = res; });
+  let readySettled = false;
+  const settleReady = (val) => {
+    if (readySettled) return;
+    readySettled = true;
+    cancelTimer(readyTimer);
+    resolveReady(val);
+  };
+
+  // Fail-safe readiness timeout so a worker that never posts {ready} can't hang
+  // the probe. Uses the same timeoutMs budget.
+  let readyTimer = null;
+  if (setTimer) readyTimer = setTimer(() => settleReady(false), timeoutMs);
+
+  const resolveEntry = (id, result) => {
+    const entry = pending.get(id);
+    if (!entry) return; // late reply for a timed-out / unknown id → no-op
+    cancelTimer(entry.timer);
+    pending.delete(id);
+    entry.resolve(result);
+  };
+
+  const handleMessage = (msg) => {
+    if (!msg) return;
+    if (msg.ready !== undefined) { settleReady(!!msg.ready); return; }
+    if (msg.id === undefined) return;
+    resolveEntry(
+      msg.id,
+      msg.ok
+        ? { blob: msg.blob, downscaled: true }
+        : { blob: pending.get(msg.id)?.file, downscaled: false },
+    );
+  };
+
+  const failAll = () => {
+    for (const [, entry] of pending) {
+      cancelTimer(entry.timer);
+      entry.resolve({ blob: entry.file, downscaled: false });
+    }
+    pending.clear();
+    settleReady(false);
+  };
+
+  const workers = [];
+  for (let i = 0; i < Math.max(1, poolSize); i += 1) {
+    const wkr = spawn();
+    wkr.onmessage = (e) => handleMessage(e && e.data !== undefined ? e.data : e);
+    wkr.onerror = () => failAll();
+    workers.push(wkr);
+  }
+
+  function downscale(file) {
+    return new Promise((resolve) => {
+      const id = nextId++;
+      const timer = setTimer
+        ? setTimer(() => {
+            // Timeout → original; deleting the entry makes any late reply a no-op.
+            pending.delete(id);
+            resolve({ blob: file, downscaled: false });
+          }, timeoutMs)
+        : null;
+      pending.set(id, { resolve, file, timer });
+      const wkr = workers[cursor];
+      cursor = (cursor + 1) % workers.length;
+      try {
+        wkr.postMessage({ id, file, maxDimension: MAX_DIMENSION, quality: JPEG_QUALITY });
+      } catch {
+        cancelTimer(timer);
+        pending.delete(id);
+        resolve({ blob: file, downscaled: false });
+      }
+    });
+  }
+
+  function destroy() {
+    for (const [, entry] of pending) cancelTimer(entry.timer);
+    pending.clear();
+    cancelTimer(readyTimer);
+    for (const wkr of workers) { try { wkr.terminate?.(); } catch { /* ignore */ } }
+  }
+
+  return { downscale, ready, destroy, _pendingSize: () => pending.size };
+}
+
 /** Generate a UUID for the unique storage path. Falls back if crypto is absent. */
 function uuid() {
   try {
@@ -2908,6 +3030,10 @@ export function wirePhotoSync(deps) {
         const rec = { file, exifDateTime: info.exifDateTime, date: info.date, fromExif: info.fromExif };
         if (!rec.date) noDate.push(rec);
         else prepared.push(rec);
+        // Yield a macrotask between EXIF reads so the pre-downscale phase (which
+        // reads each file's header on the main thread) never blocks the UI for
+        // the whole batch on a large multi-select.
+        await new Promise((r) => setTimeout(r, 0));
       }
 
       // No-EXIF / no-date batch → one user-correctable date for the whole group.
@@ -3003,6 +3129,37 @@ export function wirePhotoSync(deps) {
 // real onAddPhotos handler into mountApp.
 let photoService = null;
 
+// Lazy worker-downscaler singleton. Built on FIRST use only (browser boot path —
+// never at module load, so `node --test` never spawns a Worker). Guarded against
+// rebuilding because onAuthStateChanged can re-fire (sign-out/in) and re-run the
+// mount path. The real `spawn` is the only line that touches a browser API; it is
+// invoked exclusively from here.
+let workerDownscaler = null;
+function getWorkerDownscaler() {
+  if (!workerDownscaler) {
+    workerDownscaler = createWorkerDownscaler({
+      spawn: () => new Worker(new URL('./photo-worker.js', import.meta.url), { type: 'module' }),
+    });
+  }
+  return workerDownscaler;
+}
+
+// Main-thread fallback (no OffscreenCanvas-in-worker, e.g. iOS ≤16). Serializes
+// downscales through a module-level chain AND yields a macrotask between files so
+// a bulk upload can't freeze the UI for the whole batch. Concurrent callers queue
+// behind the same chain (the bounded-concurrency loop in wirePhotoSync would
+// otherwise fire `concurrency` decodes at once on the main thread → jank).
+let downscaleThrottleChain = Promise.resolve();
+function downscaleImageThrottled(file) {
+  const result = downscaleThrottleChain.then(() => downscaleImage(file));
+  // Advance the chain to AFTER a yield, so the next queued downscale gives the UI
+  // a frame to breathe. Swallow rejections so one failure can't poison the chain.
+  downscaleThrottleChain = result
+    .catch(() => {})
+    .then(() => new Promise((r) => setTimeout(r, 0)));
+  return result;
+}
+
 /**
  * Build the real onAddPhotos(currentIso) handler from a lazily-imported Firebase
  * { db, storage } service + the firestore/storage SDK fn bag. Browser-only — all
@@ -3017,10 +3174,25 @@ function buildOnAddPhotos(service) {
     ref, uploadBytesResumable, getDownloadURL,
   } = fb;
 
+  // Per-call downscale router. The worker readiness probe is async and resolves
+  // AFTER this handler is built (buildOnAddPhotos runs ONCE at mount), so the
+  // worker-vs-fallback decision MUST be made per call — baking it at mount time
+  // would freeze the slow path forever. `wd.ready` already always-settles; the
+  // extra Promise.race timeout is belt-and-suspenders so a tap never hangs on the
+  // probe. On the fallback path we use the anti-freeze throttled main-thread path.
+  const wd = getWorkerDownscaler();
+  const downscaleRouted = async (file) => {
+    const ok = await Promise.race([
+      wd.ready,
+      new Promise((r) => setTimeout(() => r(false), 8000)),
+    ]);
+    return ok ? wd.downscale(file) : downscaleImageThrottled(file);
+  };
+
   const sync = wirePhotoSync({
     pickFiles: pickFilesBrowser,
     readDate: fileCaptureDate,
-    downscale: downscaleImage,
+    downscale: downscaleRouted,
     uploadBlob: (path, blob) => new Promise((resolve, reject) => {
       const task = uploadBytesResumable(ref(storage, path), blob, { contentType: 'image/jpeg' });
       task.on('state_changed', null, reject, async () => {

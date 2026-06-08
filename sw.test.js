@@ -170,6 +170,7 @@ const PRECACHE_URLS = [
   '.',
   'index.html',
   'app.js',
+  'photo-worker.js',
   'firebase-config.js',
   'data/days.js',
   'manifest.json',
@@ -619,10 +620,10 @@ test('a non-/firebasejs/ path on www.gstatic.com is NOT intercepted by the Fireb
   assert.equal(event._responded, false, 'only the /firebasejs/ path should route to the SDK cache');
 });
 
-test('CACHE_VERSION is v30 (bumped to re-propagate the restored real trip dates after the temp date-shift test build)', () => {
+test('CACHE_VERSION is v31 (bumped to precache the new photo-worker.js shell file)', () => {
   // sw.test.js derives CACHE_VERSION from the sw.js literal; this pins the
   // expected value so an accidental revert of the bump fails loudly.
-  assert.equal(CACHE_VERSION, 'v30');
+  assert.equal(CACHE_VERSION, 'v31');
 });
 
 // ===========================================================================
