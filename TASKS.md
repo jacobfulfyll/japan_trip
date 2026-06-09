@@ -82,6 +82,8 @@
 ### Ungroomed
 
 <!-- Discovered-issue backlog (code). Surfaced by pipeline stages; not yet groomed into tasks. (Previous 7 items triaged 2026-06-09 via /reggie-init-tasks: 2 formalized, 2 merged into harden-upload-bail-path, 3 pruned — see HISTORY.md.) -->
+- [ ] export-downscale-router-seam: The worker→main-thread retry decision in `downscaleRouted` has no Node-reachable test seam (unexported browser-only closure inside `buildOnAddPhotos`) — extract/export a small `buildDownscaleRouter(workerDownscale, throttledDownscale)` factory so the retry contract is unit-testable without spawning a worker (discovered during WRITE-TESTS of harden-upload-bail-path)
+  > Tech debt, not a bug: the retry outcome is covered at the wirePhotoSync seam + a worker-failure precondition test; only the routing decision itself is untestable from Node.
 
 <!-- Real-world trip bookings, confirmations & pre-trip setup. Personal to-dos, not build tasks — kept as a deadline-ordered checklist, NOT formalized into pipelines. Today: Jun 3; trip: Jun 16–Jul 3. -->
 - [ ] register-visit-japan-web: Before Jun 16 — each of the 4 travelers registers their own Visit Japan Web account + QR (a single account with empty companions = paper-form lane); screenshot every QR before boarding (surfaced authoring author-travel-arrival)
