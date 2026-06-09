@@ -43,3 +43,8 @@
 - [x] firebase-photo-rules: Console — Storage/Firestore rules for trip-photos/** + photos/syncState (authed, size/type caps); confirmed no composite index -- manual, completed 2026-06-08
 - [x] offload-photo-downscale-to-worker Move image decode/downscale/encode into a Web Worker so bulk uploads don't freeze the UI (+ EXIF-read yield, main-thread fallback) -- 2026-06-08
 - [x] polish-nav-bar Centered inline-SVG hamburger, refined ☰ popover (divider/icons/caret, ≥44px rows), smaller chevrons -- 2026-06-08
+- [~] harden-heic-upload-contenttype: merged into harden-upload-bail-path (retry-then-honest-label design) via /reggie-init-tasks -- 2026-06-09
+- [~] surface-non-downscaled-uploads: merged into harden-upload-bail-path — the main-thread retry made run-summary surfacing moot (user chose silent fallback) -- 2026-06-09
+- [~] dedup-key-same-second-collision: pruned — needs same uploader + same EXIF second + identical byte size (lottery odds); impact is one missing burst near-duplicate; fix (sub-second EXIF or content hash) fights the slice-exif-read perf direction; code already documents the trade-off at the no-EXIF cousin -- pruned 2026-06-09
+- [~] limit-subscribephotos-query: pruned — superseded by make-gallery-scrollable (uncapped gallery NEEDS all docs); docs are ~200B metadata; a correct limit would require orderBy → composite index, which the design deliberately avoids -- pruned 2026-06-09
+- [~] clamp-worker-downscale-constants: pruned — only caller passes module constants; harden-upload-bail-path's retry chain makes even the hypothetical bad-input failure benign (retry → original upload); standalone ship cost (CACHE_VERSION bump) exceeds the guard's value -- pruned 2026-06-09
