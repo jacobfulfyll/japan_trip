@@ -2,7 +2,21 @@
 
 ## Active Tasks
 
-_None._
+### slice-exif-read
+**Task**: Read only first ~128KB per file for EXIF + mount the progress sheet immediately ("Preparing photos…") — fixes the picker→progress dead air
+**Pipeline**: code-workflow
+**Branch**: task/slice-exif-read
+**Worktree**: .worktree/slice-exif-read
+**Base**: main
+**Started**: 2026-06-09
+**Files**:
+- MOD: app.js
+- MOD: app.test.js
+- MOD: sw.js
+- MOD: sw.test.js
+- MOD: CLAUDE.md
+- MOD: README.md
+- MOD: CHANGELOG.md
 
 ---
 
@@ -21,8 +35,6 @@ _None._
 
 ### Photo Journal & Nav Polish (v2.1)
 <!-- v2.1 polish/perf on the photo journal + day-view UX. ALL SIX tasks below touch app.js + bump sw.js CACHE_VERSION → MUTUALLY CONFLICTING; run SERIALLY in listed order, reconciling CACHE_VERSION to the next FREE value at each merge (currently v33; lockstep: sw.js:23 + sw.test.js:623 title + :626 assert — check main at merge time, not branch time). make-gallery-scrollable HARD-depends on harden-upload-bail-path (same downscale-result destructure). Each task also updates the test-count claim in CLAUDE.md/README/CHANGELOG. All tiered fable:high by user decision (serial chain, 7 days to trip): run pickup sessions on Fable, e.g. /reggie-code-workflow --tier fable:high. -->
-- [ ] slice-exif-read: Read only first ~128KB per file for EXIF + mount the progress sheet immediately ("Preparing photos…") — fixes the picker→progress dead air [P1] [conflicts: harden-upload-bail-path, make-gallery-scrollable, minimize-upload-modal, make-map-links-directions, harden-uploaded-url-origin] [moderate] [tier: fable:high] [code] [planned]
-  files: app.js (MOD), app.test.js (MOD), sw.js (MOD), sw.test.js (MOD), CLAUDE.md (MOD), README.md (MOD), CHANGELOG.md (MOD)
 - [ ] harden-upload-bail-path: Downscale failure → one main-thread retry → still failing → silently upload ORIGINAL bytes with TRUE contentType/extension (magic-byte sniff, .heic vs .jpg); replaces ungroomed harden-heic-upload-contenttype + surface-non-downscaled-uploads [P1] [conflicts: slice-exif-read, make-gallery-scrollable, minimize-upload-modal, make-map-links-directions, harden-uploaded-url-origin] [moderate] [tier: fable:high] [code] [planned]
   files: app.js (MOD), app.test.js (MOD), sw.js (MOD), sw.test.js (MOD), CLAUDE.md (MOD), README.md (MOD), CHANGELOG.md (MOD)
 - [ ] make-gallery-scrollable: Remove 12-photo reminisce cap — ~66vh internally-scrollable chronological mosaic (portrait spans 2 rows, landscape 2 cols, row-dense) from width/height recorded at upload via the downscale bitmap; lazy lightbox + neighbor preload; scrollTop restore across live rebuilds; crossorigin imgs; storage.persist(); RUNTIME_MAX_ENTRIES 140→450 [P1] [depends: harden-upload-bail-path] [conflicts: slice-exif-read, harden-upload-bail-path, minimize-upload-modal, make-map-links-directions, harden-uploaded-url-origin] [complex] [tier: fable:high] [code] [planned]
