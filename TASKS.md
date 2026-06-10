@@ -2,22 +2,7 @@
 
 ## Active Tasks
 
-### make-map-links-directions
-**Task**: Map pins open Google Maps directions from current location (📍 = directions everywhere; ⓘ = place page on rec cards)
-**Pipeline**: code-workflow
-**Branch**: task/make-map-links-directions
-**Worktree**: .worktree/make-map-links-directions
-**Base**: main
-**Started**: 2026-06-10
-**Files**:
-- MOD: app.js
-- MOD: index.html
-- MOD: app.test.js
-- MOD: sw.js
-- MOD: sw.test.js
-- MOD: CLAUDE.md
-- MOD: README.md
-- MOD: CHANGELOG.md
+_None._
 
 ---
 
