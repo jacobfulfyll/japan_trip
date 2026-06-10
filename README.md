@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← tests for the data/API/nav layer (node --test; 471 total with sw.test.js).
+app.test.js    ← tests for the data/API/nav layer (node --test; 500 total with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -267,7 +267,8 @@ the same data shape:
 | `summarizeRun({ added, dupes, skipped, errors, days })` | Tallies a run into the end-summary string ("Added N across D days · M already in journal"). Exported for tests. |
 | `sanitizePathSegment(s)` | Defensively sanitizes a string for use in a Storage path segment (the uploader name). Exported for tests. |
 | `getUploader()` / `setUploader(name)` | Read/write the per-device uploader identity (`localStorage['jt:uploader']`), `localStorage`-throw-safe. Exported for tests. |
-| `wirePhotoSync(deps)` | The injected-seam orchestrator → `{ run(currentIso) }`. `deps` supplies the picker, EXIF reader, downscaler, upload/write/dedup functions (à la `wireAuthGate`), so the upload loop is unit-testable with stubs and no Firebase. The browser bootstrap wires the real Firebase-backed `deps`. |
+| `sniffImageType(buffer)` | Pure magic-byte sniffer over a file's first 16 bytes (`file.slice(0, 16)`) → `{ ext, contentType }` for JPEG/PNG/GIF/WebP/HEIC-family/TIFF/BMP, or `null` if unidentifiable. Used by the upload bail path to label original bytes honestly when both downscale decoders fail (never stamp a HEIC as `.jpg`). SVG is deliberately not recognized. Accepts an `ArrayBuffer` or `Uint8Array`. Exported for tests. |
+| `wirePhotoSync(deps)` | The injected-seam orchestrator → `{ run(currentIso) }`. `deps` supplies the picker, EXIF reader, downscaler, upload/write/dedup functions (à la `wireAuthGate`), so the upload loop is unit-testable with stubs and no Firebase. The browser bootstrap wires the real Firebase-backed `deps`. The `uploadBlob` dep signature is `uploadBlob(path, blob, contentType = 'image/jpeg')` — the success path uses the JPEG default; when both downscale decoders fail, the loop uploads the original bytes with the sniffed contentType (and a matching path extension) instead. |
 
 **Immutability / copy-safety:** everything the API hands back is deeply frozen,
 so callers can't accidentally corrupt the shared data. `getDays()` additionally
@@ -359,6 +360,13 @@ A few deliberate behaviours:
   skipped.
 - **Add photos is only enabled once the trip has started.** Before Jun 16 the row
   is disabled.
+- **A photo that won't shrink still gets in, correctly labeled.** Downscaling runs
+  in a Web Worker; if it fails on a file, the app retries once on a different
+  (main-thread) decoder, and only if *that* fails too does it upload the original
+  full-size bytes. Those originals are stored with their true format sniffed from
+  the file's first bytes (`.heic` stays `.heic`, never a false `.jpg`), so the
+  archive never holds a mislabeled file. This happens silently — you just see a
+  normal upload.
 
 Your **full-resolution originals stay in your camera roll** — the journal stores
 a downscaled copy for viewing, not a backup. Adding photos requires connectivity
@@ -434,7 +442,7 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The test suite (**471 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The test suite (**500 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),
@@ -446,7 +454,7 @@ collapsible day-parts (`bucketPlanByDayPart` bucketing, `dayParts` validation, d
 Hakone content contracts (Romancecar terminus/reserved, transit minutes, veg coverage, lodging consistency, contiguous 18-day span),
 the auth gate (login form present + native-submit guard),
 the ☰ nav menu (inline-SVG hamburger icon, hamburger popover, iconified Home/Add-photos rows, the `role="separator"` divider and its focus-trap exclusion, `opts.onAddPhotos` seam),
-the photo-upload flow (EXIF capture-date parsing against synthetic JPEG fixtures, trip-window filtering, composite-key dedup, run summaries, and the `wirePhotoSync` orchestrator via injected seams),
+the photo-upload flow (EXIF capture-date parsing against synthetic JPEG fixtures, trip-window filtering, composite-key dedup, run summaries, the `wirePhotoSync` orchestrator via injected seams, and the downscale bail path — `sniffImageType` magic-byte detection and the retry-then-honest-label upload),
 and the live reminisce gallery (`mergeGalleryPhotos` ordering/dedup/cap, the `setSubscribePhotos` seam, snapshot re-render + seam count, deferred rebuild while the lightbox is open, uploads-only gallery, and the seam-absent empty-state).
 
 ## Deploy

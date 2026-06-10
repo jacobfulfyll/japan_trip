@@ -2628,6 +2628,71 @@ async function fileCaptureDate(file) {
   return { exifDateTime: null, date: null, fromExif: false };
 }
 
+/**
+ * Sniff an image's true format from its leading magic bytes. Pure — no DOM, no
+ * network. Used by the upload bail path: when BOTH downscale decoders fail we
+ * upload the ORIGINAL bytes, and we must label them honestly (a HEIC must not be
+ * stamped .jpg / image/jpeg). Browsers sniff bytes for <img> rendering anyway, so
+ * this is about archive hygiene (a downloaded file with a correct extension), not
+ * display. Callers pass the first 16 bytes (`file.slice(0, 16)`) — that is enough
+ * for every branch below (the longest probe reads bytes 8–11).
+ * @param {ArrayBuffer | Uint8Array} buffer at least the first bytes of a file
+ *   (a raw ArrayBuffer or a Uint8Array view — other ArrayBufferViews such as
+ *   DataView are not byte-indexable here and are not supported)
+ * @returns {{ ext: string, contentType: string } | null} null if unidentifiable
+ */
+export function sniffImageType(buffer) {
+  let b;
+  try {
+    if (buffer instanceof Uint8Array) b = buffer;
+    else if (buffer && typeof buffer.byteLength === 'number') b = new Uint8Array(buffer);
+    else return null;
+  } catch {
+    return null;
+  }
+  // Match a signature at offset `off`. Each value is a raw byte (number) or an
+  // ASCII string (each char = one byte). A short buffer needs no length guard:
+  // an out-of-range index reads `undefined`, which never equals an expected byte.
+  const at = (off, ...sig) => {
+    let i = off;
+    for (const part of sig) {
+      const expected = typeof part === 'string'
+        ? Array.from(part, (ch) => ch.charCodeAt(0))
+        : [part];
+      for (const byte of expected) {
+        if (b[i] !== byte) return false;
+        i += 1;
+      }
+    }
+    return true;
+  };
+
+  // JPEG: FF D8.
+  if (at(0, 0xff, 0xd8)) return { ext: 'jpg', contentType: 'image/jpeg' };
+  // PNG: 89 50 4E 47 0D 0A 1A 0A.
+  if (at(0, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return { ext: 'png', contentType: 'image/png' };
+  // GIF: "GIF8".
+  if (at(0, 'GIF8')) return { ext: 'gif', contentType: 'image/gif' };
+  // WebP: "RIFF"....​"WEBP".
+  if (at(0, 'RIFF') && at(8, 'WEBP')) return { ext: 'webp', contentType: 'image/webp' };
+  // ISO-BMFF (HEIC family): "ftyp" at 4–7, brand at 8–11.
+  if (at(4, 'ftyp')) {
+    if (at(8, 'heic') || at(8, 'heix') || at(8, 'hevc') || at(8, 'hevx')) {
+      return { ext: 'heic', contentType: 'image/heic' };
+    }
+    if (at(8, 'mif1') || at(8, 'msf1')) return { ext: 'heif', contentType: 'image/heif' };
+    if (at(8, 'avif')) return { ext: 'avif', contentType: 'image/avif' };
+  }
+  // TIFF: "II*\0" (little-endian) or "MM\0*" (big-endian).
+  if (at(0, 0x49, 0x49, 0x2a, 0x00) || at(0, 0x4d, 0x4d, 0x00, 0x2a)) {
+    return { ext: 'tif', contentType: 'image/tiff' };
+  }
+  // BMP: "BM".
+  if (at(0, 0x42, 0x4d)) return { ext: 'bmp', contentType: 'image/bmp' };
+
+  return null;
+}
+
 const MAX_DIMENSION = 2048;
 const JPEG_QUALITY = 0.85;
 
@@ -3074,7 +3139,7 @@ function pickFilesBrowser() {
  * @param {() => Promise<File[]>} deps.pickFiles open the picker → chosen files
  * @param {(file:File) => Promise<{exifDateTime:string|null,date:string|null,fromExif:boolean}>} deps.readDate
  * @param {(file:File) => Promise<{blob:Blob,downscaled:boolean}>} deps.downscale
- * @param {(path:string, blob:Blob, onProgress?:(f:number)=>void) => Promise<string>} deps.uploadBlob upload → download URL
+ * @param {(path:string, blob:Blob, contentType?:string) => Promise<string>} deps.uploadBlob upload → download URL (contentType defaults to 'image/jpeg')
  * @param {(docData:object) => Promise<void>} deps.writeDoc write the Firestore photos doc
  * @param {(uploader:string) => Promise<Set<string>>} deps.readDedup preload existing composite keys
  * @param {(uploader:string, lastUpload:string) => Promise<void>} deps.updateSyncState
@@ -3219,9 +3284,28 @@ export function wirePhotoSync(deps) {
               // Reserve the key NOW so two same-key files in one batch don't both upload.
               dedupSet.add(decision.key);
 
-              const { blob } = await downscale(rec.file);
-              const path = `trip-photos/${rec.date}/${cleanUploader}/${uuid()}.jpg`;
-              const url = await uploadBlob(path, blob);
+              const { blob, downscaled } = await downscale(rec.file);
+              // Success path (downscaled JPEG): byte-for-byte identical to before —
+              // .jpg path, image/jpeg. Bail path (both decoders failed; blob is the
+              // ORIGINAL file): sniff the true format from the first 16 bytes so we
+              // never stamp a HEIC/PNG/etc as .jpg. An unknown/unreadable header →
+              // application/octet-stream (the deployed Storage rules reject that, so
+              // such a rare upload tallies as an error — better than a false label).
+              let ext = 'jpg';
+              let contentType = 'image/jpeg';
+              if (!downscaled) {
+                let sniffed = null;
+                try {
+                  const head = await rec.file.slice(0, 16).arrayBuffer();
+                  sniffed = sniffImageType(head);
+                } catch {
+                  sniffed = null; // header read failed → treat as unknown
+                }
+                ({ ext, contentType } = sniffed || { ext: 'bin', contentType: 'application/octet-stream' });
+                console.warn('[photos] uploading original (downscale failed):', contentType);
+              }
+              const path = `trip-photos/${rec.date}/${cleanUploader}/${uuid()}.${ext}`;
+              const url = await uploadBlob(path, blob, contentType);
               await writeDoc({
                 date: rec.date,
                 uploader,
@@ -3334,15 +3418,24 @@ function buildOnAddPhotos(service) {
       wd.ready,
       new Promise((r) => setTimeout(() => r(false), 8000)),
     ]);
-    return ok ? wd.downscale(file) : downscaleImageThrottled(file);
+    // Not-ready route: go straight to the throttled main-thread decoder. No retry
+    // — re-running the SAME decoder on a failure is pointless.
+    if (!ok) return downscaleImageThrottled(file);
+    // Worker route: on a worker FAILURE (resolves { downscaled: false }, original
+    // bytes) give the file ONE retry on the genuinely different main-thread decoder
+    // before giving up. This runs behind the progress sheet, so the brief per-file
+    // main-thread jank is acceptable (and bounded to files the worker couldn't do).
+    const r = await wd.downscale(file);
+    if (r && r.downscaled) return r;
+    return downscaleImageThrottled(file);
   };
 
   const sync = wirePhotoSync({
     pickFiles: pickFilesBrowser,
     readDate: fileCaptureDate,
     downscale: downscaleRouted,
-    uploadBlob: (path, blob) => new Promise((resolve, reject) => {
-      const task = uploadBytesResumable(ref(storage, path), blob, { contentType: 'image/jpeg' });
+    uploadBlob: (path, blob, contentType = 'image/jpeg') => new Promise((resolve, reject) => {
+      const task = uploadBytesResumable(ref(storage, path), blob, { contentType });
       task.on('state_changed', null, reject, async () => {
         try { resolve(await getDownloadURL(task.snapshot.ref)); }
         catch (e) { reject(e); }

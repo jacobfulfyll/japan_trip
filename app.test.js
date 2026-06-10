@@ -52,6 +52,7 @@ import {
   setUploader,
   decideFile,
   summarizeRun,
+  sniffImageType,
   wirePhotoSync,
   mergeGalleryPhotos,
   setSubscribePhotos,
@@ -7085,4 +7086,390 @@ test('createWorkerDownscaler: handler reads a raw `e` payload when `e.data` is u
   const out = await p;
   assert.deepEqual(out, { blob, downscaled: true }, 'raw-`e` payload is unwrapped correctly');
   assert.equal(wd._pendingSize(), 0, 'pending drains on a raw-payload reply');
+});
+
+// ===========================================================================
+// harden-upload-bail-path — magic-byte sniffer (sniffImageType) unit tests.
+//
+// `sniffImageType(buffer)` is a pure function over the first ~16 bytes of a
+// file. The upload bail path (BOTH downscale decoders failed) uploads the
+// ORIGINAL bytes and uses this to label them honestly — a HEIC must never be
+// stamped .jpg / image/jpeg. No DOM, no network — plain byte-buffer assertions.
+// ===========================================================================
+
+// Build a Uint8Array from a list of byte values (numbers) and/or ASCII strings,
+// concatenated in order. `bytes(0xff, 0xd8, 'ftyp')` -> [FF D8 66 74 79 70].
+function bytes(...parts) {
+  const out = [];
+  for (const p of parts) {
+    if (typeof p === 'string') {
+      for (let i = 0; i < p.length; i += 1) out.push(p.charCodeAt(i));
+    } else {
+      out.push(p & 0xff);
+    }
+  }
+  return Uint8Array.from(out);
+}
+
+// A 12-byte ISO-BMFF (HEIC-family) header: 4-byte box size + "ftyp" + a 4-char
+// brand. The sniffer reads "ftyp" at offset 4 and the brand at offset 8.
+function ftypHeader(brand) {
+  return bytes(0x00, 0x00, 0x00, 0x18, 'ftyp', brand);
+}
+
+test('sniffImageType: JPEG (FF D8) -> jpg / image/jpeg', () => {
+  assert.deepEqual(
+    sniffImageType(bytes(0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10)),
+    { ext: 'jpg', contentType: 'image/jpeg' },
+  );
+});
+
+test('sniffImageType: PNG signature -> png / image/png (the named passthrough case)', () => {
+  assert.deepEqual(
+    sniffImageType(bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)),
+    { ext: 'png', contentType: 'image/png' },
+  );
+});
+
+test('sniffImageType: GIF ("GIF8") -> gif / image/gif', () => {
+  assert.deepEqual(
+    sniffImageType(bytes('GIF89a')),
+    { ext: 'gif', contentType: 'image/gif' },
+  );
+});
+
+test('sniffImageType: WebP (RIFF@0 + WEBP@8) -> webp / image/webp', () => {
+  // RIFF + 4-byte size + WEBP fourcc.
+  assert.deepEqual(
+    sniffImageType(bytes('RIFF', 0x00, 0x00, 0x00, 0x00, 'WEBP')),
+    { ext: 'webp', contentType: 'image/webp' },
+  );
+});
+
+test('sniffImageType: RIFF without WEBP (RIFF....WAVE) -> null (not webp)', () => {
+  assert.equal(
+    sniffImageType(bytes('RIFF', 0x00, 0x00, 0x00, 0x00, 'WAVE')),
+    null,
+  );
+});
+
+test('sniffImageType: HEIC brands (heic/heix/hevc/hevx) all -> heic / image/heic', () => {
+  for (const brand of ['heic', 'heix', 'hevc', 'hevx']) {
+    assert.deepEqual(
+      sniffImageType(ftypHeader(brand)),
+      { ext: 'heic', contentType: 'image/heic' },
+      `ftyp brand ${brand} sniffs to image/heic`,
+    );
+  }
+});
+
+test('sniffImageType: HEIF brands (mif1/msf1) -> heif / image/heif', () => {
+  for (const brand of ['mif1', 'msf1']) {
+    assert.deepEqual(
+      sniffImageType(ftypHeader(brand)),
+      { ext: 'heif', contentType: 'image/heif' },
+      `ftyp brand ${brand} sniffs to image/heif`,
+    );
+  }
+});
+
+test('sniffImageType: AVIF brand (avif) -> avif / image/avif', () => {
+  assert.deepEqual(
+    sniffImageType(ftypHeader('avif')),
+    { ext: 'avif', contentType: 'image/avif' },
+  );
+});
+
+test('sniffImageType: an ftyp box with an unknown brand -> null (no false image/* label)', () => {
+  assert.equal(sniffImageType(ftypHeader('qt  ')), null);
+});
+
+test('sniffImageType: ftyp brand match is case-sensitive (uppercase HEIC -> null)', () => {
+  // ISO-BMFF brands are case-sensitive ASCII fourCCs; every real HEIC/HEIF file
+  // uses lowercase brands (heic/heix/mif1/...). An uppercase/mixed-case brand is
+  // not a real-world file, and the sniffer must NOT match it — relaxing to
+  // case-insensitive would risk stamping non-image bytes (a future regression).
+  for (const brand of ['HEIC', 'Heic', 'MIF1', 'AVIF']) {
+    assert.equal(sniffImageType(ftypHeader(brand)), null, `uppercase brand ${brand} must NOT sniff to an image/* type`);
+  }
+});
+
+test('sniffImageType: TIFF little-endian (II*\\0) -> tif / image/tiff', () => {
+  assert.deepEqual(
+    sniffImageType(bytes(0x49, 0x49, 0x2a, 0x00)),
+    { ext: 'tif', contentType: 'image/tiff' },
+  );
+});
+
+test('sniffImageType: TIFF big-endian (MM\\0*) -> tif / image/tiff', () => {
+  assert.deepEqual(
+    sniffImageType(bytes(0x4d, 0x4d, 0x00, 0x2a)),
+    { ext: 'tif', contentType: 'image/tiff' },
+  );
+});
+
+test('sniffImageType: BMP ("BM") -> bmp / image/bmp', () => {
+  assert.deepEqual(
+    sniffImageType(bytes(0x42, 0x4d, 0x00, 0x00)),
+    { ext: 'bmp', contentType: 'image/bmp' },
+  );
+});
+
+test('sniffImageType: an empty buffer -> null', () => {
+  assert.equal(sniffImageType(bytes()), null);
+});
+
+test('sniffImageType: a 3-byte buffer (too short for any signature) -> null', () => {
+  // 3 bytes can't satisfy GIF8/PNG/WebP/ftyp/TIFF; FF D8 ?? is JPEG, so pick
+  // non-JPEG leading bytes to prove the short-buffer short-circuit holds.
+  assert.equal(sniffImageType(bytes(0x00, 0x01, 0x02)), null);
+});
+
+test('sniffImageType: a 15-byte ftyp-truncated buffer still sniffs the brand (brand ends at byte 11)', () => {
+  // The longest probe reads bytes 8-11, so a 12+ byte buffer is enough; a
+  // 15-byte HEIC header must still resolve (guards the "needs 12+ bytes" claim).
+  const head = bytes(0x00, 0x00, 0x00, 0x18, 'ftyp', 'heic', 0x00, 0x00, 0x00); // 15 bytes
+  assert.equal(head.length, 15);
+  assert.deepEqual(sniffImageType(head), { ext: 'heic', contentType: 'image/heic' });
+});
+
+test('sniffImageType: an ftyp box truncated BEFORE the brand (11 bytes) -> null', () => {
+  // "ftyp" present at 4-7 but the brand bytes 8-11 are missing -> no brand match.
+  const head = bytes(0x00, 0x00, 0x00, 0x18, 'ftyp', 0x68, 0x65, 0x69); // 11 bytes, "hei" only
+  assert.equal(head.length, 11);
+  assert.equal(sniffImageType(head), null);
+});
+
+test('sniffImageType: random non-signature bytes -> null', () => {
+  assert.equal(sniffImageType(bytes(0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0)), null);
+});
+
+test('sniffImageType: accepts an ArrayBuffer (not just a Uint8Array)', () => {
+  const view = bytes(0xff, 0xd8, 0xff, 0xe1);
+  // Pass the underlying ArrayBuffer; the sniffer must coerce it to a view.
+  assert.deepEqual(
+    sniffImageType(view.buffer),
+    { ext: 'jpg', contentType: 'image/jpeg' },
+  );
+});
+
+test('sniffImageType: a non-buffer input (null) -> null (defensive)', () => {
+  assert.equal(sniffImageType(null), null);
+  assert.equal(sniffImageType(undefined), null);
+  assert.equal(sniffImageType(42), null);
+});
+
+// ===========================================================================
+// harden-upload-bail-path — wirePhotoSync bail-path seam tests.
+//
+// SCOPE / COVERAGE BOUNDARY (read before editing):
+//   The worker->main-thread RETRY chain (AC #1: a worker failure triggers
+//   exactly one downscaleImageThrottled retry; a successful retry's blob is
+//   used; the worker-success and not-ready routes never retry) lives entirely
+//   inside `downscaleRouted` — a closure built in `buildOnAddPhotos`, which is
+//   browser-only and NOT exported (verified: only `createWorkerDownscaler` is
+//   exported from the downscale subsystem). `downscaleImageThrottled` and
+//   `buildOnAddPhotos` are likewise unexported. With app.js frozen for this
+//   stage, the retry branch is STRUCTURALLY UNOBSERVABLE from Node: the
+//   wirePhotoSync loop receives `downscale` as one opaque function and never
+//   sees the worker-vs-retry distinction, so NO wirePhotoSync seam test can
+//   bite the retry (a mutation deleting the retry passes the whole suite).
+//   The tests below therefore cover the BAIL OUTCOME (what wirePhotoSync does
+//   with `{downscaled:false}`: sniffed label, original bytes, tally, no new
+//   doc fields) — NOT the retry decision that produced it. The retry contract
+//   is deferred to VERIFY-APP per the concrete plan in the stage report
+//   ("Retry-chain coverage gap"); the closest reachable proof of its trigger
+//   precondition is the createWorkerDownscaler {ok:false} -> {downscaled:false}
+//   contract (asserted in the createWorkerDownscaler suite above and pinned
+//   again just below as the router's documented input).
+//
+// fakeFileWithBytes adds a real `.slice(0,16).arrayBuffer()` to the File stub
+// so the loop's magic-byte sniff runs against controllable head bytes.
+// ===========================================================================
+
+test('createWorkerDownscaler: a worker {ok:false} reply yields {downscaled:false} — the EXACT signal downscaleRouted retries on', async () => {
+  // This pins the input contract the (unexported, browser-only) downscaleRouted
+  // retry keys off: `const r = await wd.downscale(file); if (r && r.downscaled)
+  // return r; return downscaleImageThrottled(file);`. The retry DECISION itself
+  // is unreachable from Node (see the SCOPE banner above) and is verified in
+  // VERIFY-APP; this guards the worker-side half of that contract so a change to
+  // the worker's failure shape (e.g. resolving {downscaled:true} on {ok:false})
+  // would fail here even though the router lives behind a frozen browser closure.
+  const { spawn, workers } = makeFakeSpawn();
+  const wd = createWorkerDownscaler({ spawn });
+  const f = wkrFile('bail.jpg');
+  const p = wd.downscale(f);
+  const { id } = workers[0].posted[0];
+  workers[0].reply({ id, ok: false }); // worker decode failed
+  const out = await p;
+  assert.equal(out.downscaled, false, 'a failed worker reply MUST surface downscaled:false (the router\'s retry trigger)');
+  assert.equal(out.blob, f, 'and it bails to the ORIGINAL file, which the retry then re-decodes');
+});
+
+// A dated, in-window File stub whose first bytes are sniffable. `head` is a
+// Uint8Array; `.slice(0,16)` returns a wrapper whose `.arrayBuffer()` resolves
+// to those bytes (the loop calls `rec.file.slice(0,16).arrayBuffer()`). A
+// `sliceSpy` records calls so a test can assert the sniff did / did not run.
+function fakeFileWithBytes(name, day, size, head, hhmmss = '12:00:00') {
+  const f = datedFile(name, day, size, hhmmss);
+  const sliceSpy = [];
+  f.sliceSpy = sliceSpy;
+  f.slice = (start, end) => {
+    sliceSpy.push([start, end]);
+    return { arrayBuffer: async () => head.buffer.slice(head.byteOffset, head.byteOffset + head.byteLength) };
+  };
+  return f;
+}
+
+// downscale stub that bails (both decoders failed): resolves the ORIGINAL file
+// as the blob, downscaled:false — exactly what downscaleRouted returns after the
+// worker fails AND the main-thread retry fails.
+function bailDownscale() {
+  return asyncSpy((file) => ({ blob: file, downscaled: false }));
+}
+
+test('wirePhotoSync: bail path (downscaled:false) uploads the ORIGINAL bytes', async () => {
+  const head = bytes(0xff, 0xd8, 0xff, 0xe0); // JPEG
+  const f = fakeFileWithBytes('orig.jpg', '2026-06-25', 5001, head);
+  const { deps } = makePhotoHarness({ files: [f] });
+  deps.downscale = bailDownscale();
+
+  const { result, warnCount } = await runQuiet(() => wirePhotoSync(deps).run('2026-06-25'));
+
+  assert.deepEqual(result, { added: 1, dupes: 0, skipped: 0, errors: 0, days: 1 });
+  assert.equal(deps.uploadBlob.calls.length, 1);
+  // The blob handed to uploadBlob is the ORIGINAL file (same identity), not a
+  // downscaled copy.
+  const [, uploadedBlob] = deps.uploadBlob.calls[0];
+  assert.equal(uploadedBlob, f, 'original file is the uploaded blob');
+  // The bail path emits exactly ONE console.warn (the "uploading original" line)
+  // and nothing else — the AC forbids any console noise beyond that one warn.
+  assert.equal(warnCount, 1, 'bail path warns exactly once, no extra noise');
+});
+
+test('wirePhotoSync: bail path sniffs JPEG bytes -> .jpg path + image/jpeg contentType', async () => {
+  const head = bytes(0xff, 0xd8, 0xff, 0xe1, 0x00, 0x10);
+  const f = fakeFileWithBytes('orig.jpg', '2026-06-25', 5101, head);
+  const { deps } = makePhotoHarness({ files: [f] });
+  deps.downscale = bailDownscale();
+
+  await runQuiet(() => wirePhotoSync(deps).run('2026-06-25'));
+
+  const [path, , contentType] = deps.uploadBlob.calls[0];
+  assert.match(path, /\.jpg$/, 'path ends in the sniffed .jpg extension');
+  assert.equal(contentType, 'image/jpeg', 'sniffed JPEG contentType is the third arg');
+});
+
+test('wirePhotoSync: bail path sniffs HEIC bytes -> .heic path + image/heic contentType', async () => {
+  const head = ftypHeader('heic');
+  // A HEIC arriving via a Files-app/AirDrop side door, named .jpg by the picker —
+  // the sniff must override the (misleading) name/extension.
+  const f = fakeFileWithBytes('misnamed.jpg', '2026-06-25', 5201, head);
+  const { deps } = makePhotoHarness({ files: [f] });
+  deps.downscale = bailDownscale();
+
+  await runQuiet(() => wirePhotoSync(deps).run('2026-06-25'));
+
+  const [path, , contentType] = deps.uploadBlob.calls[0];
+  assert.match(path, /\.heic$/, 'path ends in the sniffed .heic extension');
+  assert.equal(contentType, 'image/heic', 'sniffed HEIC contentType is the third arg');
+  // The storage doc references the same (honest) path.
+  assert.equal(deps.writeDoc.calls[0][0].storagePath, path);
+});
+
+test('wirePhotoSync: bail path with UNKNOWN bytes -> .bin path + application/octet-stream', async () => {
+  const head = bytes(0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc); // no known signature
+  const f = fakeFileWithBytes('mystery.dat', '2026-06-25', 5301, head);
+  const { deps } = makePhotoHarness({ files: [f] });
+  deps.downscale = bailDownscale();
+
+  await runQuiet(() => wirePhotoSync(deps).run('2026-06-25'));
+
+  const [path, , contentType] = deps.uploadBlob.calls[0];
+  assert.match(path, /\.bin$/, 'unknown bytes fall back to .bin — never a false .jpg');
+  assert.equal(contentType, 'application/octet-stream');
+});
+
+test('wirePhotoSync: bail path tolerates a slice/arrayBuffer THROW -> .bin / application/octet-stream', async () => {
+  const f = datedFile('broken.jpg', '2026-06-25', 5401);
+  f.slice = () => ({ arrayBuffer: async () => { throw new Error('read failed'); } });
+  const { deps } = makePhotoHarness({ files: [f] });
+  deps.downscale = bailDownscale();
+
+  const { result } = await runQuiet(() => wirePhotoSync(deps).run('2026-06-25'));
+
+  // The file still uploads (read failure is tolerated, not fatal), labeled unknown.
+  assert.deepEqual(result, { added: 1, dupes: 0, skipped: 0, errors: 0, days: 1 });
+  const [path, , contentType] = deps.uploadBlob.calls[0];
+  assert.match(path, /\.bin$/, 'a header-read failure degrades to .bin, not an error');
+  assert.equal(contentType, 'application/octet-stream');
+});
+
+test('wirePhotoSync: a downscaled:false file still tallies as added (1), no new writeDoc fields', async () => {
+  const head = ftypHeader('heic');
+  const f = fakeFileWithBytes('orig.jpg', '2026-06-25', 5501, head);
+  const { deps } = makePhotoHarness({ files: [f] });
+  deps.downscale = bailDownscale();
+
+  const { result } = await runQuiet(() => wirePhotoSync(deps).run('2026-06-25'));
+
+  assert.equal(result.added, 1, 'a bailed (full-size) upload still counts as added');
+  // writeDoc payload is unchanged by this task — exact key set, no `downscaled`,
+  // no `width`/`height` (the gallery task adds dims later, not this one).
+  const doc = deps.writeDoc.calls[0][0];
+  assert.deepEqual(
+    Object.keys(doc).sort(),
+    ['date', 'size', 'storagePath', 'takenAt', 'uploader', 'url'],
+    'writeDoc payload carries exactly the pre-existing keys',
+  );
+});
+
+test('wirePhotoSync: SUCCESS path (downscaled:true) does NOT sniff — .jpg / default contentType, no slice call', async () => {
+  const head = ftypHeader('heic'); // would sniff to .heic IF the bail branch ran
+  const f = fakeFileWithBytes('orig.jpg', '2026-06-25', 5601, head);
+  const { deps } = makePhotoHarness({ files: [f] });
+  // Default harness downscale already resolves { downscaled: true }; keep it.
+
+  const { warnCount } = await runQuiet(() => wirePhotoSync(deps).run('2026-06-25'));
+
+  // The sniff (rec.file.slice(0,16)) must NOT run on the success path.
+  assert.equal(f.sliceSpy.length, 0, 'no magic-byte sniff on the success path');
+  const [path, blob, contentType] = deps.uploadBlob.calls[0];
+  assert.match(path, /\.jpg$/, 'success path keeps the .jpg extension');
+  // The loop ALWAYS passes contentType explicitly; on the success path it is the
+  // 'image/jpeg' default (the would-be .heic sniff must never leak through).
+  assert.equal(contentType, 'image/jpeg', 'success path stamps image/jpeg, never the sniffed type');
+  // The uploaded blob is the downscaled copy, not the original file.
+  assert.notEqual(blob, f, 'success path uploads the downscaled blob, not the original');
+  // The success path is byte-for-byte identical to before this task — no warn.
+  assert.equal(warnCount, 0, 'success path emits no console.warn');
+});
+
+test('wirePhotoSync: a mixed batch (one success, one bail) labels each independently', async () => {
+  const okFile = fakeFileWithBytes('ok.jpg', '2026-06-25', 5701, bytes(0xff, 0xd8));
+  const bailFile = fakeFileWithBytes('bail.jpg', '2026-06-25', 5702, ftypHeader('heic'));
+  const { deps } = makePhotoHarness({ files: [okFile, bailFile] });
+  // Only the second file bails; the first downscales normally.
+  deps.downscale = asyncSpy((file) => (
+    file === bailFile
+      ? { blob: file, downscaled: false }
+      : { blob: { _blobFor: file.name }, downscaled: true }
+  ));
+
+  const { result } = await runQuiet(() => wirePhotoSync(deps).run('2026-06-25'));
+
+  assert.equal(result.added, 2);
+  // Find each file's upload call by its storage doc / path.
+  const calls = deps.uploadBlob.calls;
+  const bailCall = calls.find((c) => c[1] === bailFile);
+  const okCall = calls.find((c) => c[1] !== bailFile);
+  assert.match(bailCall[0], /\.heic$/);
+  assert.equal(bailCall[2], 'image/heic');
+  assert.match(okCall[0], /\.jpg$/);
+  // The loop ALWAYS passes contentType explicitly; the success path stamps the
+  // 'image/jpeg' default (never undefined, never the bail file's sniff).
+  assert.equal(okCall[2], 'image/jpeg');
+  // The bailed file was sniffed; the success file was not.
+  assert.equal(bailFile.sliceSpy.length, 1);
+  assert.equal(okFile.sliceSpy.length, 0);
 });
