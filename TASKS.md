@@ -18,22 +18,6 @@
 - MOD: README.md
 - MOD: CHANGELOG.md
 
-### fix-modal-stack-overlaps
-**Task**: Topmost-only keyboard trap for stacked overlays + sweep stale finished upload sheet at next run
-**Pipeline**: code-workflow
-**Branch**: task/fix-modal-stack-overlaps
-**Worktree**: .worktree/fix-modal-stack-overlaps
-**Base**: main
-**Started**: 2026-06-10
-**Files**:
-- MOD: app.js
-- MOD: app.test.js
-- MOD: sw.js
-- MOD: sw.test.js
-- MOD: CLAUDE.md
-- MOD: README.md
-- MOD: CHANGELOG.md
-
 ---
 
 ## Backlog
