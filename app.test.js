@@ -55,6 +55,7 @@ import {
   sniffImageType,
   wirePhotoSync,
   mergeGalleryPhotos,
+  isAllowedUploadOrigin,
   setSubscribePhotos,
   createWorkerDownscaler,
   readRunMarker,
@@ -1996,15 +1997,15 @@ test('mergeGalleryPhotos: authored-only (empty uploaded) keeps authored order, m
 
 test('mergeGalleryPhotos: uploaded are sorted by takenAt ascending regardless of input order', () => {
   const uploaded = [
-    { url: 'https://example.com/late.jpg', uploader: 'Jo', takenAt: '2026-06-24 18:00:00' },
-    { url: 'https://example.com/early.jpg', uploader: 'Jo', takenAt: '2026-06-24 08:00:00' },
-    { url: 'https://example.com/mid.jpg', uploader: 'Jo', takenAt: '2026-06-24 12:00:00' },
+    { url: 'https://firebasestorage.googleapis.com/late.jpg', uploader: 'Jo', takenAt: '2026-06-24 18:00:00' },
+    { url: 'https://firebasestorage.googleapis.com/early.jpg', uploader: 'Jo', takenAt: '2026-06-24 08:00:00' },
+    { url: 'https://firebasestorage.googleapis.com/mid.jpg', uploader: 'Jo', takenAt: '2026-06-24 12:00:00' },
   ];
   const out = mergeGalleryPhotos([], uploaded);
   assert.deepEqual(out.map((p) => p.url), [
-    'https://example.com/early.jpg',
-    'https://example.com/mid.jpg',
-    'https://example.com/late.jpg',
+    'https://firebasestorage.googleapis.com/early.jpg',
+    'https://firebasestorage.googleapis.com/mid.jpg',
+    'https://firebasestorage.googleapis.com/late.jpg',
   ]);
 });
 
@@ -2013,18 +2014,18 @@ test('mergeGalleryPhotos: authored block always precedes the uploaded block', ()
   const uploaded = [
     // takenAt that would sort BEFORE the authored if order were by time — it must
     // still come after, because authored-first is unconditional.
-    { url: 'https://example.com/up.jpg', uploader: 'Jo', takenAt: '2000-01-01 00:00:00' },
+    { url: 'https://firebasestorage.googleapis.com/up.jpg', uploader: 'Jo', takenAt: '2000-01-01 00:00:00' },
   ];
   const out = mergeGalleryPhotos(authored, uploaded);
   assert.deepEqual(out.map((p) => p.url), [
     'https://example.com/auth.jpg',
-    'https://example.com/up.jpg',
+    'https://firebasestorage.googleapis.com/up.jpg',
   ]);
 });
 
 test('mergeGalleryPhotos: an authored + uploaded sharing a url collapse to one (authored wins)', () => {
-  const authored = [{ url: 'https://example.com/dup.jpg', alt: 'authored alt' }];
-  const uploaded = [{ url: 'https://example.com/dup.jpg', uploader: 'Jo', takenAt: '2026-06-24 08:00:00' }];
+  const authored = [{ url: 'https://firebasestorage.googleapis.com/dup.jpg', alt: 'authored alt' }];
+  const uploaded = [{ url: 'https://firebasestorage.googleapis.com/dup.jpg', uploader: 'Jo', takenAt: '2026-06-24 08:00:00' }];
   const out = mergeGalleryPhotos(authored, uploaded);
   assert.equal(out.length, 1, 'shared url collapses to a single entry');
   assert.equal(out[0].alt, 'authored alt', 'authored entry wins (emitted first)');
@@ -2032,8 +2033,8 @@ test('mergeGalleryPhotos: an authored + uploaded sharing a url collapse to one (
 
 test('mergeGalleryPhotos: two uploaded docs with the same url collapse to one', () => {
   const uploaded = [
-    { url: 'https://example.com/same.jpg', uploader: 'Jo', takenAt: '2026-06-24 08:00:00' },
-    { url: 'https://example.com/same.jpg', uploader: 'Mo', takenAt: '2026-06-24 09:00:00' },
+    { url: 'https://firebasestorage.googleapis.com/same.jpg', uploader: 'Jo', takenAt: '2026-06-24 08:00:00' },
+    { url: 'https://firebasestorage.googleapis.com/same.jpg', uploader: 'Mo', takenAt: '2026-06-24 09:00:00' },
   ];
   const out = mergeGalleryPhotos([], uploaded);
   assert.equal(out.length, 1, 'duplicate uploaded url collapses');
@@ -2043,7 +2044,7 @@ test('mergeGalleryPhotos: two uploaded docs with the same url collapse to one', 
 test('mergeGalleryPhotos: caps at REMINISCE_GALLERY_MAX (12), retaining authored first', () => {
   const authored = Array.from({ length: 5 }, (_, i) => ({ url: `https://example.com/a${i}.jpg`, alt: `a${i}` }));
   const uploaded = Array.from({ length: 20 }, (_, i) => ({
-    url: `https://example.com/u${i}.jpg`,
+    url: `https://firebasestorage.googleapis.com/u${i}.jpg`,
     uploader: 'Jo',
     takenAt: `2026-06-24 ${String(i).padStart(2, '0')}:00:00`,
   }));
@@ -2051,14 +2052,14 @@ test('mergeGalleryPhotos: caps at REMINISCE_GALLERY_MAX (12), retaining authored
   assert.equal(out.length, 12, 'capped at REMINISCE_GALLERY_MAX');
   // All 5 authored survive (authored-first), then the 7 earliest uploaded.
   assert.deepEqual(out.slice(0, 5).map((p) => p.url), authored.map((p) => p.url));
-  assert.equal(out[5].url, 'https://example.com/u0.jpg', 'earliest uploaded comes right after authored');
-  assert.equal(out[11].url, 'https://example.com/u6.jpg', 'cap drops the later uploaded (u7..u19)');
+  assert.equal(out[5].url, 'https://firebasestorage.googleapis.com/u0.jpg', 'earliest uploaded comes right after authored');
+  assert.equal(out[11].url, 'https://firebasestorage.googleapis.com/u6.jpg', 'cap drops the later uploaded (u7..u19)');
 });
 
 test('mergeGalleryPhotos: uploaded alt is "Photo by <uploader>"; missing uploader → "Photo by a traveler"', () => {
   const uploaded = [
-    { url: 'https://example.com/named.jpg', uploader: 'Megan', takenAt: '2026-06-24 08:00:00' },
-    { url: 'https://example.com/anon.jpg', takenAt: '2026-06-24 09:00:00' }, // no uploader
+    { url: 'https://firebasestorage.googleapis.com/named.jpg', uploader: 'Megan', takenAt: '2026-06-24 08:00:00' },
+    { url: 'https://firebasestorage.googleapis.com/anon.jpg', takenAt: '2026-06-24 09:00:00' }, // no uploader
   ];
   const out = mergeGalleryPhotos([], uploaded);
   assert.equal(out[0].alt, 'Photo by Megan');
@@ -2069,10 +2070,10 @@ test('mergeGalleryPhotos: safeUrl rejects bad/missing uploaded urls; valid ones 
   const uploaded = [
     { url: 'javascript:alert(1)', uploader: 'Jo', takenAt: '2026-06-24 08:00:00' }, // rejected
     { url: undefined, uploader: 'Jo', takenAt: '2026-06-24 08:30:00' },             // rejected (missing)
-    { url: 'https://example.com/ok.jpg', uploader: 'Jo', takenAt: '2026-06-24 09:00:00' }, // kept
+    { url: 'https://firebasestorage.googleapis.com/ok.jpg', uploader: 'Jo', takenAt: '2026-06-24 09:00:00' }, // kept
   ];
   const out = mergeGalleryPhotos([], uploaded);
-  assert.deepEqual(out.map((p) => p.url), ['https://example.com/ok.jpg'], 'only the safe url survives');
+  assert.deepEqual(out.map((p) => p.url), ['https://firebasestorage.googleapis.com/ok.jpg'], 'only the safe url survives');
 });
 
 test('mergeGalleryPhotos: non-array / null inputs do not throw (defensive)', () => {
@@ -2086,6 +2087,76 @@ test('mergeGalleryPhotos: non-array / null inputs do not throw (defensive)', () 
       [{ url: 'https://example.com/a.jpg', alt: 'A' }],
     );
   });
+});
+
+// --- isAllowedUploadOrigin + uploaded-origin allowlist ----------------------
+//
+// Defense-in-depth: uploaded photo URLs (the only user-generated render path)
+// must resolve to the Firebase Storage origin. Enforced ONLY on the uploaded
+// branch of mergeGalleryPhotos — authored/relative content is unaffected.
+
+test('isAllowedUploadOrigin: real getDownloadURL shape (with query) is allowed', () => {
+  assert.equal(
+    isAllowedUploadOrigin('https://firebasestorage.googleapis.com/v0/b/bucket/o/x.jpg?alt=media&token=abc'),
+    true,
+  );
+});
+
+test('isAllowedUploadOrigin: bare storage origin is allowed', () => {
+  assert.equal(isAllowedUploadOrigin('https://firebasestorage.googleapis.com'), true);
+});
+
+test('isAllowedUploadOrigin: a foreign https origin is rejected', () => {
+  assert.equal(isAllowedUploadOrigin('https://evil.example.com/x.jpg'), false);
+});
+
+test('isAllowedUploadOrigin: scheme downgrade to http is rejected (origin includes scheme)', () => {
+  assert.equal(isAllowedUploadOrigin('http://firebasestorage.googleapis.com/x.jpg'), false);
+});
+
+test('isAllowedUploadOrigin: suffix host-confusion is rejected', () => {
+  assert.equal(isAllowedUploadOrigin('https://firebasestorage.googleapis.com.evil.com/x.jpg'), false);
+});
+
+test('isAllowedUploadOrigin: userinfo host-confusion is rejected (origin is the real host)', () => {
+  assert.equal(isAllowedUploadOrigin('https://user@evil.com/x.jpg'), false);
+});
+
+test('isAllowedUploadOrigin: relative / garbage URLs are rejected (parse-throw → false)', () => {
+  assert.equal(isAllowedUploadOrigin('./img/x.jpg'), false);
+  assert.equal(isAllowedUploadOrigin('/img/x.jpg'), false);
+  assert.equal(isAllowedUploadOrigin(''), false);
+  assert.equal(isAllowedUploadOrigin('not a url'), false);
+});
+
+test('mergeGalleryPhotos: a foreign-origin uploaded doc is dropped from the gallery entirely', () => {
+  const uploaded = [{ url: 'https://evil.example.com/x.jpg', uploader: 'Jo', takenAt: '2026-06-24 08:00:00' }];
+  const out = mergeGalleryPhotos([], uploaded);
+  assert.deepEqual(out, [], 'never reaches the gallery/lightbox/count');
+});
+
+test('mergeGalleryPhotos: a storage-origin uploaded doc is kept verbatim', () => {
+  const url = 'https://firebasestorage.googleapis.com/v0/b/bucket/o/kept.jpg?alt=media&token=t';
+  const out = mergeGalleryPhotos([], [{ url, uploader: 'Jo', takenAt: '2026-06-24 08:00:00' }]);
+  assert.deepEqual(out.map((p) => p.url), [url], 'url survives unchanged');
+});
+
+test('mergeGalleryPhotos: the allowlist applies ONLY to the uploaded branch (authored example.com kept, uploaded example.com dropped)', () => {
+  const authored = [{ url: 'https://example.com/auth.jpg', alt: 'A' }];
+  const uploaded = [{ url: 'https://example.com/up.jpg', uploader: 'Jo', takenAt: '2026-06-24 08:00:00' }];
+  const out = mergeGalleryPhotos(authored, uploaded);
+  assert.deepEqual(out.map((p) => p.url), ['https://example.com/auth.jpg'],
+    'authored foreign-origin survives; uploaded foreign-origin is dropped');
+});
+
+test('mergeGalleryPhotos: a mix of one storage-origin (kept) + one foreign (dropped) yields only the storage one', () => {
+  const uploaded = [
+    { url: 'https://firebasestorage.googleapis.com/keep.jpg', uploader: 'Jo', takenAt: '2026-06-24 08:00:00' },
+    { url: 'https://evil.example.com/drop.jpg', uploader: 'Mo', takenAt: '2026-06-24 09:00:00' },
+  ];
+  const out = mergeGalleryPhotos([], uploaded);
+  assert.equal(out.length, 1, 'seam count reflects the drop');
+  assert.equal(out[0].url, 'https://firebasestorage.googleapis.com/keep.jpg');
 });
 
 // --- Live subscription layer (withDom + injected stub subscribePhotos) -------
@@ -2113,7 +2184,7 @@ function makeSubscribeStub() {
 
 function uploadedDoc(i, uploader = 'Jo') {
   return {
-    url: `https://example.com/u${i}.jpg`,
+    url: `https://firebasestorage.googleapis.com/u${i}.jpg`,
     uploader,
     takenAt: `2026-06-24 ${String(i).padStart(2, '0')}:00:00`,
   };

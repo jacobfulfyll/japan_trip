@@ -1176,6 +1176,34 @@ function buildLodging(lodging) {
 // busy day scannable on a phone instead of an endless scroll. Tune to taste.
 const REMINISCE_GALLERY_MAX = 12;
 
+// Defense-in-depth: uploaded photo URLs (the app's only user-generated render
+// path) must point at our Firebase Storage bucket. Single literal — single-bucket
+// app, so a configurable allowlist is YAGNI. NOTE: if a CDN is ever put in front
+// of the bucket, widen this to include that CDN's origin.
+const STORAGE_ORIGIN = 'https://firebasestorage.googleapis.com';
+
+/**
+ * True iff `safe` (a safeUrl-normalized string) is an absolute URL on the
+ * Firebase Storage origin. Applied ONLY to uploaded docs — authored/relative
+ * content is unaffected.
+ *
+ * @param {string} safe a safeUrl()-normalized URL
+ * @returns {boolean}
+ */
+export function isAllowedUploadOrigin(safe) {
+  try {
+    // Uploaded URLs are always ABSOLUTE https from getDownloadURL.
+    // Absolute URLs parse with no base; a relative URL throws here → rejected
+    // (correct: an uploaded doc should never carry a relative path). Do NOT pass
+    // location.href as a base — that would resolve a foreign relative path against
+    // our own origin and is irrelevant since uploads are absolute (also Node-safe:
+    // `location` is undefined under `node --test`).
+    return new URL(safe).origin === STORAGE_ORIGIN;
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Live reminisce gallery (reminisce-gallery-live)
 //
@@ -1233,9 +1261,12 @@ export function mergeGalleryPhotos(authored, uploaded) {
   const seen = new Set();
   const out = [];
 
-  const pushSafe = (rawUrl, alt) => {
+  const pushSafe = (rawUrl, alt, requireStorageOrigin = false) => {
     const url = safeUrl(rawUrl);
     if (!url || seen.has(url)) return;
+    // Uploaded docs (user-generated) must resolve to the Storage origin;
+    // authored/relative content is repo-controlled and passes unrestricted.
+    if (requireStorageOrigin && !isAllowedUploadOrigin(url)) return;
     seen.add(url);
     out.push({ url, alt: alt ? String(alt) : '' });
   };
@@ -1254,7 +1285,7 @@ export function mergeGalleryPhotos(authored, uploaded) {
     });
   uploadedList.forEach((d) => {
     const who = d?.uploader ? String(d.uploader) : 'a traveler';
-    pushSafe(d?.url, `Photo by ${who}`);
+    pushSafe(d?.url, `Photo by ${who}`, true);
   });
 
   return out.slice(0, REMINISCE_GALLERY_MAX);
