@@ -701,6 +701,37 @@ function mapLink(url, label) {
   return a;
 }
 
+/**
+ * Rewrite a `https://maps.google.com/?q=<place>` place URL into a Google Maps
+ * directions URL ("Your location → the place"). Returns null if the URL is
+ * unsafe, has no parseable `q` param, or is relative (relative URLs throw in
+ * `new URL` without a base). No `travelmode` param — Google remembers the
+ * user's last-used mode.
+ *
+ * `searchParams.get` decodes the value, so `encodeURIComponent` re-encodes it
+ * cleanly — no double-encoding (round-trips an apostrophe in `Apollon's Gold`
+ * and a literal `%` in `% Arabica`).
+ * @param {unknown} mapUrl
+ * @returns {string | null}
+ */
+export function toDirectionsUrl(mapUrl) {
+  const safe = safeUrl(mapUrl);
+  if (!safe) return null;
+  let q;
+  try {
+    q = new URL(safe).searchParams.get('q');
+  } catch {
+    return null;
+  }
+  if (!q) return null;
+  return 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(q);
+}
+
+/** Build the 📍 "Directions in Google Maps" link, rewriting the place URL to a directions URL when possible (falling back to the raw URL). */
+function directionsLink(mapUrl) {
+  return mapLink(toDirectionsUrl(mapUrl) ?? mapUrl, 'Directions in Google Maps');
+}
+
 const TAG_LABELS = {
   meal: 'Meal',
   transit: 'Transit',
@@ -1046,7 +1077,7 @@ function buildPlanItem(item, index, plan, lodging) {
 
   if (item.note) content.appendChild(el('p', 'plan-note', item.note));
 
-  const link = mapLink(item.mapUrl, 'Open in Google Maps');
+  const link = directionsLink(item.mapUrl);
   if (link) content.appendChild(link);
 
   body.appendChild(content);
@@ -1117,8 +1148,14 @@ function buildPlanItem(item, index, plan, lodging) {
         card.appendChild(con);
       }
 
-      const recLink = mapLink(rec?.mapUrl, 'Map');
+      const recLink = directionsLink(rec?.mapUrl);
       if (recLink) card.appendChild(recLink);
+
+      const placeLink = mapLink(rec?.mapUrl, 'Open place in Google Maps');
+      if (placeLink) {
+        placeLink.classList.add('map-link-place');
+        card.appendChild(placeLink);
+      }
 
       panel.appendChild(card);
     });
@@ -1151,7 +1188,7 @@ function buildLodging(lodging) {
     bf.appendChild(el('span', null, lodging.breakfast));
     card.appendChild(bf);
   }
-  const link = mapLink(lodging.mapUrl, 'Open in Google Maps');
+  const link = directionsLink(lodging.mapUrl);
   if (link) card.appendChild(link);
   return card;
 }

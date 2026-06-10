@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← tests for the data/API/nav layer (node --test; 587 total with sw.test.js).
+app.test.js    ← tests for the data/API/nav layer (node --test; 600 total with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -86,7 +86,7 @@ Each plan entry is one moment in the day:
 | `tag`             | string   | Kind of item: `meal`, `transit`, `sight`, `checkin`, `checkout`, `rest`, `bar`, `spa`, `reservation`. |
 | `title`           | string   | Short label.                                                      |
 | `note`            | string   | Optional detail.                                                  |
-| `mapUrl`          | string   | Optional Google Maps link.                                        |
+| `mapUrl`          | string   | Optional Google Maps link (`https://maps.google.com/?q=<place>`). The app rewrites this to a directions URL at render time — authors write the `?q=` form as always. |
 | `coords`          | object   | Optional `{ lat, lng }`.                                          |
 | `reserved`        | boolean  | `true` marks a booked reservation (a reservation is just a plan item with `reserved: true`). |
 | `transit`         | object   | Optional. On `tag:'transit'` items: a `TransitLeg` (see below) `& { minutes?, transfer? }`. Renders a small structured block below the title and makes the tag pill mode-aware ("Bus" / "Train" / "Subway"). |
@@ -233,6 +233,7 @@ screens import them.
 | `mergeGalleryPhotos(authored, uploaded)` | Pure merge of an authored photo list with uploaded Firestore `photos` docs. The authored list comes first (in order), then uploaded photos sorted by `takenAt` ascending. Deduped by URL, bounded by `REMINISCE_GALLERY_MAX` (1000 — a sanity ceiling; in practice the gallery shows every uploaded photo), each normalized to `{ url, alt, width?, height? }` (uploaded photos get `alt: "Photo by <uploader>"`; `width`/`height` pass through when both are finite). Every URL is validated through `safeUrl` — anything rejected is dropped. Uploaded docs are additionally origin-gated to `https://firebasestorage.googleapis.com` (defense-in-depth). Exported for tests + the bootstrap. The reminisce render path calls it with an empty authored array (`mergeGalleryPhotos([], docs)`) so the gallery shows uploaded photos only. |
 | `setSubscribePhotos(fn)` | Wires (or clears) the live-photo subscription seam. `fn` is `(iso, cb) => unsubscribe` — `cb` receives the array of uploaded photo docs for that ISO date and is called on every change. The bootstrap wires this to the Firestore `onSnapshot` listener; pass `null` to detach. **When the seam is null** (every test, and any non-Firebase host), `renderDay`'s reminisce branch renders the **empty-state** — the gallery is uploads-only and there is no authored-photo fallback. |
 | `tileSpanClass(width, height)` | Pure mosaic span classifier. Returns `'gallery-tile-tall'` (portrait, h/w ≥ 1.2 → 2 rows), `'gallery-tile-wide'` (landscape, w/h ≥ 1.2 → 2 cols), or `''` (square / missing / non-finite). Used by the reminisce gallery to assign grid spans from each photo's orientation-corrected dims before any image loads. Exported for tests. |
+| `toDirectionsUrl(mapUrl)` | Pure helper. Rewrites a `https://maps.google.com/?q=<place>` authored URL into `https://www.google.com/maps/dir/?api=1&destination=<place>` (origin = current location; no `travelmode` — Google remembers the last-used mode). Returns `null` on any miss: no `?q=` param, empty value, or an unsafe/relative URL. Callers fall back to the original via `?? mapUrl`. Exported for tests. |
 
 ### The reminisce gallery
 
@@ -473,7 +474,7 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The test suite (**587 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The test suite (**600 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),
@@ -487,7 +488,8 @@ the auth gate (login form present + native-submit guard),
 the ☰ nav menu (inline-SVG hamburger icon, hamburger popover, iconified Home/Add-photos rows, the `role="separator"` divider and its focus-trap exclusion, `opts.onAddPhotos` seam),
 the photo-upload flow (EXIF capture-date parsing against synthetic JPEG fixtures, trip-window filtering, composite-key dedup, run summaries, the `wirePhotoSync` orchestrator via injected seams, and the downscale bail path — `sniffImageType` magic-byte detection and the retry-then-honest-label upload),
 the live reminisce gallery (`mergeGalleryPhotos` ordering/dedup/cap, the `setSubscribePhotos` seam, snapshot re-render + seam count, deferred rebuild while the lightbox is open, uploads-only gallery, the seam-absent empty-state, and the uploaded-URL origin allowlist — `isAllowedUploadOrigin` host-confusion vectors plus authored-kept-vs-uploaded-dropped branch isolation),
-and the scrollable photo mosaic (`tileSpanClass` boundary units for portrait/landscape/square/degenerate inputs, `mergeGalleryPhotos` dims passthrough, dispatcher dims threading, render mosaic span-class assignment, crossorigin attributes, lightbox lazy-load + neighbor preload, scrollTop preservation across snapshot rebuilds, and `wirePhotoSync`→`writeDoc` dims-persistence).
+the scrollable photo mosaic (`tileSpanClass` boundary units for portrait/landscape/square/degenerate inputs, `mergeGalleryPhotos` dims passthrough, dispatcher dims threading, render mosaic span-class assignment, crossorigin attributes, lightbox lazy-load + neighbor preload, scrollTop preservation across snapshot rebuilds, and `wirePhotoSync`→`writeDoc` dims-persistence),
+and map directions (`toDirectionsUrl` rewrite units — valid `?q=` URLs, missing param, empty, unsafe/relative inputs — plus render tests for the dual 📍/ⓘ rec-card links and the directions-only plan-item and lodging call sites).
 
 ## Deploy
 

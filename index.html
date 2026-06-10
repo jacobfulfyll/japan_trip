@@ -447,6 +447,14 @@
         .map-link:hover { opacity: 1; background: rgba(13, 57, 89, 0.08); }
         .map-link:focus-visible { opacity: 1; outline: 2px solid var(--brand-mid); outline-offset: 2px; }
 
+        /* The ⓘ place-page link on rec cards sits just left of the 📍 pin. */
+        .map-link-place { right: 52px; }
+        .map-link-place::before {
+            content: "ⓘ";
+            font-size: 1.2rem;
+            filter: none;
+        }
+
         /* --- Day-part sections (Morning / Afternoon / Evening) ----------- */
         .day-part {
             margin-bottom: 14px;

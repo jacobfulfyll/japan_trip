@@ -25,6 +25,7 @@ import {
   buildValidatedDays,
   haversineMeters,
   safeUrl,
+  toDirectionsUrl,
   nearestPrecedingCoords,
   renderDay,
   getNow,
@@ -2843,6 +2844,173 @@ test('renderDay omits a map link whose URL has a dangerous scheme (safeUrl gate 
     // No map-link should point at a javascript: URL.
     const bad = node.byClass('map-link').find((a) => /javascript:/i.test(a.href || ''));
     assert.equal(bad, undefined, 'a javascript: map URL must never reach an href');
+  });
+});
+
+// --- make-map-links-directions: toDirectionsUrl pure units ------------------
+
+test('toDirectionsUrl rewrites a ?q= place URL into a Google Maps directions URL (+ decodes to space, re-encodes to %20)', () => {
+  assert.equal(
+    toDirectionsUrl('https://maps.google.com/?q=Kyushu+Jangara+Akasaka'),
+    'https://www.google.com/maps/dir/?api=1&destination=Kyushu%20Jangara%20Akasaka',
+  );
+});
+
+test('toDirectionsUrl returns null when the URL has no q param (drives the ?? url fallback)', () => {
+  assert.equal(toDirectionsUrl('https://maps.google.com/'), null);
+});
+
+test('toDirectionsUrl returns null for an empty string', () => {
+  assert.equal(toDirectionsUrl(''), null);
+});
+
+test('toDirectionsUrl returns null for a javascript: URL (safeUrl drops it first)', () => {
+  assert.equal(toDirectionsUrl('javascript:alert(1)'), null);
+});
+
+test('toDirectionsUrl returns null for a relative URL (new URL throws with no base, caught)', () => {
+  assert.equal(toDirectionsUrl('/some/path'), null);
+});
+
+test('toDirectionsUrl round-trips an apostrophe without double-encoding', () => {
+  const out = toDirectionsUrl("https://maps.google.com/?q=Apollon's+Gold");
+  assert.equal(out, "https://www.google.com/maps/dir/?api=1&destination=Apollon's%20Gold");
+  assert.ok(!out.includes('%2527'), 'apostrophe must not be double-encoded');
+});
+
+test('toDirectionsUrl single-encodes a literal percent without double-encoding', () => {
+  const out = toDirectionsUrl('https://maps.google.com/?q=%25+Arabica');
+  assert.equal(out, 'https://www.google.com/maps/dir/?api=1&destination=%25%20Arabica');
+  assert.ok(!out.includes('%2525'), 'literal % must not be double-encoded');
+});
+
+// --- make-map-links-directions: render tests --------------------------------
+
+test('renderDay plan-item map link points at a directions URL with the directions aria-label', () => {
+  withDom(() => {
+    const day = fullDayFixture();
+    day.plan[0].mapUrl = 'https://maps.google.com/?q=Somewhere';
+    day.plan[1].recommendations = []; // isolate to the plan item's own link
+    const node = renderDay(day, 'plan').node;
+    const links = node.byClass('map-link');
+    assert.ok(links.length > 0, 'expected the plan item map link');
+    const planLink = links[0];
+    assert.match(planLink.href, /maps\/dir\/\?api=1&destination=Somewhere/);
+    assert.equal(planLink.getAttribute('aria-label'), 'Directions in Google Maps');
+  });
+});
+
+test('renderDay lodging map link points at a directions URL with the directions aria-label', () => {
+  withDom(() => {
+    const day = fullDayFixture();
+    day.lodging.mapUrl = 'https://maps.google.com/?q=Lodging+Place';
+    const node = renderDay(day, 'plan').node;
+    const lodgingCard = node.firstByClass('lodging-card');
+    assert.ok(lodgingCard, 'expected a lodging card');
+    const link = lodgingCard.firstByClass('map-link');
+    assert.ok(link, 'expected a lodging map link');
+    assert.match(link.href, /maps\/dir\/\?api=1&destination=Lodging%20Place/);
+    assert.equal(link.getAttribute('aria-label'), 'Directions in Google Maps');
+  });
+});
+
+test('renderDay rec card carries exactly 2 map links: a directions link and a place link with distinct roles', () => {
+  withDom(() => {
+    const day = fullDayFixture();
+    day.plan[1].recommendations = [
+      { name: 'RecPlace', pros: ['Good'], con: 'Busy.',
+        mapUrl: 'https://maps.google.com/?q=RecPlace' },
+    ];
+    const node = renderDay(day, 'plan').node;
+    const card = node.byClass('rec-card')
+      .find((c) => c.firstByClass('rec-name')?.textContent === 'RecPlace');
+    assert.ok(card, 'expected the RecPlace rec card');
+
+    const links = card.byClass('map-link');
+    assert.equal(links.length, 2, 'rec card has exactly 2 map links (directions + place)');
+
+    const placeLink = card.firstByClass('map-link-place');
+    assert.ok(placeLink, 'expected the ⓘ place link');
+    assert.equal(placeLink.getAttribute('aria-label'), 'Open place in Google Maps');
+    assert.equal(placeLink.href, 'https://maps.google.com/?q=RecPlace',
+      'place link keeps the ORIGINAL url');
+
+    const directionsLink = links.find((a) => a !== placeLink);
+    assert.ok(directionsLink, 'expected the directions link');
+    assert.equal(directionsLink.getAttribute('aria-label'), 'Directions in Google Maps');
+    assert.match(directionsLink.href, /maps\/dir\/\?api=1&destination=RecPlace/);
+
+    assert.notEqual(
+      placeLink.getAttribute('aria-label'),
+      directionsLink.getAttribute('aria-label'),
+      'the two map links carry distinct aria-labels',
+    );
+  });
+});
+
+test('renderDay falls back to the original mapUrl when it has no ?q= (directions helper returns null)', () => {
+  withDom(() => {
+    const day = fullDayFixture();
+    day.plan[0].mapUrl = 'https://maps.google.com/place/foo'; // no q param
+    day.plan[1].recommendations = []; // isolate to the plan item's own link
+    const node = renderDay(day, 'plan').node;
+    const links = node.byClass('map-link');
+    assert.ok(links.length > 0, 'expected the plan item map link to still render');
+    assert.equal(links[0].href, 'https://maps.google.com/place/foo',
+      'falls back to the original URL via ?? url');
+  });
+});
+
+test('renderDay renders NO map link on a plan item whose mapUrl is empty or undefined (AC4 at the render layer)', () => {
+  const planItemFor = (node, title) =>
+    node.byClass('plan-item').find((li) => li.firstByClass('plan-title')?.textContent === title);
+
+  withDom(() => {
+    // Empty-string mapUrl → safeUrl('') is null → mapLink returns null → no link.
+    const day = fullDayFixture();
+    day.plan[0].mapUrl = '';
+    day.plan[1].recommendations = []; // isolate; the other item's links must not leak in
+    const node = renderDay(day, 'plan').node;
+    const item = planItemFor(node, 'Yasaka Shrine');
+    assert.ok(item, 'expected the Yasaka Shrine plan item');
+    assert.equal(item.byClass('map-link').length, 0,
+      'an empty-string mapUrl must produce zero map links on the item');
+  });
+
+  withDom(() => {
+    // Absent mapUrl (undefined) → same outcome via the toDirectionsUrl ?? item.mapUrl chain.
+    const day = fullDayFixture();
+    delete day.plan[0].mapUrl;
+    day.plan[1].recommendations = [];
+    const node = renderDay(day, 'plan').node;
+    const item = planItemFor(node, 'Yasaka Shrine');
+    assert.ok(item, 'expected the Yasaka Shrine plan item');
+    assert.equal(item.byClass('map-link').length, 0,
+      'an undefined mapUrl must produce zero map links on the item');
+  });
+});
+
+test('renderDay scopes the ⓘ place link to rec cards only — never on a plan item or lodging card', () => {
+  withDom(() => {
+    const day = fullDayFixture(); // plan[0] + lodging both have a real ?q= mapUrl
+    day.plan[1].recommendations = []; // drop the only rec cards on this day
+    const node = renderDay(day, 'plan').node;
+
+    // Sanity: the plan item and lodging card DO render their (directions) map link…
+    const planItem = node.byClass('plan-item')
+      .find((li) => li.firstByClass('plan-title')?.textContent === 'Yasaka Shrine');
+    assert.ok(planItem?.firstByClass('map-link'), 'plan item should still have its directions link');
+    const lodgingCard = node.firstByClass('lodging-card');
+    assert.ok(lodgingCard?.firstByClass('map-link'), 'lodging card should still have its directions link');
+
+    // …but neither carries the rec-only ⓘ place link.
+    assert.equal(planItem.byClass('map-link-place').length, 0,
+      'the ⓘ place link must not appear on a plan item');
+    assert.equal(lodgingCard.byClass('map-link-place').length, 0,
+      'the ⓘ place link must not appear on a lodging card');
+    // With no rec cards, the whole subtree has zero place links.
+    assert.equal(node.byClass('map-link-place').length, 0,
+      'no rec cards → no ⓘ place links anywhere');
   });
 });
 
