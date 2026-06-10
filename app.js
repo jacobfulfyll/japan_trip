@@ -3700,6 +3700,63 @@ export function createWorkerDownscaler({
   return { downscale, ready, destroy, _pendingSize: () => pending.size };
 }
 
+/**
+ * Per-call worker-vs-main-thread downscale router (dependency-injected so the
+ * worker→main-thread retry contract is unit-testable from Node).
+ *
+ * WHY PER CALL: the worker pool's readiness probe is async and resolves AFTER
+ * the photo handler is built (`buildOnAddPhotos` runs ONCE at mount), so the
+ * worker-vs-fallback decision MUST be made per call — baking it at mount time
+ * would freeze the slow path on `false` forever. `ready` already always-settles;
+ * the extra Promise.race timeout is belt-and-suspenders so a tap never hangs on
+ * the probe.
+ *
+ * The returned `async (file) => {...}` router resolves to a `{ blob, downscaled }`
+ * result on every path (a worker success passes through BY IDENTITY, so it may
+ * carry extra worker-provided fields like `width`/`height`):
+ * - Not-ready route (probe resolves/timeouts false): go straight to the throttled
+ *   main-thread decoder. NO retry — re-running the SAME decoder on a failure is
+ *   pointless.
+ * - Worker route: on a worker FAILURE (`{ downscaled: false }`, original bytes)
+ *   give the file ONE retry on the genuinely different main-thread decoder before
+ *   giving up. This runs behind the progress sheet, so the brief per-file
+ *   main-thread jank is acceptable (and bounded to files the worker couldn't do).
+ *
+ * @param {{ ready: Promise<boolean>, workerDownscale: (file: File) => Promise<any>,
+ *           mainDownscale: (file: File) => Promise<any>, timeoutMs?: number,
+ *           setTimer?: typeof setTimeout }} deps
+ */
+export function buildDownscaleRouter({
+  ready,
+  workerDownscale,
+  mainDownscale,
+  timeoutMs = 8000,
+  setTimer = (typeof setTimeout !== 'undefined' ? setTimeout : null),
+}) {
+  return async (file) => {
+    // With a null/absent setTimer (non-timer environments) skip the timeout arm
+    // and await `ready` directly — same null-setTimer guard idiom as
+    // createWorkerDownscaler. The race timer is intentionally NEVER cleared
+    // (preserved quirk from the original closure).
+    const ok = setTimer
+      ? await Promise.race([
+          ready,
+          new Promise((r) => setTimer(() => r(false), timeoutMs)),
+        ])
+      : await ready;
+    // Not-ready route: go straight to the throttled main-thread decoder. No retry
+    // — re-running the SAME decoder on a failure is pointless.
+    if (!ok) return mainDownscale(file);
+    // Worker route: on a worker FAILURE (resolves { downscaled: false }, original
+    // bytes) give the file ONE retry on the genuinely different main-thread decoder
+    // before giving up. This runs behind the progress sheet, so the brief per-file
+    // main-thread jank is acceptable (and bounded to files the worker couldn't do).
+    const r = await workerDownscale(file);
+    if (r && r.downscaled) return r;
+    return mainDownscale(file);
+  };
+}
+
 /** Generate a UUID for the unique storage path. Falls back if crypto is absent. */
 function uuid() {
   try {
@@ -4469,29 +4526,17 @@ function buildOnAddPhotos(service) {
     ref, uploadBytesResumable, getDownloadURL,
   } = fb;
 
-  // Per-call downscale router. The worker readiness probe is async and resolves
-  // AFTER this handler is built (buildOnAddPhotos runs ONCE at mount), so the
-  // worker-vs-fallback decision MUST be made per call — baking it at mount time
-  // would freeze the slow path forever. `wd.ready` already always-settles; the
-  // extra Promise.race timeout is belt-and-suspenders so a tap never hangs on the
-  // probe. On the fallback path we use the anti-freeze throttled main-thread path.
+  // Per-call downscale router (the worker-vs-fallback decision MUST be made per
+  // call, never baked at mount — full rationale on buildDownscaleRouter). The
+  // defaults (8000ms, real setTimeout) keep runtime behavior identical to the
+  // pre-extraction closure. Detaching `wd.downscale` as a bare reference is safe:
+  // the pool returns a this-free closure bag (see createWorkerDownscaler's return).
   const wd = getWorkerDownscaler();
-  const downscaleRouted = async (file) => {
-    const ok = await Promise.race([
-      wd.ready,
-      new Promise((r) => setTimeout(() => r(false), 8000)),
-    ]);
-    // Not-ready route: go straight to the throttled main-thread decoder. No retry
-    // — re-running the SAME decoder on a failure is pointless.
-    if (!ok) return downscaleImageThrottled(file);
-    // Worker route: on a worker FAILURE (resolves { downscaled: false }, original
-    // bytes) give the file ONE retry on the genuinely different main-thread decoder
-    // before giving up. This runs behind the progress sheet, so the brief per-file
-    // main-thread jank is acceptable (and bounded to files the worker couldn't do).
-    const r = await wd.downscale(file);
-    if (r && r.downscaled) return r;
-    return downscaleImageThrottled(file);
-  };
+  const downscaleRouted = buildDownscaleRouter({
+    ready: wd.ready,
+    workerDownscale: wd.downscale,
+    mainDownscale: downscaleImageThrottled,
+  });
 
   const sync = wirePhotoSync({
     pickFiles: pickFilesBrowser,

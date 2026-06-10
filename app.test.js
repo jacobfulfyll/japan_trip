@@ -63,6 +63,7 @@ import {
   isAllowedUploadOrigin,
   setSubscribePhotos,
   createWorkerDownscaler,
+  buildDownscaleRouter,
   readRunMarker,
   writeRunMarker,
   clearRunMarker,
@@ -9246,6 +9247,200 @@ test('createWorkerDownscaler: a reply with only width (no height) omits BOTH dim
 });
 
 // ===========================================================================
+// buildDownscaleRouter — the per-call worker-vs-main-thread router seam
+// (export-downscale-router-seam)
+//
+// Extracted from buildOnAddPhotos' inline `downscaleRouted` wrapper so the
+// routing/retry contract is directly unit-testable. The router races the worker
+// pool's async `ready` probe against a timeout, then:
+//   - not-ready (false / timeout)  → mainDownscale, NO retry
+//   - ready + worker SUCCESS        → pass the worker result straight through
+//   - ready + worker FAILURE        → exactly ONE retry on the (different)
+//                                     main-thread decoder
+//
+// HARD RULE for these tests: EVERY case injects a stub `setTimer` so the real
+// 8000ms default timeout never leaks (a resolved `ready` still leaves the
+// uncleared race timer alive ~8s — the timer is intentionally never cleared, a
+// preserved quirk, NOT a contract — so we never assert on the stub timer's call
+// count or clearing, only inject it to keep the node process from hanging).
+// ===========================================================================
+
+// Stub timer that records (fn, ms) and lets a test fire the callback manually
+// (or never). Returns a handle; the router never clears it (preserved quirk).
+function makeStubTimer() {
+  const calls = [];
+  const setTimer = (fn, ms) => {
+    const handle = { fn, ms, fired: false };
+    calls.push(handle);
+    return handle;
+  };
+  // Fire the most recently scheduled timer's callback (the router's race timer).
+  const fire = () => {
+    const t = calls[calls.length - 1];
+    t.fired = true;
+    t.fn();
+  };
+  return { setTimer, calls, fire };
+}
+
+const routerFile = (name) => fakeFile(name, 4321);
+
+test('buildDownscaleRouter: ready→worker SUCCESS passes the worker result through untouched (identity); mainDownscale never called', async () => {
+  const { setTimer } = makeStubTimer();
+  const workerResult = { blob: { tag: 'downscaled' }, downscaled: true, width: 2048, height: 1536 };
+  let mainCalls = 0;
+  const router = buildDownscaleRouter({
+    ready: Promise.resolve(true),
+    workerDownscale: async () => workerResult,
+    mainDownscale: async () => { mainCalls += 1; return { blob: 'MAIN', downscaled: true }; },
+    setTimer,
+  });
+  const out = await router(routerFile('a.jpg'));
+  assert.equal(out, workerResult, 'the EXACT worker result object is returned (identity, not a copy)');
+  assert.equal(mainCalls, 0, 'the main-thread decoder is never touched on worker success');
+});
+
+test('buildDownscaleRouter: ready→worker FAILURE retries exactly ONCE on mainDownscale; its result returned (identity); worker called once', async () => {
+  const { setTimer } = makeStubTimer();
+  const f = routerFile('a.jpg');
+  let workerCalls = 0;
+  let mainCalls = 0;
+  const mainResult = { blob: { tag: 'main' }, downscaled: true };
+  const router = buildDownscaleRouter({
+    ready: Promise.resolve(true),
+    workerDownscale: async (file) => { workerCalls += 1; return { blob: file, downscaled: false }; },
+    mainDownscale: async (file) => { mainCalls += 1; assert.equal(file, f, 'retry gets the SAME file'); return mainResult; },
+    setTimer,
+  });
+  const out = await router(f);
+  assert.equal(out, mainResult, 'the main-thread result is returned by identity');
+  assert.equal(workerCalls, 1, 'worker tried exactly once (no double-retry on the worker)');
+  assert.equal(mainCalls, 1, 'main-thread decoder ran exactly once (single retry)');
+});
+
+test('buildDownscaleRouter: not-ready (ready=false) goes straight to mainDownscale with the file; worker never called; no retry even if main also fails', async () => {
+  const { setTimer } = makeStubTimer();
+  const f = routerFile('a.jpg');
+  let workerCalls = 0;
+  let mainCalls = 0;
+  // Even a main result of { downscaled:false } must NOT trigger a re-run — the
+  // not-ready route has no retry semantics (re-running the same decoder is pointless).
+  const mainResult = { blob: f, downscaled: false };
+  const router = buildDownscaleRouter({
+    ready: Promise.resolve(false),
+    workerDownscale: async () => { workerCalls += 1; return { blob: f, downscaled: true }; },
+    mainDownscale: async (file) => { mainCalls += 1; assert.equal(file, f, 'main gets the file directly'); return mainResult; },
+    setTimer,
+  });
+  const out = await router(f);
+  assert.equal(out, mainResult, 'the (single) main-thread result is returned');
+  assert.equal(workerCalls, 0, 'the worker is never dispatched on the not-ready route');
+  assert.equal(mainCalls, 1, 'main-thread decoder ran exactly once — no retry on the not-ready route');
+});
+
+test('buildDownscaleRouter: timeout — `ready` never settles; the stub timer fires false → falls to mainDownscale; worker never called', async () => {
+  const { setTimer, fire, calls } = makeStubTimer();
+  const f = routerFile('slow.jpg');
+  let workerCalls = 0;
+  let mainCalls = 0;
+  const mainResult = { blob: f, downscaled: true };
+  const router = buildDownscaleRouter({
+    ready: new Promise(() => {}),            // never settles
+    workerDownscale: async () => { workerCalls += 1; return { blob: f, downscaled: true }; },
+    mainDownscale: async () => { mainCalls += 1; return mainResult; },
+    timeoutMs: 50,
+    setTimer,
+  });
+  const p = router(f);
+  // The race scheduled exactly one timer; fire its callback to resolve the race to false.
+  assert.equal(calls.length, 1, 'the race scheduled exactly one timeout timer');
+  fire();
+  const out = await p;
+  assert.equal(out, mainResult, 'the timed-out probe falls to the main-thread decoder');
+  assert.equal(workerCalls, 0, 'a probe timeout never dispatches the worker');
+  assert.equal(mainCalls, 1, 'main-thread decoder ran once after the timeout');
+});
+
+test('buildDownscaleRouter: fast path — `ready` resolves true before the timer fires (timer never fired) → worker route taken', async () => {
+  const { setTimer } = makeStubTimer();   // deliberately never call fire()
+  const f = routerFile('a.jpg');
+  let workerCalls = 0;
+  const workerResult = { blob: { tag: 'w' }, downscaled: true };
+  const router = buildDownscaleRouter({
+    ready: Promise.resolve(true),
+    workerDownscale: async () => { workerCalls += 1; return workerResult; },
+    mainDownscale: async () => { throw new Error('main must not run when ready wins the race'); },
+    timeoutMs: 50,
+    setTimer,
+  });
+  const out = await router(f);
+  assert.equal(out, workerResult, 'ready winning the race takes the worker route');
+  assert.equal(workerCalls, 1, 'worker dispatched once on the fast path');
+});
+
+test('buildDownscaleRouter: setTimer:null guard — skips the race arm and awaits `ready` directly (no throw)', async () => {
+  const f = routerFile('a.jpg');
+  let workerCalls = 0;
+  const workerResult = { blob: { tag: 'w' }, downscaled: true };
+  const router = buildDownscaleRouter({
+    ready: Promise.resolve(true),
+    workerDownscale: async () => { workerCalls += 1; return workerResult; },
+    mainDownscale: async () => { throw new Error('main must not run when ready resolves true'); },
+    setTimer: null,           // non-timer environment: no race arm
+  });
+  const out = await router(f);
+  assert.equal(out, workerResult, 'with no timer the router awaits `ready` directly and routes to the worker');
+  assert.equal(workerCalls, 1, 'worker dispatched once');
+});
+
+test('buildDownscaleRouter: a worker reply of null/undefined is treated as a FAILURE (r && r.downscaled) → one main retry', async () => {
+  const { setTimer } = makeStubTimer();
+  const f = routerFile('a.jpg');
+  let mainCalls = 0;
+  const mainResult = { blob: f, downscaled: true };
+  const router = buildDownscaleRouter({
+    ready: Promise.resolve(true),
+    workerDownscale: async () => null,        // falsy → must not crash on r.downscaled
+    mainDownscale: async () => { mainCalls += 1; return mainResult; },
+    setTimer,
+  });
+  const out = await router(f);
+  assert.equal(out, mainResult, 'a null worker reply retries on main, returning its result');
+  assert.equal(mainCalls, 1, 'the falsy-guard (`r && r.downscaled`) routes to exactly one main retry');
+});
+
+test('buildDownscaleRouter: a custom timeoutMs is passed through to the injected timer', async () => {
+  const { setTimer, calls } = makeStubTimer();
+  const router = buildDownscaleRouter({
+    ready: new Promise(() => {}),            // never settles, so the race relies on the timer
+    workerDownscale: async () => ({ blob: 'w', downscaled: true }),
+    mainDownscale: async () => ({ blob: 'm', downscaled: true }),
+    timeoutMs: 1234,
+    setTimer,
+  });
+  router(routerFile('a.jpg'));
+  // The route never resolves (we don't fire the timer), but we can assert the
+  // scheduled delay was the custom timeoutMs.
+  assert.equal(calls[calls.length - 1].ms, 1234, 'the race timer was scheduled with the custom timeoutMs');
+});
+
+test('buildDownscaleRouter: a workerDownscale REJECTION propagates (no smuggled try/catch); mainDownscale never called', async () => {
+  // The router deliberately has NO error handling — a rejection (as opposed to
+  // a resolved {downscaled:false}) is not the retry signal and must surface to
+  // the caller exactly as the pre-extraction closure surfaced it.
+  const { setTimer } = makeStubTimer();
+  let mainCalls = 0;
+  const router = buildDownscaleRouter({
+    ready: Promise.resolve(true),
+    workerDownscale: async () => { throw new Error('worker exploded'); },
+    mainDownscale: async () => { mainCalls += 1; return { blob: 'm', downscaled: true }; },
+    setTimer,
+  });
+  await assert.rejects(() => router(routerFile('a.jpg')), /worker exploded/);
+  assert.equal(mainCalls, 0, 'a rejection is NOT the retry signal — main never runs');
+});
+
+// ===========================================================================
 // minimize-upload-modal — interrupted-run marker units
 // (readRunMarker / writeRunMarker / clearRunMarker / createRunMarker)
 //
@@ -10330,37 +10525,28 @@ test('sniffImageType: a non-buffer input (null) -> null (defensive)', () => {
 //
 // SCOPE / COVERAGE BOUNDARY (read before editing):
 //   The worker->main-thread RETRY chain (AC #1: a worker failure triggers
-//   exactly one downscaleImageThrottled retry; a successful retry's blob is
-//   used; the worker-success and not-ready routes never retry) lives entirely
-//   inside `downscaleRouted` — a closure built in `buildOnAddPhotos`, which is
-//   browser-only and NOT exported (verified: only `createWorkerDownscaler` is
-//   exported from the downscale subsystem). `downscaleImageThrottled` and
-//   `buildOnAddPhotos` are likewise unexported. With app.js frozen for this
-//   stage, the retry branch is STRUCTURALLY UNOBSERVABLE from Node: the
-//   wirePhotoSync loop receives `downscale` as one opaque function and never
-//   sees the worker-vs-retry distinction, so NO wirePhotoSync seam test can
-//   bite the retry (a mutation deleting the retry passes the whole suite).
-//   The tests below therefore cover the BAIL OUTCOME (what wirePhotoSync does
-//   with `{downscaled:false}`: sniffed label, original bytes, tally, no new
-//   doc fields) — NOT the retry decision that produced it. The retry contract
-//   is deferred to VERIFY-APP per the concrete plan in the stage report
-//   ("Retry-chain coverage gap"); the closest reachable proof of its trigger
-//   precondition is the createWorkerDownscaler {ok:false} -> {downscaled:false}
-//   contract (asserted in the createWorkerDownscaler suite above and pinned
-//   again just below as the router's documented input).
+//   exactly one main-thread retry; a successful retry's blob is used; the
+//   worker-success and not-ready routes never retry) now lives in the EXPORTED
+//   `buildDownscaleRouter` factory (extracted out of the old `downscaleRouted`
+//   closure in `buildOnAddPhotos`). The router's retry DECISION is directly
+//   unit-tested against that factory (those tests are added in the WRITE-TESTS
+//   stage). The tests below cover the complementary BAIL OUTCOME side: what
+//   wirePhotoSync does once it receives `{downscaled:false}` — sniffed label,
+//   original bytes, tally, no new doc fields — NOT the retry decision that
+//   produced it. The createWorkerDownscaler {ok:false} -> {downscaled:false}
+//   test just below pins the worker-side input the router's retry keys off.
 //
 // fakeFileWithBytes adds a real `.slice(0,16).arrayBuffer()` to the File stub
 // so the loop's magic-byte sniff runs against controllable head bytes.
 // ===========================================================================
 
-test('createWorkerDownscaler: a worker {ok:false} reply yields {downscaled:false} — the EXACT signal downscaleRouted retries on', async () => {
-  // This pins the input contract the (unexported, browser-only) downscaleRouted
-  // retry keys off: `const r = await wd.downscale(file); if (r && r.downscaled)
-  // return r; return downscaleImageThrottled(file);`. The retry DECISION itself
-  // is unreachable from Node (see the SCOPE banner above) and is verified in
-  // VERIFY-APP; this guards the worker-side half of that contract so a change to
-  // the worker's failure shape (e.g. resolving {downscaled:true} on {ok:false})
-  // would fail here even though the router lives behind a frozen browser closure.
+test('createWorkerDownscaler: a worker {ok:false} reply yields {downscaled:false} — the EXACT signal the downscale router retries on', async () => {
+  // This pins the worker-side input the exported buildDownscaleRouter retry
+  // keys off: `const r = await workerDownscale(file); if (r && r.downscaled)
+  // return r; return mainDownscale(file);`. The router's retry DECISION is
+  // directly unit-tested against buildDownscaleRouter; this guards the
+  // worker-side half of that contract so a change to the worker's failure shape
+  // (e.g. resolving {downscaled:true} on {ok:false}) would fail here.
   const { spawn, workers } = makeFakeSpawn();
   const wd = createWorkerDownscaler({ spawn });
   const f = wkrFile('bail.jpg');
@@ -10388,8 +10574,8 @@ function fakeFileWithBytes(name, day, size, head, hhmmss = '12:00:00') {
 }
 
 // downscale stub that bails (both decoders failed): resolves the ORIGINAL file
-// as the blob, downscaled:false — exactly what downscaleRouted returns after the
-// worker fails AND the main-thread retry fails.
+// as the blob, downscaled:false — exactly what the buildDownscaleRouter-built
+// router returns after the worker fails AND the main-thread retry fails.
 function bailDownscale() {
   return asyncSpy((file) => ({ blob: file, downscaled: false }));
 }
