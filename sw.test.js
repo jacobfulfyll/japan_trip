@@ -620,10 +620,10 @@ test('a non-/firebasejs/ path on www.gstatic.com is NOT intercepted by the Fireb
   assert.equal(event._responded, false, 'only the /firebasejs/ path should route to the SDK cache');
 });
 
-test('CACHE_VERSION is v40 (TEMP: shift trip dates to start Jun 1 for live photo-feature testing — data/days.js shell change; revert after testing)', () => {
+test('CACHE_VERSION is v39 (map pins open Google Maps directions mode + ⓘ place link on rec cards — index.html + app.js shell change)', () => {
   // sw.test.js derives CACHE_VERSION from the sw.js literal; this pins the
   // expected value so an accidental revert of the bump fails loudly.
-  assert.equal(CACHE_VERSION, 'v40');
+  assert.equal(CACHE_VERSION, 'v39');
 });
 
 // ===========================================================================
