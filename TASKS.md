@@ -2,23 +2,6 @@
 
 ## Active Tasks
 
-### redesign-gallery-mosaic
-**Task**: "Seigaiha" gallery — card-bleed 3-col square mosaic @75vh, hash crests + dims-gated panoramas, hole-free via list-based demotion + property test
-**Pipeline**: code-workflow
-**Branch**: task/redesign-gallery-mosaic
-**Worktree**: .worktree/redesign-gallery-mosaic
-**Base**: main
-**Started**: 2026-06-10
-**Files**:
-- MOD: app.js
-- MOD: index.html
-- MOD: app.test.js
-- MOD: sw.js
-- MOD: sw.test.js
-- MOD: CLAUDE.md
-- MOD: README.md
-- MOD: CHANGELOG.md
-
 ### speed-up-photo-picker-handoff
 **Task**: Kill the 30–60s iOS in-picker freeze — accept HEIC originals + multi-container EXIF dating (HEIC ISO-BMFF + PNG eXIf for screenshots)
 **Pipeline**: code-workflow
