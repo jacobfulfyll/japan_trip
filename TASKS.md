@@ -22,6 +22,24 @@
 
 ---
 
+### harden-uploaded-url-origin
+**Task**: Constrain uploaded photo URLs in the reminisce gallery to the Firebase Storage origin (allowlist on mergeGalleryPhotos' uploaded branch; authored/relative unaffected) — defense-in-depth
+**Pipeline**: code-workflow
+**Branch**: task/harden-uploaded-url-origin
+**Worktree**: .worktree/harden-uploaded-url-origin
+**Base**: main
+**Started**: 2026-06-10
+**Files**:
+- MOD: app.js
+- MOD: app.test.js
+- MOD: sw.js
+- MOD: sw.test.js
+- MOD: CLAUDE.md
+- MOD: README.md
+- MOD: CHANGELOG.md
+
+---
+
 ## Backlog
 
 ### Trip Content & Schedule
@@ -39,8 +57,6 @@
 <!-- v2.1 polish/perf on the photo journal + day-view UX. ALL SIX tasks below touch app.js + bump sw.js CACHE_VERSION → MUTUALLY CONFLICTING; run SERIALLY in listed order, reconciling CACHE_VERSION to the next FREE value at each merge (currently v36 after minimize-upload-modal merged 2026-06-09; lockstep: sw.js:23 + sw.test.js pinned title + assert — check main at merge time, not branch time). make-gallery-scrollable HARD-depends on harden-upload-bail-path (same downscale-result destructure). Each task also updates the test-count claim in CLAUDE.md/README/CHANGELOG. All tiered fable:high by user decision (serial chain, 7 days to trip): run pickup sessions on Fable, e.g. /reggie-code-workflow --tier fable:high. -->
 - [ ] make-map-links-directions: Map pins open Google Maps directions from current location (📍 = directions everywhere; ⓘ = place page on rec cards) — render-time URL rewrite, no data edits, no travelmode forced [P2] [conflicts: slice-exif-read, harden-upload-bail-path, make-gallery-scrollable, minimize-upload-modal, harden-uploaded-url-origin] [simple] [tier: fable:high] [code] [planned]
   files: app.js (MOD), index.html (MOD), app.test.js (MOD), sw.js (MOD), sw.test.js (MOD), CLAUDE.md (MOD), README.md (MOD), CHANGELOG.md (MOD)
-- [ ] harden-uploaded-url-origin: Constrain uploaded photo URLs in the reminisce gallery to the Firebase Storage origin (allowlist on mergeGalleryPhotos' uploaded branch; authored/relative unaffected) — defense-in-depth [P3] [conflicts: slice-exif-read, harden-upload-bail-path, make-gallery-scrollable, minimize-upload-modal, make-map-links-directions] [simple] [tier: fable:high] [code] [planned]
-  files: app.js (MOD), app.test.js (MOD), sw.js (MOD), sw.test.js (MOD), CLAUDE.md (MOD), README.md (MOD), CHANGELOG.md (MOD)
 
 ### Ungroomed
 
