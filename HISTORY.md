@@ -51,3 +51,4 @@
 - [x] slice-exif-read Read only first ~128KB per file for EXIF + mount the progress sheet immediately ("Preparing photos…") — fixes the picker→progress dead air -- 2026-06-09
 - [x] harden-upload-bail-path Downscale failure → one main-thread retry → still failing → silently upload ORIGINAL bytes with TRUE contentType/extension (magic-byte sniff) -- 2026-06-09
 - [x] minimize-upload-modal Minimizable upload progress modal (– / backdrop → floating pill) + interrupted-run recovery (jt:upload-run marker, heartbeat, boot-only one-shot notice) -- 2026-06-09
+- [x] harden-uploaded-url-origin Constrain uploaded reminisce-gallery photo URLs to the Firebase Storage origin (defense-in-depth allowlist on mergeGalleryPhotos' uploaded branch; CACHE_VERSION v37) -- 2026-06-10

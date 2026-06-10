@@ -22,24 +22,6 @@
 
 ---
 
-### harden-uploaded-url-origin
-**Task**: Constrain uploaded photo URLs in the reminisce gallery to the Firebase Storage origin (allowlist on mergeGalleryPhotos' uploaded branch; authored/relative unaffected) — defense-in-depth
-**Pipeline**: code-workflow
-**Branch**: task/harden-uploaded-url-origin
-**Worktree**: .worktree/harden-uploaded-url-origin
-**Base**: main
-**Started**: 2026-06-10
-**Files**:
-- MOD: app.js
-- MOD: app.test.js
-- MOD: sw.js
-- MOD: sw.test.js
-- MOD: CLAUDE.md
-- MOD: README.md
-- MOD: CHANGELOG.md
-
----
-
 ## Backlog
 
 ### Trip Content & Schedule
