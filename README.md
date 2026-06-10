@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← tests for the data/API/nav layer (node --test; 458 total with sw.test.js).
+app.test.js    ← tests for the data/API/nav layer (node --test; 471 total with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -352,9 +352,11 @@ A few deliberate behaviours:
   never replace another — duplicates are possible, photo loss is not.
 - **Re-adding is safe.** Re-selecting photos you already uploaded is skipped
   (best-effort dedup), so you can tap Add again without making copies.
-- **Correct day, no silent guesses.** When a photo has no readable capture date,
-  the app asks you to confirm a single date for that batch instead of filing it
-  on the wrong day. Photos taken outside the trip window are skipped.
+- **Correct day, no silent guesses.** When a photo has no readable EXIF capture
+  date, the app falls back to the file's last-modified day. Only when even that
+  hint is missing does it ask you to confirm a single date for that batch,
+  instead of filing it on the wrong day. Photos taken outside the trip window are
+  skipped.
 - **Add photos is only enabled once the trip has started.** Before Jun 16 the row
   is disabled.
 
@@ -432,7 +434,7 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The test suite (**458 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The test suite (**471 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),

@@ -5787,6 +5787,101 @@ test('readExifDateTimeOriginal: bad TIFF byte-order marker -> null', () => {
   assert.equal(readExifDateTimeOriginal(buf), null);
 });
 
+// --- slice-exif-read: header-slice truncation robustness --------------------
+// The capture-date reader now reads only file.slice(0, EXIF_SCAN_BYTES) before
+// parsing (app.js ~2607). If the EXIF block is absent or cut off mid-structure
+// inside that slice, the parser must return null and NEVER throw — the no-EXIF
+// lastModified/batch-date fallback then takes over. These cases hand-build a
+// known-good fixture and slice it at adversarial boundaries (the same operation
+// `file.slice` performs), exercising the parser the way the slice feeds it.
+
+test('readExifDateTimeOriginal: a slice that cuts INTO the IFD entry table -> null, no throw', () => {
+  // Build a full fixture, then truncate so the byte stream ends partway through
+  // IFD0's 12-byte entry array (after the TIFF header + entry-count word, but
+  // before the value-offset blobs the entries point at). This is the canonical
+  // "EXIF cut off mid-structure" case the header slice can produce.
+  const full = buildExifJpeg({ dto: '2026:06:25 23:30:00', endian: 'II' });
+  // TIFF starts at offset 12; IFD0 starts at TIFF+8 = 20; the entry table begins
+  // at IFD0+2 = 22. Cut at 22+6 so we land mid-entry (a 12-byte entry is only
+  // 6 bytes in), guaranteeing the `e + 12 > len` bounds guard trips.
+  const midIfd = full.slice(0, 22 + 6);
+  assert.doesNotThrow(() => readExifDateTimeOriginal(midIfd));
+  assert.equal(readExifDateTimeOriginal(midIfd), null);
+});
+
+test('readExifDateTimeOriginal: a slice that ends after the IFD but before the value blobs -> null, no throw', () => {
+  // Cut right after the Exif sub-IFD's next-IFD pointer but before the 20-byte
+  // ASCII DateTimeOriginal blob it references — the value-offset bounds check
+  // (`valOff + num > len`) must reject it rather than read past the end.
+  const full = buildExifJpeg({ dto: '2026:06:25 23:30:00', endian: 'II' });
+  // The DTO value blob is the last 20 bytes before the 2-byte EOI; dropping the
+  // EOI + the full value blob lands us just past the IFDs.
+  const beforeValue = full.slice(0, full.length - 2 /* EOI */ - 20 /* DTO blob */);
+  assert.doesNotThrow(() => readExifDateTimeOriginal(beforeValue));
+  assert.equal(readExifDateTimeOriginal(beforeValue), null);
+});
+
+test('readExifDateTimeOriginal: an APP1 segLen pointing past the buffer end -> null, no throw', () => {
+  // Corrupt the APP1 segment-length field (big-endian, at offset 4-5) to claim a
+  // segment far larger than the actual bytes — a hostile/garbled file. The walk
+  // must not over-read or throw; it finds the Exif signature within the slice but
+  // every downstream bounds guard keeps it safe, or it simply yields null.
+  const full = buildExifJpeg({ dto: '2026:06:25 23:30:00', endian: 'II' });
+  full[4] = 0xff; full[5] = 0xff; // segLen = 65535, way past the real buffer
+  assert.doesNotThrow(() => readExifDateTimeOriginal(full));
+  // The oversized segLen doesn't corrupt the in-slice TIFF block (segLen is only
+  // used to SKIP to the next segment, and APP1 is matched first), so this fixture
+  // still resolves the DTO — the point is no throw / no over-read.
+  assert.equal(readExifDateTimeOriginal(full), '2026:06:25 23:30:00');
+});
+
+test('readExifDateTimeOriginal: APP1 segLen past end with NO Exif signature -> null, no throw', () => {
+  // SOI + an APP1 whose length claims more bytes than exist AND whose payload is
+  // not "Exif\0\0". The segment-length over-read must be bounds-safe; no Exif ->
+  // null. Guards the `segStart + 6 <= len` signature check and the skip arithmetic.
+  const buf = new Uint8Array([
+    0xff, 0xd8,             // SOI
+    0xff, 0xe1, 0xff, 0xff, // APP1, segLen = 65535 (lies, only a few bytes follow)
+    0x68, 0x74, 0x74, 0x70, // "http" payload (not the Exif signature)
+  ]);
+  assert.doesNotThrow(() => readExifDateTimeOriginal(buf));
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+test('readExifDateTimeOriginal: a fixture whose EXIF fits entirely within EXIF_SCAN_BYTES still parses', () => {
+  // Sanity on slice semantics: the parser is byte-identical pre/post-slice; a file
+  // whose EXIF lives near the front (always true for real JPEGs) parses the same
+  // whether you hand it the whole file or just the header slice. Our synthetic
+  // fixture is a few hundred bytes — far under 128 KB — so slicing is a no-op here,
+  // but the assert documents the invariant the slice relies on.
+  const EXIF_SCAN_BYTES = 131072; // mirrors the app.js constant (not exported)
+  const full = buildExifJpeg({ dto: '2026:06:28 09:45:00', endian: 'II' });
+  assert.ok(full.length < EXIF_SCAN_BYTES, 'fixture is well under the scan window');
+  const head = full.slice(0, EXIF_SCAN_BYTES); // == full, since full is smaller
+  assert.equal(readExifDateTimeOriginal(head), '2026:06:28 09:45:00');
+  assert.equal(readCaptureDate(head), '2026-06-28 09:45:00');
+});
+
+test('readExifDateTimeOriginal: header slice of a large file (EXIF in front, padding after) still parses', () => {
+  // Simulate what file.slice(0, EXIF_SCAN_BYTES) produces for a multi-MB photo:
+  // EXIF in the first ~few-hundred bytes, then a long image-data tail. The slice
+  // KEEPS the front (where EXIF lives) and DROPS the tail — so taking the front
+  // 131072 bytes of a synthetic "big" file must still recover the date.
+  const EXIF_SCAN_BYTES = 131072; // mirrors the app.js constant (not exported)
+  const head = buildExifJpeg({ dto: '2026:07:02 17:05:00', endian: 'MM' });
+  // Append a large "image data" tail to mimic a real >128 KB JPEG. The EOI in the
+  // middle is fine — the parser stops at SOS/EOI and never reaches the padding.
+  const tail = new Uint8Array(200000).fill(0x7f);
+  const big = new Uint8Array(head.length + tail.length);
+  big.set(head, 0);
+  big.set(tail, head.length);
+  assert.ok(big.length > EXIF_SCAN_BYTES, 'the simulated file exceeds the scan window');
+  // The slice the call site takes: front EXIF_SCAN_BYTES bytes only.
+  const sliced = big.slice(0, EXIF_SCAN_BYTES);
+  assert.equal(readExifDateTimeOriginal(sliced), '2026:07:02 17:05:00');
+  assert.equal(readCaptureDate(sliced), '2026-07-02 17:05:00');
+});
+
 // --- exifDateTimeString ------------------------------------------------------
 
 test('exifDateTimeString: normalizes EXIF colons to sortable dashes', () => {
@@ -6568,6 +6663,199 @@ test('wirePhotoSync: EXIF-read yield preserves every file across a large batch (
   const dates = deps.writeDoc.calls.map(([doc]) => doc.date).sort();
   const counts = dates.reduce((m, d) => (m[d] = (m[d] || 0) + 1, m), {});
   assert.deepEqual(counts, { '2026-06-25': 3, '2026-06-26': 3, '2026-06-27': 2 });
+});
+
+// --- slice-exif-read: early progress-sheet mount + teardown invariants -------
+// The progress sheet now mounts IMMEDIATELY after the offline early-return —
+// BEFORE the dedup preload (readDedup) and BEFORE the per-file EXIF loop
+// (readDate) — in an indeterminate "Preparing photos…" state, so the screen
+// appears the instant the picker closes (the slice fix removes the dead-air, the
+// early mount covers whatever read time remains). It flips to the determinate
+// "Adding N of M…" counting bar at the upload phase (first setProgress). Every
+// exit after mount must settle the sheet: finish() on the normal path, destroy()
+// on the empty-prepared bail, destroy()+rethrow on an unexpected throw. Pre-mount
+// paths (identity dismissed / empty pick / offline) mount NOTHING.
+
+test('wirePhotoSync: progress sheet mounts BEFORE the dedup preload and the EXIF read loop', async () => {
+  const files = [
+    datedFile('a.jpg', '2026-06-25', 30001),
+    datedFile('b.jpg', '2026-06-26', 30002),
+  ];
+  const { deps, progressSheet } = makePhotoHarness({ files });
+
+  // Record the global call order across the three boundaries. progress() is the
+  // synchronous mount; readDedup is the preload; readDate is the per-file loop.
+  const order = [];
+  deps.progress = syncSpy(() => { order.push('progress'); return progressSheet; });
+  const origReadDedup = deps.readDedup;
+  deps.readDedup = asyncSpy((...a) => { order.push('readDedup'); return origReadDedup(...a); });
+  deps.readDate = asyncSpy((file) => {
+    order.push('readDate');
+    return { exifDateTime: file._exif, date: file._date, fromExif: true };
+  });
+
+  const { run } = wirePhotoSync(deps);
+  await runQuiet(() => run('2026-06-25'));
+
+  // The sheet mounted exactly once, and it mounted FIRST — before any preload or
+  // per-file read. (The dead-air bug was: nothing on screen until these finished.)
+  assert.equal(deps.progress.calls.length, 1, 'mounted exactly once');
+  assert.equal(order[0], 'progress', 'progress() is the first of the three boundaries');
+  const firstDedup = order.indexOf('readDedup');
+  const firstReadDate = order.indexOf('readDate');
+  assert.ok(firstDedup > 0, 'dedup preload ran');
+  assert.ok(firstReadDate > 0, 'at least one EXIF read ran');
+  assert.ok(order.indexOf('progress') < firstDedup, 'progress mounts before the dedup preload');
+  assert.ok(order.indexOf('progress') < firstReadDate, 'progress mounts before the first EXIF read');
+});
+
+test('wirePhotoSync: sheet opens indeterminate then flips to counting at the upload phase', async () => {
+  // The first setProgress call is (0, total) and happens AFTER every readDate has
+  // completed (i.e. at the start of the upload phase) — proving the sheet sat in
+  // its indeterminate "Preparing photos…" state for the whole prepare phase, then
+  // flipped to the determinate counting bar.
+  const files = [
+    datedFile('a.jpg', '2026-06-25', 31001),
+    datedFile('b.jpg', '2026-06-26', 31002),
+    datedFile('c.jpg', '2026-06-27', 31003),
+  ];
+  const { deps, progressSheet } = makePhotoHarness({ files });
+
+  let readDateCount = 0;
+  deps.readDate = asyncSpy((file) => {
+    readDateCount += 1;
+    return { exifDateTime: file._exif, date: file._date, fromExif: true };
+  });
+  // Capture how many readDate calls had completed at the moment of the FIRST
+  // setProgress — the flip must come strictly after the prepare loop drains.
+  let readDateCountAtFirstSetProgress = -1;
+  const origSetProgress = progressSheet.setProgress;
+  progressSheet.setProgress = syncSpy((done, total) => {
+    if (readDateCountAtFirstSetProgress === -1) readDateCountAtFirstSetProgress = readDateCount;
+    return origSetProgress(done, total);
+  });
+
+  const { run } = wirePhotoSync(deps);
+  await runQuiet(() => run('2026-06-25'));
+
+  const calls = progressSheet.setProgress.calls;
+  assert.ok(calls.length > 0, 'the bar flipped to counting at least once');
+  assert.deepEqual(calls[0], [0, files.length], 'first counting call is (0, total)');
+  assert.equal(readDateCountAtFirstSetProgress, files.length,
+    'the indeterminate→counting flip happens only after every EXIF read completes');
+});
+
+test('wirePhotoSync: offline mounts NO progress sheet (sheet only appears after the connectivity gate)', async () => {
+  // Extends the existing offline test: assert the progress factory is NEVER called
+  // offline. The connectivity gate sits BEFORE the mount, so a failed upload run
+  // never flashes an empty progress sheet.
+  const files = [datedFile('a.jpg', '2026-06-25', 32001)];
+  const { deps, progressSheet } = makePhotoHarness({ files, isOnline: false });
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+
+  assert.equal(result, undefined);
+  assert.equal(deps.progress.calls.length, 0, 'no sheet mounts when offline');
+  assert.equal(progressSheet.setProgress.calls.length, 0);
+  assert.equal(progressSheet.finish.calls.length, 0);
+  assert.equal(progressSheet.destroy.calls.length, 0, 'nothing to tear down — never mounted');
+});
+
+test('wirePhotoSync: dismissing the identity prompt mounts NO progress sheet', async () => {
+  // Pre-mount path: the identity prompt is dismissed before pickFiles, so the
+  // mount point is never reached.
+  const { deps, progressSheet } = makePhotoHarness({
+    files: [datedFile('a.jpg', '2026-06-25', 33001)],
+    storedUploader: null,
+    askUploaderResult: null, // dismissed
+  });
+  const { run } = wirePhotoSync(deps);
+  await runQuiet(() => run('2026-06-25'));
+  assert.equal(deps.progress.calls.length, 0, 'no sheet mounts when identity is dismissed');
+  assert.equal(progressSheet.destroy.calls.length, 0);
+});
+
+test('wirePhotoSync: empty-prepared batch destroys the sheet (no orphan) and returns undefined', async () => {
+  // A single no-date file whose batch-date prompt is cancelled -> prepared.length
+  // is 0. The sheet was already mounted (we're past the offline gate), so the
+  // empty-prepared bail MUST destroy() it (no orphaned overlay) and never call
+  // finish/setProgress. Extends the existing cancel-batch test with the teardown
+  // assertion the early mount makes necessary.
+  const f1 = fakeFile('no-date.jpg', 34001);
+  const { deps, progressSheet } = makePhotoHarness({
+    files: [f1],
+    dateFor: () => ({ exifDateTime: null, date: null, fromExif: false }),
+    askBatchDateResult: null, // user cancels the whole-batch date prompt
+  });
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+
+  assert.equal(result, undefined, 'nothing prepared -> early return');
+  assert.equal(deps.progress.calls.length, 1, 'the sheet WAS mounted (past the offline gate)');
+  assert.equal(progressSheet.destroy.calls.length, 1, 'the sheet was torn down (no orphan)');
+  assert.equal(progressSheet.finish.calls.length, 0, 'finish never runs on the empty-prepared path');
+  assert.equal(progressSheet.setProgress.calls.length, 0, 'never flipped to counting');
+  assert.equal(deps.uploadBlob.calls.length, 0, 'nothing uploaded');
+});
+
+test('wirePhotoSync: an unexpected post-mount throw destroys the sheet exactly once and propagates', async () => {
+  // askBatchDate runs AFTER the sheet mounts but BEFORE the upload phase. Make it
+  // reject (an unexpected failure, NOT a user cancel) and assert the catch tears
+  // the sheet down exactly once, then rethrows so the caller's error surface still
+  // fires. (readDedup failures are CAUGHT internally, so we throw through a dep
+  // that is genuinely unguarded between mount and finish.)
+  const f1 = fakeFile('no-date.jpg', 35001);
+  const { deps, progressSheet } = makePhotoHarness({
+    files: [f1],
+    dateFor: () => ({ exifDateTime: null, date: null, fromExif: false }),
+  });
+  const boom = new Error('batch-date prompt exploded');
+  deps.askBatchDate = asyncSpy(() => { throw boom; });
+
+  const { run } = wirePhotoSync(deps);
+  await assert.rejects(
+    () => runQuiet(() => run('2026-06-25')).then((r) => r.result),
+    /batch-date prompt exploded/,
+    'the unexpected throw propagates to the caller',
+  );
+  assert.equal(deps.progress.calls.length, 1, 'the sheet was mounted before the throw');
+  assert.equal(progressSheet.destroy.calls.length, 1, 'destroyed exactly once on the throw path');
+  assert.equal(progressSheet.finish.calls.length, 0, 'finish never runs on the throw path');
+});
+
+test('wirePhotoSync: re-entrancy latch clears after a post-mount throw (a later run works)', async () => {
+  // The throw path tears down the sheet AND must clear the `running` latch in the
+  // finally block — otherwise the feature would be wedged after one error. Drive a
+  // throwing run, then a clean run, and assert the clean one completes normally.
+  //
+  // NOTE: wirePhotoSync DESTRUCTURES deps at construction, so reassigning deps.X
+  // after wiring is inert (the existing tests reassign BEFORE wiring for exactly
+  // this reason). To change behavior between runs we toggle a `phase` flag that the
+  // SAME stub closures read — the dep references never change.
+  const good = datedFile('good.jpg', '2026-06-25', 36002);
+  let phase = 'throw';
+  const { deps, progressSheet } = makePhotoHarness({
+    // First run: a no-date file routes through askBatchDate (which throws). Second
+    // run: pickFiles returns a dated, in-window file that needs no batch prompt.
+    dateFor: (file) => (phase === 'throw'
+      ? { exifDateTime: null, date: null, fromExif: false }
+      : { exifDateTime: file._exif, date: file._date, fromExif: true }),
+  });
+  deps.pickFiles = asyncSpy(() => (phase === 'throw' ? [fakeFile('no-date.jpg', 36001)] : [good]));
+  deps.askBatchDate = asyncSpy(() => { throw new Error('first run blows up'); });
+  const { run } = wirePhotoSync(deps);
+
+  await assert.rejects(() => runQuiet(() => run('2026-06-25')).then((r) => r.result), /first run blows up/);
+  assert.equal(progressSheet.destroy.calls.length, 1, 'the failed run tore its own sheet down');
+  assert.equal(progressSheet.finish.calls.length, 0, 'the failed run never finished');
+
+  // Second run: a clean, dated, in-window file uploads normally — proving the
+  // latch cleared and the orchestrator recovered from the throw.
+  phase = 'ok';
+  const { result } = await runQuiet(() => run('2026-06-25'));
+  assert.equal(result.added, 1, 'a later run runs normally after the error');
+  assert.equal(progressSheet.finish.calls.length, 1, 'the recovered run finished its own sheet');
+  assert.equal(progressSheet.destroy.calls.length, 1, 'no extra teardown on the clean run');
 });
 
 // ===========================================================================

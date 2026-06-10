@@ -2578,18 +2578,37 @@ function fileToArrayBuffer(file) {
   });
 }
 
+// EXIF lives in the JPEG APP1 segment, whose payload the JPEG format hard-caps at
+// 65,533 bytes (the 16-bit length field, minus 2). Apple's worst-case header
+// (with MakerNote/thumbnail ahead of DateTimeOriginal) runs ≈ 68 KB. Reading the
+// first 128 KB covers that with margin while avoiding decoding the whole image
+// into memory just to find a 19-byte timestamp. If the tag isn't in the slice the
+// parser returns null and the file is silently bucketed by its lastModified day
+// (the batch-date prompt only fires when even that hint is unavailable).
+const EXIF_SCAN_BYTES = 131072; // 128 KB
+
 /**
  * Resolve a file's normalized EXIF datetime + bucket date.
  * Precedence: EXIF DateTimeOriginal string → File.lastModified → null (caller's
  * no-EXIF batch path supplies the user-correctable default). NEVER uses Date()
  * for the EXIF case. Returns { exifDateTime, date, fromExif }.
+ *
+ * Reads only the first ~128 KB of the file (see EXIF_SCAN_BYTES) — the EXIF
+ * timestamp is in the header, so slicing avoids loading the full image and is
+ * what fixes the dead-air delay between the picker and the progress sheet.
  * @param {File} file
  * @returns {Promise<{exifDateTime:string|null, date:string|null, fromExif:boolean}>}
  */
 async function fileCaptureDate(file) {
   let exifDateTime = null;
   try {
-    const buf = await fileToArrayBuffer(file);
+    // Slice the header at the CALL SITE (fileToArrayBuffer stays generic). The
+    // `typeof file.slice === 'function'` guard is defensive for test stubs / odd
+    // Blob-likes — fall back to reading the whole thing if slice is unavailable.
+    const head = (file && typeof file.slice === 'function')
+      ? file.slice(0, EXIF_SCAN_BYTES)
+      : file;
+    const buf = await fileToArrayBuffer(head);
     exifDateTime = readCaptureDate(buf);
   } catch {
     exifDateTime = null;
@@ -2597,10 +2616,11 @@ async function fileCaptureDate(file) {
   if (exifDateTime) {
     return { exifDateTime, date: bucketDateFromExif(exifDateTime), fromExif: true };
   }
-  // No EXIF → use lastModified as a best-effort hint for the bucket day, but mark
-  // it not-from-EXIF so the caller routes it through the user-correctable batch.
-  // lastModified is the camera/file mtime in device-local terms; localISODate is
-  // acceptable HERE (it's a hint the user can override), unlike for EXIF.
+  // No EXIF → use lastModified as the bucket day directly (the caller's batch-date
+  // prompt only fires for records whose date stays null, i.e. when even this hint
+  // is unavailable). lastModified is the camera/file mtime in device-local terms;
+  // localISODate is acceptable HERE (a best-effort bucket; out-of-window days are
+  // skipped by the window filter, never silently mis-filed), unlike for EXIF.
   if (file && Number.isFinite(file.lastModified) && file.lastModified > 0) {
     const lm = localISODate(new Date(file.lastModified));
     return { exifDateTime: null, date: lm, fromExif: false };
@@ -2947,18 +2967,26 @@ function promptBatchDate(count, defaultIso) {
 }
 
 /**
- * Progress sheet: a live "Adding N of M…" line that swaps to a summary + Done
- * button when finished. Body-mounted, NOT dismissible while running. Returns
- * { setProgress(done,total), finish(summaryText), destroy }.
+ * Progress sheet: opens in an INDETERMINATE "Preparing photos…" state the instant
+ * it's built (so the screen appears immediately after the picker), then flips to a
+ * live "Adding N of M…" line on the first setProgress() call, finally swapping to a
+ * summary + Done button when finished. Body-mounted, NOT dismissible while running.
+ * Returns { setProgress(done,total), finish(summaryText), destroy }.
+ *
+ * The determinate fill bar is HIDDEN until setProgress() runs — showing a 0%
+ * (or any) fill during the indeterminate prepare phase would imply false progress.
+ * No new CSS: the bar is hidden via the `hidden` attribute (index.html is off-limits
+ * for this task), revealed on the flip to counting.
  */
 function buildProgressSheet() {
   const modal = buildModalSheet({ titleText: 'Adding photos', dismissible: false });
   const status = el('p', 'photo-progress-status');
   status.setAttribute('aria-live', 'polite');
-  status.textContent = 'Preparing…';
+  status.textContent = 'Preparing photos…';
   modal.bodyEl.appendChild(status);
 
   const bar = el('div', 'photo-progress-bar');
+  bar.hidden = true; // indeterminate prepare phase shows no (false) determinate fill
   const fill = el('div', 'photo-progress-fill');
   bar.appendChild(fill);
   modal.bodyEl.appendChild(bar);
@@ -2973,6 +3001,7 @@ function buildProgressSheet() {
 
   return {
     setProgress(done, total) {
+      bar.hidden = false; // reveal the determinate bar on the flip to counting
       status.textContent = `Adding ${done} of ${total}…`;
       const pct = total > 0 ? Math.round((done / total) * 100) : 0;
       try { fill.style.width = `${pct}%`; } catch { /* stub has no style */ }
@@ -3094,118 +3123,146 @@ export function wirePhotoSync(deps) {
         return undefined;
       }
 
-      const cleanUploader = sanitizePathSegment(uploader);
-      const windowSet = new Set(windowDates());
-      // Soft client-side lastUpload bound is applied inside readDedup's consumer;
-      // here we just preload all of this uploader's keys (single-field query).
-      let dedupSet;
-      try {
-        dedupSet = await readDedup(uploader);
-      } catch (err) {
-        // Dedup preload failure is non-fatal — proceed without it (worst case: a
-        // duplicate, never a loss). But a network failure here likely means the
-        // uploads will fail too; surface it if offline.
-        dedupSet = new Set();
-        console.warn('[photos] dedup preload failed:', err);
-      }
-      if (!(dedupSet instanceof Set)) dedupSet = new Set(dedupSet || []);
-
-      // Phase 1: read capture dates (cheap, pre-decode). Partition into dated
-      // (EXIF or lastModified) vs. no-date files needing the batch-date prompt.
-      const prepared = [];
-      const noDate = [];
-      for (const file of files) {
-        let info;
-        try { info = await readDate(file); }
-        catch { info = { exifDateTime: null, date: null, fromExif: false }; }
-        const rec = { file, exifDateTime: info.exifDateTime, date: info.date, fromExif: info.fromExif };
-        if (!rec.date) noDate.push(rec);
-        else prepared.push(rec);
-        // Yield a macrotask between EXIF reads so the pre-downscale phase (which
-        // reads each file's header on the main thread) never blocks the UI for
-        // the whole batch on a large multi-select.
-        await new Promise((r) => setTimeout(r, 0));
-      }
-
-      // No-EXIF / no-date batch → one user-correctable date for the whole group.
-      if (noDate.length) {
-        const fallback = (typeof currentIso === 'string' && currentIso)
-          || localISODate(now()) || windowDates()[0] || null;
-        const batchDate = await askBatchDate(noDate.length, fallback);
-        if (batchDate) {
-          noDate.forEach((rec) => { rec.date = batchDate; prepared.push(rec); });
-        }
-        // Cancelled → those files are dropped (skipped), never silently mis-dated.
-      }
-
-      if (prepared.length === 0) return undefined;
-
+      // Mount the progress sheet NOW — in its indeterminate "Preparing photos…"
+      // state — so the screen appears the instant the picker closes, BEFORE the
+      // dedup preload + the per-file EXIF header reads (which can take a beat on a
+      // large multi-select). It flips to the "Adding N of M…" counting bar at the
+      // start of the upload phase below (the first ui.setProgress call).
+      //
+      // Every exit after this point MUST settle the sheet — finish() on the normal
+      // path, destroy() on the early "nothing prepared" return, and destroy()-then-
+      // rethrow on an unexpected throw (the catch below) — so it can never orphan.
       const ui = progress();
-      const tally = { added: 0, dupes: 0, skipped: 0, errors: 0 };
-      const daysAdded = new Set();
-      let completed = 0;
-      const total = prepared.length;
-      ui.setProgress(0, total);
+      try {
+        const cleanUploader = sanitizePathSegment(uploader);
+        const windowSet = new Set(windowDates());
+        // Soft client-side lastUpload bound is applied inside readDedup's consumer;
+        // here we just preload all of this uploader's keys (single-field query).
+        let dedupSet;
+        try {
+          dedupSet = await readDedup(uploader);
+        } catch (err) {
+          // Dedup preload failure is non-fatal — proceed without it (worst case: a
+          // duplicate, never a loss). But a network failure here likely means the
+          // uploads will fail too; surface it if offline.
+          dedupSet = new Set();
+          console.warn('[photos] dedup preload failed:', err);
+        }
+        if (!(dedupSet instanceof Set)) dedupSet = new Set(dedupSet || []);
 
-      // Per-file worker. Bounded concurrency via a shared cursor.
-      let cursor = 0;
-      const advance = () => { completed += 1; ui.setProgress(completed, total); };
+        // Phase 1: read capture dates (cheap, pre-decode). Partition into dated
+        // (EXIF or lastModified) vs. no-date files needing the batch-date prompt.
+        const prepared = [];
+        const noDate = [];
+        for (const file of files) {
+          let info;
+          try { info = await readDate(file); }
+          catch { info = { exifDateTime: null, date: null, fromExif: false }; }
+          const rec = { file, exifDateTime: info.exifDateTime, date: info.date, fromExif: info.fromExif };
+          if (!rec.date) noDate.push(rec);
+          else prepared.push(rec);
+          // Yield a macrotask between EXIF reads so the pre-downscale phase (which
+          // reads each file's header on the main thread) never blocks the UI for
+          // the whole batch on a large multi-select.
+          await new Promise((r) => setTimeout(r, 0));
+        }
 
-      async function worker() {
-        while (cursor < prepared.length) {
-          const rec = prepared[cursor++];
-          try {
-            const decision = decideFile({
-              uploader: cleanUploader,
-              exifDateTime: rec.exifDateTime,
-              date: rec.date,
-              size: rec.file.size,
-              dedupSet,
-              windowSet,
-            });
-            if (decision.action === 'skip-window') { tally.skipped += 1; continue; }
-            if (decision.action === 'skip-dedup') { tally.dupes += 1; continue; }
+        // No-EXIF / no-date batch → one user-correctable date for the whole group.
+        // The batch-date prompt is a second body-mounted modal opened OVER the
+        // progress sheet; later-mounted sits on top (expected) and resolves null on
+        // cancel.
+        if (noDate.length) {
+          const fallback = (typeof currentIso === 'string' && currentIso)
+            || localISODate(now()) || windowDates()[0] || null;
+          const batchDate = await askBatchDate(noDate.length, fallback);
+          if (batchDate) {
+            noDate.forEach((rec) => { rec.date = batchDate; prepared.push(rec); });
+          }
+          // Cancelled → those files are dropped (skipped), never silently mis-dated.
+        }
 
-            // Reserve the key NOW so two same-key files in one batch don't both upload.
-            dedupSet.add(decision.key);
+        // Nothing to upload (every file was no-date and the batch prompt was
+        // cancelled, or every readDate yielded no date). Tear the sheet down so it
+        // doesn't orphan, then bail.
+        if (prepared.length === 0) {
+          ui.destroy();
+          return undefined;
+        }
 
-            const { blob } = await downscale(rec.file);
-            const path = `trip-photos/${rec.date}/${cleanUploader}/${uuid()}.jpg`;
-            const url = await uploadBlob(path, blob);
-            await writeDoc({
-              date: rec.date,
-              uploader,
-              storagePath: path,
-              url,
-              takenAt: rec.exifDateTime || `${rec.date} 00:00:00`,
-              size: rec.file.size,
-            });
-            tally.added += 1;
-            daysAdded.add(rec.date);
-          } catch (err) {
-            tally.errors += 1;
-            console.warn('[photos] file failed:', err);
-          } finally {
-            advance();
+        const tally = { added: 0, dupes: 0, skipped: 0, errors: 0 };
+        const daysAdded = new Set();
+        let completed = 0;
+        const total = prepared.length;
+        // The flip from indeterminate "Preparing photos…" to the determinate
+        // "Adding 0 of N…" counting bar — the upload phase starts here.
+        ui.setProgress(0, total);
+
+        // Per-file worker. Bounded concurrency via a shared cursor.
+        let cursor = 0;
+        const advance = () => { completed += 1; ui.setProgress(completed, total); };
+
+        async function worker() {
+          while (cursor < prepared.length) {
+            const rec = prepared[cursor++];
+            try {
+              const decision = decideFile({
+                uploader: cleanUploader,
+                exifDateTime: rec.exifDateTime,
+                date: rec.date,
+                size: rec.file.size,
+                dedupSet,
+                windowSet,
+              });
+              if (decision.action === 'skip-window') { tally.skipped += 1; continue; }
+              if (decision.action === 'skip-dedup') { tally.dupes += 1; continue; }
+
+              // Reserve the key NOW so two same-key files in one batch don't both upload.
+              dedupSet.add(decision.key);
+
+              const { blob } = await downscale(rec.file);
+              const path = `trip-photos/${rec.date}/${cleanUploader}/${uuid()}.jpg`;
+              const url = await uploadBlob(path, blob);
+              await writeDoc({
+                date: rec.date,
+                uploader,
+                storagePath: path,
+                url,
+                takenAt: rec.exifDateTime || `${rec.date} 00:00:00`,
+                size: rec.file.size,
+              });
+              tally.added += 1;
+              daysAdded.add(rec.date);
+            } catch (err) {
+              tally.errors += 1;
+              console.warn('[photos] file failed:', err);
+            } finally {
+              advance();
+            }
           }
         }
+
+        const workers = [];
+        const n = Math.max(1, Math.min(concurrency, prepared.length));
+        for (let i = 0; i < n; i += 1) workers.push(worker());
+        await Promise.all(workers);
+
+        // Update the soft last-sync hint (best-effort; never blocks the summary).
+        if (tally.added > 0) {
+          const latest = [...daysAdded].sort().pop();
+          try { await updateSyncState(uploader, latest); }
+          catch (err) { console.warn('[photos] syncState update failed:', err); }
+        }
+
+        const summary = summarizeRun({ ...tally, days: daysAdded.size });
+        ui.finish(summary);
+        return { ...tally, days: daysAdded.size };
+      } catch (err) {
+        // An unexpected throw between mount and finish — never leave the sheet
+        // orphaned on screen. Destroy it, then rethrow so the caller's existing
+        // error surface still fires.
+        try { ui.destroy(); } catch { /* destroy must not mask the original error */ }
+        throw err;
       }
-
-      const workers = [];
-      const n = Math.max(1, Math.min(concurrency, prepared.length));
-      for (let i = 0; i < n; i += 1) workers.push(worker());
-      await Promise.all(workers);
-
-      // Update the soft last-sync hint (best-effort; never blocks the summary).
-      if (tally.added > 0) {
-        const latest = [...daysAdded].sort().pop();
-        try { await updateSyncState(uploader, latest); }
-        catch (err) { console.warn('[photos] syncState update failed:', err); }
-      }
-
-      const summary = summarizeRun({ ...tally, days: daysAdded.size });
-      ui.finish(summary);
-      return { ...tally, days: daysAdded.size };
     } finally {
       running = false;
     }
