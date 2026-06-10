@@ -2,21 +2,7 @@
 
 ## Active Tasks
 
-### speed-up-photo-picker-handoff
-**Task**: Kill the 30–60s iOS in-picker freeze — accept HEIC originals + multi-container EXIF dating (HEIC ISO-BMFF + PNG eXIf for screenshots)
-**Pipeline**: code-workflow
-**Branch**: task/speed-up-photo-picker-handoff
-**Worktree**: .worktree/speed-up-photo-picker-handoff
-**Base**: main
-**Started**: 2026-06-10
-**Files**:
-- MOD: app.js
-- MOD: app.test.js
-- MOD: sw.js
-- MOD: sw.test.js
-- MOD: CLAUDE.md
-- MOD: README.md
-- MOD: CHANGELOG.md
+_None._
 
 ---
 
