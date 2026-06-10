@@ -55,6 +55,7 @@ import {
   sniffImageType,
   wirePhotoSync,
   mergeGalleryPhotos,
+  tileSpanClass,
   isAllowedUploadOrigin,
   setSubscribePhotos,
   createWorkerDownscaler,
@@ -1698,7 +1699,9 @@ class StubElement {
   get classList() { return this._classList; }
   // textContent: setting replaces; reading aggregates own + descendants' text
   // (matches the DOM, so a subtree text search "just works" in assertions).
-  set textContent(v) { this._textContent = String(v); this.children = []; }
+  // Wiping content clamps scrollTop to 0 (as a real scroll container does when its
+  // content is emptied) — this makes the gallery's save/restore logic observable.
+  set textContent(v) { this._textContent = String(v); this.children = []; this.scrollTop = 0; }
   get textContent() {
     const own = this._textContent;
     const kids = this.children.map((c) => c.textContent).join('');
@@ -1917,7 +1920,7 @@ test('reminisce renders a clickable gallery from UPLOADED photos (via the live s
   });
 });
 
-test('reminisce gallery is capped at REMINISCE_GALLERY_MAX thumbnails (uploaded)', (t) => {
+test('reminisce gallery renders ALL of a day\'s uploads (12-cap removed)', (t) => {
   t.after(() => setSubscribePhotos(null));
   withDom(() => {
     const stub = makeSubscribeStub();
@@ -1925,8 +1928,168 @@ test('reminisce gallery is capped at REMINISCE_GALLERY_MAX thumbnails (uploaded)
     const r = renderDay(fullDayFixture(), 'reminisce');
     r.start();
     stub.push(Array.from({ length: 15 }, (_, i) => uploadedDoc(i)));
-    assert.equal(r.node.byClass('reminisce-photo').length, 12, 'capped at 12 of the 15 uploads');
-    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^12 photos$/);
+    assert.equal(r.node.byClass('reminisce-photo').length, 15, 'all 15 uploads render (no 12-cap)');
+    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^15 photos$/);
+    r.stop();
+  });
+});
+
+// --- make-gallery-scrollable: mosaic render (span classes + crossorigin) -----
+// Uploaded doc with width/height. Helper kept local so we control dims per-photo.
+function uploadedDocWithDims(i, width, height, uploader = 'Jo') {
+  return {
+    url: `https://firebasestorage.googleapis.com/u${i}.jpg`,
+    uploader,
+    takenAt: `2026-06-24 ${String(i).padStart(2, '0')}:00:00`,
+    width,
+    height,
+  };
+}
+
+test('reminisce gallery: a large fixture renders one tile per doc and the seam reads the true total', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    stub.push(Array.from({ length: 100 }, (_, i) => uploadedDoc(i)));
+    assert.equal(r.node.byClass('reminisce-photo').length, 100, '100 tiles for 100 uploads (no cap)');
+    assert.match(r.node.firstByClass('reminisce-frame-seam').textContent, /^100 photos$/);
+    r.stop();
+  });
+});
+
+test('reminisce gallery: tile span classes match each doc\'s dims (tall / wide / 1×1)', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    // takenAt order: 0 (tall portrait), 1 (wide landscape), 2 (square → no span).
+    stub.push([
+      uploadedDocWithDims(0, 800, 1600),  // h/w = 2.0 → tall
+      uploadedDocWithDims(1, 1600, 800),  // w/h = 2.0 → wide
+      uploadedDocWithDims(2, 1000, 1000), // square → no span class
+    ]);
+    assert.equal(r.node.byClass('reminisce-photo').length, 3, 'three tiles');
+    assert.equal(r.node.byClass('gallery-tile-tall').length, 1, 'exactly one tall tile');
+    assert.equal(r.node.byClass('gallery-tile-wide').length, 1, 'exactly one wide tile');
+    // The tall tile is also a .reminisce-photo (span class is appended to className).
+    const tall = r.node.firstByClass('gallery-tile-tall');
+    assert.ok(tall.classList.contains('reminisce-photo'), 'span class coexists with reminisce-photo');
+    r.stop();
+  });
+});
+
+test('reminisce gallery: docs WITHOUT dims render tiles with NO span class', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    stub.push([uploadedDoc(0), uploadedDoc(1)]); // uploadedDoc carries NO dims
+    assert.equal(r.node.byClass('reminisce-photo').length, 2, 'two 1×1 tiles');
+    assert.equal(r.node.byClass('gallery-tile-tall').length, 0, 'no tall tiles for dim-less docs');
+    assert.equal(r.node.byClass('gallery-tile-wide').length, 0, 'no wide tiles for dim-less docs');
+    r.stop();
+  });
+});
+
+test('reminisce gallery: thumbnail imgs carry crossOrigin="anonymous" and loading="lazy"', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    stub.push([uploadedDoc(0), uploadedDoc(1), uploadedDoc(2)]);
+    const imgs = r.node.firstByClass('reminisce-gallery').queryAll((n) => n.tagName === 'IMG');
+    assert.equal(imgs.length, 3, 'one img per tile');
+    assert.ok(imgs.every((img) => img.crossOrigin === 'anonymous'), 'every gallery img requests CORS');
+    assert.ok(imgs.every((img) => img.loading === 'lazy'), 'every gallery img is lazy');
+    r.stop();
+  });
+});
+
+test('reminisce lightbox: slides carry loading="lazy", decoding="async", crossOrigin="anonymous"; only neighbors are eager after open', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    // 5 uploads → open the lightbox on the first thumbnail (index 0).
+    stub.push(Array.from({ length: 5 }, (_, i) => uploadedDoc(i)));
+    const thumb = r.node.byClass('reminisce-photo')[0];
+    thumb.focus();
+    thumb._fire('click');
+    const lb = document.body.firstByClass('lightbox');
+    assert.ok(lb, 'lightbox open');
+    const slideImgs = lb.firstByClass('lightbox-track').queryAll((n) => n.tagName === 'IMG');
+    assert.equal(slideImgs.length, 5, 'one slide img per photo');
+    // All slides decode async + request CORS regardless of position.
+    assert.ok(slideImgs.every((img) => img.decoding === 'async'), 'every slide decodes async');
+    assert.ok(slideImgs.every((img) => img.crossOrigin === 'anonymous'), 'every slide requests CORS');
+    // Opening at index 0 force-loads neighbors (current ± 1 = slides 0 and 1) but
+    // leaves the rest lazy — opening does NOT eager-fetch the whole set.
+    assert.equal(slideImgs[0].loading, 'eager', 'current slide is eager');
+    assert.equal(slideImgs[1].loading, 'eager', 'next neighbor is eager');
+    assert.equal(slideImgs[2].loading, 'lazy', 'non-neighbor slide stays lazy');
+    assert.equal(slideImgs[3].loading, 'lazy', 'far slide stays lazy');
+    assert.equal(slideImgs[4].loading, 'lazy', 'far slide stays lazy');
+    r.stop();
+  });
+});
+
+test('reminisce lightbox: an open-at-a-middle-index force-loads its immediate neighbors only', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    stub.push(Array.from({ length: 5 }, (_, i) => uploadedDoc(i)));
+    // Open on the MIDDLE thumbnail (index 2) → neighbors 1, 2, 3 eager; 0 and 4 lazy.
+    const thumb = r.node.byClass('reminisce-photo')[2];
+    thumb.focus();
+    thumb._fire('click');
+    const lb = document.body.firstByClass('lightbox');
+    const slideImgs = lb.firstByClass('lightbox-track').queryAll((n) => n.tagName === 'IMG');
+    assert.equal(slideImgs[0].loading, 'lazy', 'slide 0 (not a neighbor) stays lazy');
+    assert.equal(slideImgs[1].loading, 'eager', 'previous neighbor eager');
+    assert.equal(slideImgs[2].loading, 'eager', 'current eager');
+    assert.equal(slideImgs[3].loading, 'eager', 'next neighbor eager');
+    assert.equal(slideImgs[4].loading, 'lazy', 'slide 4 (not a neighbor) stays lazy');
+    r.stop();
+  });
+});
+
+// --- make-gallery-scrollable: live rebuild preserves the scroll window --------
+
+test('live: a snapshot rebuild restores the gallery host scrollTop (no teleport mid-browse)', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    // First snapshot mounts a grid inside the ~66vh scroll host.
+    stub.push(Array.from({ length: 20 }, (_, i) => uploadedDoc(i)));
+    const host = r.node.firstByClass('reminisce-gallery-host');
+    assert.ok(host, 'gallery host present');
+    assert.equal(r.node.byClass('reminisce-photo').length, 20);
+
+    // Simulate the user having scrolled down inside the window.
+    host.scrollTop = 240;
+
+    // A NEW snapshot arrives → renderGallery wipes + rebuilds the host. The scroll
+    // position must be preserved across the rebuild.
+    stub.push(Array.from({ length: 21 }, (_, i) => uploadedDoc(i)));
+    assert.equal(r.node.byClass('reminisce-photo').length, 21, 'grid rebuilt with the new total');
+    assert.equal(host.scrollTop, 240, 'scrollTop preserved across the live rebuild');
     r.stop();
   });
 });
@@ -2041,7 +2204,7 @@ test('mergeGalleryPhotos: two uploaded docs with the same url collapse to one', 
   assert.equal(out[0].alt, 'Photo by Jo', 'first-sorted (earlier takenAt) wins');
 });
 
-test('mergeGalleryPhotos: caps at REMINISCE_GALLERY_MAX (12), retaining authored first', () => {
+test('mergeGalleryPhotos: 12-cap removed — all photos returned, authored first then sorted uploaded', () => {
   const authored = Array.from({ length: 5 }, (_, i) => ({ url: `https://example.com/a${i}.jpg`, alt: `a${i}` }));
   const uploaded = Array.from({ length: 20 }, (_, i) => ({
     url: `https://firebasestorage.googleapis.com/u${i}.jpg`,
@@ -2049,11 +2212,121 @@ test('mergeGalleryPhotos: caps at REMINISCE_GALLERY_MAX (12), retaining authored
     takenAt: `2026-06-24 ${String(i).padStart(2, '0')}:00:00`,
   }));
   const out = mergeGalleryPhotos(authored, uploaded);
-  assert.equal(out.length, 12, 'capped at REMINISCE_GALLERY_MAX');
-  // All 5 authored survive (authored-first), then the 7 earliest uploaded.
+  assert.equal(out.length, 25, 'no 12-cap: all 5 authored + 20 uploaded returned');
+  // All 5 authored survive (authored-first), then all 20 uploaded in takenAt order.
   assert.deepEqual(out.slice(0, 5).map((p) => p.url), authored.map((p) => p.url));
   assert.equal(out[5].url, 'https://firebasestorage.googleapis.com/u0.jpg', 'earliest uploaded comes right after authored');
-  assert.equal(out[11].url, 'https://firebasestorage.googleapis.com/u6.jpg', 'cap drops the later uploaded (u7..u19)');
+  assert.equal(out[24].url, 'https://firebasestorage.googleapis.com/u19.jpg', 'latest uploaded is retained (no cap dropped it)');
+});
+
+test('mergeGalleryPhotos: a pathological set is bounded by the ~1000 sanity ceiling', () => {
+  const uploaded = Array.from({ length: 1200 }, (_, i) => ({
+    url: `https://firebasestorage.googleapis.com/u${i}.jpg`,
+    uploader: 'Jo',
+    takenAt: `2026-06-24 00:00:${String(i).padStart(4, '0')}`,
+  }));
+  const out = mergeGalleryPhotos([], uploaded);
+  assert.equal(out.length, 1000, 'bounded to the sanity ceiling, not unbounded');
+});
+
+// --- make-gallery-scrollable: uploaded docs pass their dims through ----------
+// The mosaic gallery sizes each tile from the doc's recorded width/height BEFORE
+// the image downloads. mergeGalleryPhotos copies finite width/height onto the
+// result object; dim-less docs (bail path) omit BOTH keys (→ 1×1 tile).
+
+test('mergeGalleryPhotos: an uploaded doc with finite dims passes width/height onto the result', () => {
+  const uploaded = [
+    { url: 'https://firebasestorage.googleapis.com/u0.jpg', uploader: 'Jo', takenAt: '2026-06-24 08:00:00', width: 2048, height: 1365 },
+  ];
+  const out = mergeGalleryPhotos([], uploaded);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].width, 2048, 'width copied through');
+  assert.equal(out[0].height, 1365, 'height copied through');
+});
+
+test('mergeGalleryPhotos: an uploaded doc WITHOUT dims omits both keys (not undefined values)', () => {
+  const uploaded = [
+    { url: 'https://firebasestorage.googleapis.com/u0.jpg', uploader: 'Jo', takenAt: '2026-06-24 08:00:00' },
+  ];
+  const out = mergeGalleryPhotos([], uploaded);
+  assert.equal(Object.hasOwn(out[0], 'width'), false, 'no width key on a dim-less doc');
+  assert.equal(Object.hasOwn(out[0], 'height'), false, 'no height key on a dim-less doc');
+});
+
+test('mergeGalleryPhotos: an uploaded doc with only one of the pair omits BOTH dims', () => {
+  const uploaded = [
+    { url: 'https://firebasestorage.googleapis.com/u0.jpg', uploader: 'Jo', takenAt: '2026-06-24 08:00:00', width: 2048 }, // no height
+  ];
+  const out = mergeGalleryPhotos([], uploaded);
+  assert.equal(Object.hasOwn(out[0], 'width'), false, 'width dropped when height is absent (need both finite)');
+  assert.equal(Object.hasOwn(out[0], 'height'), false, 'height absent');
+});
+
+test('mergeGalleryPhotos: authored photos never carry dims (even if mixed with dim-bearing uploads)', () => {
+  const authored = [{ url: 'https://example.com/a0.jpg', alt: 'A', width: 999, height: 999 }];
+  const uploaded = [
+    { url: 'https://firebasestorage.googleapis.com/u0.jpg', uploader: 'Jo', takenAt: '2026-06-24 08:00:00', width: 800, height: 1600 },
+  ];
+  const out = mergeGalleryPhotos(authored, uploaded);
+  // Authored is first; the merge never reads dims off authored photos.
+  assert.equal(Object.hasOwn(out[0], 'width'), false, 'authored photo carries no width');
+  assert.equal(Object.hasOwn(out[0], 'height'), false, 'authored photo carries no height');
+  // The uploaded one still gets its dims.
+  assert.equal(out[1].width, 800);
+  assert.equal(out[1].height, 1600);
+});
+
+// --- make-gallery-scrollable: tileSpanClass(width, height) -------------------
+// Pure ratio classifier for the mosaic. Portrait (h/w ≥ 1.2) → 'gallery-tile-tall',
+// landscape (w/h ≥ 1.2) → 'gallery-tile-wide', everything else (square-ish,
+// missing/zero/negative/NaN/Infinity dims) → '' (1×1 tile).
+
+test('tileSpanClass: exact square (equal dims) → "" (1×1 tile)', () => {
+  assert.equal(tileSpanClass(1000, 1000), '');
+  assert.equal(tileSpanClass(7, 7), '');
+});
+
+test('tileSpanClass: ratio just below 1.2 (1.19) is square → ""', () => {
+  // 1190 / 1000 = 1.19 (both orientations stay below the 1.2 threshold).
+  assert.equal(tileSpanClass(1000, 1190), '', 'h/w = 1.19 → not tall');
+  assert.equal(tileSpanClass(1190, 1000), '', 'w/h = 1.19 → not wide');
+});
+
+test('tileSpanClass: ratio exactly 1.2 spans (>= boundary is inclusive)', () => {
+  assert.equal(tileSpanClass(1000, 1200), 'gallery-tile-tall', 'h/w = 1.2 → tall');
+  assert.equal(tileSpanClass(1200, 1000), 'gallery-tile-wide', 'w/h = 1.2 → wide');
+});
+
+test('tileSpanClass: ratio above 1.2 (1.21) spans in both orientations', () => {
+  assert.equal(tileSpanClass(1000, 1210), 'gallery-tile-tall', 'h/w = 1.21 → tall');
+  assert.equal(tileSpanClass(1210, 1000), 'gallery-tile-wide', 'w/h = 1.21 → wide');
+});
+
+test('tileSpanClass: strongly portrait → tall; strongly landscape → wide', () => {
+  assert.equal(tileSpanClass(800, 1600), 'gallery-tile-tall', 'portrait spans rows');
+  assert.equal(tileSpanClass(1600, 800), 'gallery-tile-wide', 'landscape spans cols');
+});
+
+test('tileSpanClass: missing dims (undefined) → ""', () => {
+  assert.equal(tileSpanClass(undefined, undefined), '');
+  assert.equal(tileSpanClass(1000, undefined), '', 'one missing → square');
+  assert.equal(tileSpanClass(undefined, 1000), '', 'one missing → square');
+});
+
+test('tileSpanClass: zero / negative dims → ""', () => {
+  assert.equal(tileSpanClass(0, 1000), '', 'zero width → square');
+  assert.equal(tileSpanClass(1000, 0), '', 'zero height → square');
+  assert.equal(tileSpanClass(0, 0), '', 'both zero → square');
+  assert.equal(tileSpanClass(-5, 1000), '', 'negative width → square');
+  assert.equal(tileSpanClass(1000, -5), '', 'negative height → square');
+});
+
+test('tileSpanClass: NaN / Infinity dims → ""', () => {
+  assert.equal(tileSpanClass(NaN, 1000), '');
+  assert.equal(tileSpanClass(1000, NaN), '');
+  assert.equal(tileSpanClass(Infinity, 1000), '');
+  assert.equal(tileSpanClass(1000, Infinity), '');
+  assert.equal(tileSpanClass(-Infinity, -Infinity), '');
 });
 
 test('mergeGalleryPhotos: uploaded alt is "Photo by <uploader>"; missing uploader → "Photo by a traveler"', () => {
@@ -6375,6 +6648,50 @@ test('wirePhotoSync: happy path uploads each kept file once, buckets per day, fi
   assert.match(progressSheet.finish.calls[0][0], /Added 3 photos across 2 days/);
 });
 
+// Dims threading into the persisted doc (make-gallery-scrollable). The downscale
+// dep is the only stub-testable dims write point in the upload loop (downscaleImage's
+// own w/h are browser-only). A finite-pair downscale result must reach writeDoc as
+// width/height; a missing/half-present pair must omit BOTH keys (both-or-neither
+// guard) so the gallery degrades that photo to a 1×1 tile.
+test('wirePhotoSync: finite downscale dims are written onto the photo doc', async () => {
+  const files = [datedFile('a.jpg', '2026-06-25', 1001)];
+  const { deps } = makePhotoHarness({ files });
+  deps.downscale = asyncSpy((file) => ({ blob: { _blobFor: file.name }, downscaled: true, width: 2048, height: 1365 }));
+  const { run } = wirePhotoSync(deps);
+  await runQuiet(() => run('2026-06-25'));
+
+  assert.equal(deps.writeDoc.calls.length, 1);
+  const doc = deps.writeDoc.calls[0][0];
+  assert.equal(doc.width, 2048);
+  assert.equal(doc.height, 1365);
+});
+
+test('wirePhotoSync: a downscale result with no dims writes a doc WITHOUT width/height', async () => {
+  const files = [datedFile('a.jpg', '2026-06-25', 1001)];
+  const { deps } = makePhotoHarness({ files });
+  // Default-shape result (bail path / legacy): { blob, downscaled } with no dims.
+  deps.downscale = asyncSpy((file) => ({ blob: { _blobFor: file.name }, downscaled: false }));
+  const { run } = wirePhotoSync(deps);
+  await runQuiet(() => run('2026-06-25'));
+
+  assert.equal(deps.writeDoc.calls.length, 1);
+  const doc = deps.writeDoc.calls[0][0];
+  assert.equal(Object.hasOwn(doc, 'width'), false, 'no width key when dims absent');
+  assert.equal(Object.hasOwn(doc, 'height'), false, 'no height key when dims absent');
+});
+
+test('wirePhotoSync: a half-present dims pair (width only) omits BOTH keys', async () => {
+  const files = [datedFile('a.jpg', '2026-06-25', 1001)];
+  const { deps } = makePhotoHarness({ files });
+  deps.downscale = asyncSpy((file) => ({ blob: { _blobFor: file.name }, downscaled: true, width: 2048 }));
+  const { run } = wirePhotoSync(deps);
+  await runQuiet(() => run('2026-06-25'));
+
+  const doc = deps.writeDoc.calls[0][0];
+  assert.equal(Object.hasOwn(doc, 'width'), false, 'width dropped when height is missing (both-or-neither)');
+  assert.equal(Object.hasOwn(doc, 'height'), false);
+});
+
 // --- 2. Skip outside window --------------------------------------------------
 
 test('wirePhotoSync: a file dated outside the window is skipped (no upload), counted', async () => {
@@ -7164,6 +7481,54 @@ test('createWorkerDownscaler: handler reads a raw `e` payload when `e.data` is u
   const out = await p;
   assert.deepEqual(out, { blob, downscaled: true }, 'raw-`e` payload is unwrapped correctly');
   assert.equal(wd._pendingSize(), 0, 'pending drains on a raw-payload reply');
+});
+
+// --- make-gallery-scrollable: dispatcher carries orientation-corrected dims ---
+// The worker reply now includes width/height (post-orientation, post-scale); the
+// dispatcher passes them through to the result so the upload doc can record them.
+// A LEGACY reply (no dims) must keep working — resolve without dims, never throw.
+
+test('createWorkerDownscaler: {ok:true, blob, width, height} resolves carrying width/height', async () => {
+  const { spawn, workers } = makeFakeSpawn();
+  const wd = createWorkerDownscaler({ spawn });
+  const f = wkrFile('a.jpg');
+  const p = wd.downscale(f);
+  const { id } = workers[0].posted[0];
+  const blob = { fake: 'blob' };
+  workers[0].reply({ id, ok: true, blob, width: 2048, height: 1536 });
+  const out = await p;
+  assert.deepEqual(out, { blob, downscaled: true, width: 2048, height: 1536 },
+    'dims pass through to the resolved result');
+  assert.equal(wd._pendingSize(), 0, 'pending drains after resolve');
+});
+
+test('createWorkerDownscaler: a LEGACY {ok:true, blob} reply (no dims) resolves without dims and does not throw', async () => {
+  const { spawn, workers } = makeFakeSpawn();
+  const wd = createWorkerDownscaler({ spawn });
+  const f = wkrFile('a.jpg');
+  const p = wd.downscale(f);
+  const { id } = workers[0].posted[0];
+  const blob = { fake: 'blob' };
+  // A legacy worker reply omits width/height entirely — must not throw.
+  assert.doesNotThrow(() => workers[0].reply({ id, ok: true, blob }));
+  const out = await p;
+  assert.deepEqual(out, { blob, downscaled: true }, 'no width/height keys on a legacy reply');
+  assert.equal('width' in out, false, 'width omitted, not undefined');
+  assert.equal('height' in out, false, 'height omitted, not undefined');
+});
+
+test('createWorkerDownscaler: a reply with only width (no height) omits BOTH dims', async () => {
+  const { spawn, workers } = makeFakeSpawn();
+  const wd = createWorkerDownscaler({ spawn });
+  const f = wkrFile('a.jpg');
+  const p = wd.downscale(f);
+  const { id } = workers[0].posted[0];
+  const blob = { fake: 'blob' };
+  workers[0].reply({ id, ok: true, blob, width: 2048 }); // height missing
+  const out = await p;
+  assert.deepEqual(out, { blob, downscaled: true }, 'one-of-pair → neither dim is carried');
+  assert.equal('width' in out, false, 'width dropped when height is absent');
+  assert.equal('height' in out, false, 'height dropped (never was present)');
 });
 
 // ===========================================================================

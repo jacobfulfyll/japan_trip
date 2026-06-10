@@ -1,8 +1,11 @@
 // photo-worker.js — same-origin ES-module Web Worker for off-main-thread image
 // decode/downscale/encode. The main thread (createWorkerDownscaler in app.js)
-// posts { id, file, maxDimension, quality } and gets back { id, ok, blob } (or
-// { id, ok:false } on any failure — the original File is NEVER echoed back, to
-// avoid shipping a (potentially large) buffer over postMessage twice).
+// posts { id, file, maxDimension, quality } and gets back
+// { id, ok, blob, width, height } (or { id, ok:false } on any failure — the
+// original File is NEVER echoed back, to avoid shipping a (potentially large)
+// buffer over postMessage twice). The width/height are the orientation-corrected,
+// post-scale dimensions of the encoded JPEG — the gallery uses them to size tiles
+// before any image downloads.
 //
 // On init it runs a real OffscreenCanvas round-trip self-test and posts
 // { ready:true|false } so the dispatcher can pick the worker path vs. the
@@ -34,7 +37,7 @@ self.onmessage = async (e) => {
       self.postMessage({ id, ok: false });
       return;
     }
-    self.postMessage({ id, ok: true, blob });
+    self.postMessage({ id, ok: true, blob, width: w, height: h });
   } catch {
     // NEVER echo `file` back — just signal failure; the dispatcher bails to the
     // original File it already holds.

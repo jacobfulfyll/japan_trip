@@ -1172,9 +1172,13 @@ function buildLodging(lodging) {
 // photo grid; tapping a photo opens a swipeable full-screen lightbox.
 // ---------------------------------------------------------------------------
 
-// Cap how many photos a day's gallery shows (and the lightbox scrolls). Keeps a
-// busy day scannable on a phone instead of an endless scroll. Tune to taste.
-const REMINISCE_GALLERY_MAX = 12;
+// Sanity ceiling on how many photos a day's gallery / lightbox materializes. This
+// is NOT a UX cap anymore — the gallery is a ~66vh internally-scrollable mosaic
+// that shows EVERY photo of the day (driven by content-visibility + lazy images),
+// so the true total reaches the seam count and the lightbox. This bound only
+// guards against a pathological doc set blowing up the DOM; at trip scale (worst
+// case ~200 photos/day) it is never hit.
+const REMINISCE_GALLERY_MAX = 1000;
 
 // Defense-in-depth: uploaded photo URLs (the app's only user-generated render
 // path) must point at our Firebase Storage bucket. Single literal — single-bucket
@@ -1236,11 +1240,32 @@ export function setSubscribePhotos(fn) {
 }
 
 /**
+ * Attach orientation-corrected dims to `obj`, but ONLY when both are finite —
+ * both-or-neither. A half-present or absent pair leaves `obj` untouched (no
+ * `width`/`height` keys), so a dim-less photo renders a 1×1 tile. Mutates and
+ * returns `obj`. The single source of truth for the dims-passthrough rule shared
+ * by mergeGalleryPhotos, the worker dispatcher, and the upload-doc writer.
+ * @template T
+ * @param {T} obj
+ * @param {number} [width]
+ * @param {number} [height]
+ * @returns {T}
+ */
+function withDims(obj, width, height) {
+  if (Number.isFinite(width) && Number.isFinite(height)) {
+    obj.width = width;
+    obj.height = height;
+  }
+  return obj;
+}
+
+/**
  * Merge authored + uploaded photos for a day's reminisce gallery.
  *
  * Order: authored photos FIRST (in authored order), then uploaded photos sorted
  * by `takenAt` ascending (the sortable capture-time string photo-upload-flow
- * writes). The whole list is capped at REMINISCE_GALLERY_MAX.
+ * writes). The whole list is bounded only by the REMINISCE_GALLERY_MAX sanity
+ * ceiling (~1000) — there is no UX cap; every photo of the day is returned.
  *
  * Dedup key: the resolved photo `url`. An authored photo and an uploaded doc that
  * point at the same URL collapse to one (authored wins, since it is emitted
@@ -1248,27 +1273,30 @@ export function setSubscribePhotos(fn) {
  * URL is the natural identity here — each Storage upload gets a unique download
  * URL, and authored photos carry their own stable URLs.
  *
- * Each kept photo is normalized to `{ url, alt }` (what the gallery + lightbox
- * consume). Uploaded docs get `alt: "Photo by <uploader>"`. URLs are validated
- * with safeUrl(); anything safeUrl rejects (bad scheme, missing) is dropped —
- * uploaded photos are user data.
+ * Each kept photo is normalized to `{ url, alt, width?, height? }` (what the
+ * gallery + lightbox consume). Uploaded docs get `alt: "Photo by <uploader>"` and
+ * pass through their orientation-corrected `width`/`height` (finite numbers only)
+ * so the mosaic gallery can size each tile before the image downloads; authored
+ * photos and dim-less uploads omit them (→ 1×1 tile). URLs are validated with
+ * safeUrl(); anything safeUrl rejects (bad scheme, missing) is dropped — uploaded
+ * photos are user data.
  *
  * @param {Array<{url?: string, alt?: string}>} authored authored day.photos
- * @param {Array<{url?: string, uploader?: string, takenAt?: string}>} uploaded Firestore photo docs
- * @returns {Array<{url: string, alt: string}>}
+ * @param {Array<{url?: string, uploader?: string, takenAt?: string, width?: number, height?: number}>} uploaded Firestore photo docs
+ * @returns {Array<{url: string, alt: string, width?: number, height?: number}>}
  */
 export function mergeGalleryPhotos(authored, uploaded) {
   const seen = new Set();
   const out = [];
 
-  const pushSafe = (rawUrl, alt, requireStorageOrigin = false) => {
+  const pushSafe = (rawUrl, alt, width, height, requireStorageOrigin = false) => {
     const url = safeUrl(rawUrl);
     if (!url || seen.has(url)) return;
     // Uploaded docs (user-generated) must resolve to the Storage origin;
     // authored/relative content is repo-controlled and passes unrestricted.
     if (requireStorageOrigin && !isAllowedUploadOrigin(url)) return;
     seen.add(url);
-    out.push({ url, alt: alt ? String(alt) : '' });
+    out.push(withDims({ url, alt: alt ? String(alt) : '' }, width, height));
   };
 
   const authoredList = Array.isArray(authored) ? authored : [];
@@ -1285,15 +1313,36 @@ export function mergeGalleryPhotos(authored, uploaded) {
     });
   uploadedList.forEach((d) => {
     const who = d?.uploader ? String(d.uploader) : 'a traveler';
-    pushSafe(d?.url, `Photo by ${who}`, true);
+    pushSafe(d?.url, `Photo by ${who}`, d?.width, d?.height, true);
   });
 
   return out.slice(0, REMINISCE_GALLERY_MAX);
 }
 
 /**
- * Masonry photo grid of focusable buttons. `onOpen(index)` fires on activation.
- * XSS-safe: URLs pass through safeUrl(); text via textContent only.
+ * Classify a tile's grid span from its orientation-corrected dimensions. Drives
+ * the mosaic: portrait (h/w ≥ 1.2) spans two rows, landscape (w/h ≥ 1.2) spans two
+ * columns, everything else (incl. missing/zero/NaN dims) is a 1×1 tile. Pure.
+ *
+ * @param {number} width
+ * @param {number} height
+ * @returns {'gallery-tile-tall' | 'gallery-tile-wide' | ''}
+ */
+export function tileSpanClass(width, height) {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return '';
+  }
+  if (height / width >= 1.2) return 'gallery-tile-tall';
+  if (width / height >= 1.2) return 'gallery-tile-wide';
+  return '';
+}
+
+/**
+ * Mosaic photo grid of focusable buttons. `onOpen(index)` fires on activation.
+ * Each tile's span (tall/wide/1×1) is computed from the photo's recorded dims so
+ * the layout is stable BEFORE any image downloads (no shift while scrolling).
+ * Images request CORS so Firebase Storage responses are non-opaque (unpadded
+ * cache accounting). XSS-safe: URLs pass through safeUrl(); text via textContent.
  */
 function buildReminisceGallery(photos, onOpen) {
   const gallery = el('section', 'reminisce-gallery');
@@ -1301,9 +1350,11 @@ function buildReminisceGallery(photos, onOpen) {
   photos.forEach((p, i) => {
     const src = safeUrl(p?.url);
     if (!src) return;
-    const btn = el('button', 'reminisce-photo');
+    const spanClass = tileSpanClass(p?.width, p?.height);
+    const btn = el('button', 'reminisce-photo' + (spanClass ? ' ' + spanClass : ''));
     btn.type = 'button';
     const img = el('img');
+    img.crossOrigin = 'anonymous';
     img.src = src;
     img.alt = p?.alt ? String(p.alt) : '';
     img.loading = 'lazy';
@@ -1345,15 +1396,24 @@ function buildLightbox(photos, dayLabel, opts = {}) {
   overlay.appendChild(bar);
 
   const track = el('div', 'lightbox-track');
-  photos.forEach((p) => {
+  // Slide <img> refs (sparse — a slide with a rejected URL has no img), kept so
+  // setCounter can force-load the current photo's immediate neighbors.
+  const slideImgs = [];
+  photos.forEach((p, idx) => {
     const slide = el('div', 'lightbox-slide');
     const src = safeUrl(p?.url);
     if (src) {
       const img = el('img');
+      img.crossOrigin = 'anonymous';
+      // Lazy by default so opening the viewer does NOT force-download every photo
+      // of the day; the neighbor force-load in setCounter pulls the few that
+      // matter (current ± 1) eagerly to kill the cold-swipe blank flash.
+      img.loading = 'lazy';
       img.src = src;
       img.alt = p?.alt ? String(p.alt) : '';
       img.decoding = 'async';
       slide.appendChild(img);
+      slideImgs[idx] = img;
     }
     track.appendChild(slide);
   });
@@ -1365,6 +1425,21 @@ function buildLightbox(photos, dayLabel, opts = {}) {
 
   const reduceMotion = prefersReducedMotion();
 
+  // Force-load the current slide + its immediate neighbors (i-1, i, i+1): flip
+  // them eager and kick a throw-safe decode. Bounded to neighbors so a big day
+  // never eagerly fetches the whole set.
+  function preloadNeighbors(i) {
+    for (let j = i - 1; j <= i + 1; j += 1) {
+      const img = slideImgs[j];
+      if (!img) continue;
+      img.loading = 'eager';
+      // decode() is best-effort: the sync try/catch guards a throwing call, and
+      // .catch swallows the async rejection (a not-yet-loaded/aborted img) so it
+      // never surfaces as an unhandledrejection.
+      try { img.decode?.()?.catch(() => {}); } catch { /* decode is best-effort */ }
+    }
+  }
+
   function setCounter(i) {
     current = i;
     counter.textContent = `${i + 1} / ${photos.length}`;
@@ -1372,6 +1447,7 @@ function buildLightbox(photos, dayLabel, opts = {}) {
       'aria-label',
       `Photo ${i + 1} of ${photos.length}${dayLabel ? ', ' + dayLabel : ''}`,
     );
+    preloadNeighbors(i);
   }
 
   function onScroll() {
@@ -1544,12 +1620,19 @@ export function renderDay(day, framingName = 'plan') {
     // open the wrong set). Empty list → the graceful empty-state note.
     const renderGallery = (photos) => {
       if (lightbox) { lightbox.destroy(); lightbox = null; }
+      // Preserve the scroll position across a live-snapshot rebuild — the host is
+      // a fixed ~66vh scroll window, so wiping it would otherwise teleport a
+      // mid-browse user back to the top on every snapshot.
+      const prevScroll = galleryHost.scrollTop || 0;
       galleryHost.textContent = '';
       if (photos.length) {
         // The lightbox mounts itself on <body> when opened (see buildLightbox); we
         // only wire the gallery to it and fold its teardown into reminisceStop.
         lightbox = buildLightbox(photos, day.title ?? '', { onClose: applyPending });
         galleryHost.appendChild(buildReminisceGallery(photos, (i) => lightbox.open(i)));
+        // Restore after the new grid is appended (only meaningful when there is
+        // content to scroll). No-op when prevScroll is 0 or the host isn't scrollable.
+        if (prevScroll) galleryHost.scrollTop = prevScroll;
       } else if (!loadingNote) {
         galleryHost.appendChild(el('p', 'reminisce-empty-note', 'Your trip photos from this day will live here.'));
       }
@@ -2910,9 +2993,11 @@ const JPEG_QUALITY = 0.85;
  * quality ~0.85). Uses createImageBitmap(file, { imageOrientation: 'from-image' })
  * so EXIF rotation is baked in. Browser-only. Bails to the ORIGINAL file on any
  * decode/encode failure (HEIC the browser can't decode, etc.) — never throws.
- * Returns { blob, downscaled }.
+ * Returns { blob, downscaled } on the bail path; the success path also carries the
+ * orientation-corrected, post-scale { width, height } (used to size gallery tiles
+ * before any image downloads). Originals (bail) have no measured dims.
  * @param {File} file
- * @returns {Promise<{blob: Blob, downscaled: boolean}>}
+ * @returns {Promise<{blob: Blob, downscaled: boolean, width?: number, height?: number}>}
  */
 async function downscaleImage(file) {
   try {
@@ -2936,7 +3021,7 @@ async function downscaleImage(file) {
       blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', JPEG_QUALITY));
     }
     if (!blob) return { blob: file, downscaled: false };
-    return { blob, downscaled: true };
+    return { blob, downscaled: true, width: w, height: h };
   } catch {
     return { blob: file, downscaled: false };
   }
@@ -3006,12 +3091,13 @@ export function createWorkerDownscaler({
     if (!msg) return;
     if (msg.ready !== undefined) { settleReady(!!msg.ready); return; }
     if (msg.id === undefined) return;
-    resolveEntry(
-      msg.id,
-      msg.ok
-        ? { blob: msg.blob, downscaled: true }
-        : { blob: pending.get(msg.id)?.file, downscaled: false },
-    );
+    // On success, carry the worker's orientation-corrected dims through to the
+    // upload doc (a legacy worker reply without them must NOT throw — withDims
+    // omits them → square tile).
+    const result = msg.ok
+      ? withDims({ blob: msg.blob, downscaled: true }, msg.width, msg.height)
+      : { blob: pending.get(msg.id)?.file, downscaled: false };
+    resolveEntry(msg.id, result);
   };
 
   const failAll = () => {
@@ -3669,7 +3755,7 @@ export function wirePhotoSync(deps) {
               // Reserve the key NOW so two same-key files in one batch don't both upload.
               dedupSet.add(decision.key);
 
-              const { blob, downscaled } = await downscale(rec.file);
+              const { blob, downscaled, width, height } = await downscale(rec.file);
               // Success path (downscaled JPEG): byte-for-byte identical to before —
               // .jpg path, image/jpeg. Bail path (both decoders failed; blob is the
               // ORIGINAL file): sniff the true format from the first 16 bytes so we
@@ -3691,14 +3777,17 @@ export function wirePhotoSync(deps) {
               }
               const path = `trip-photos/${rec.date}/${cleanUploader}/${uuid()}.${ext}`;
               const url = await uploadBlob(path, blob, contentType);
-              await writeDoc({
+              // Orientation-corrected dims (success path only) drive the mosaic
+              // gallery's tile spans; the bail path (original bytes, no measured
+              // dims) writes a doc without them → that photo renders a 1×1 tile.
+              await writeDoc(withDims({
                 date: rec.date,
                 uploader,
                 storagePath: path,
                 url,
                 takenAt: rec.exifDateTime || `${rec.date} 00:00:00`,
                 size: rec.file.size,
-              });
+              }, width, height));
               tally.added += 1;
               daysAdded.add(rec.date);
             } catch (err) {
@@ -4165,6 +4254,17 @@ if (typeof document !== 'undefined') {
   };
 
   const boot = async () => {
+    // Request durable storage ONCE (fire-and-forget, throw-safe). Installed web
+    // apps are granted this heuristically; it exempts the photo cache from
+    // eviction so a big day stays browsable offline. Never awaited in a way that
+    // can reject the boot; guarded so a host without navigator.storage is a no-op.
+    try {
+      if (typeof navigator !== 'undefined' && navigator.storage
+          && typeof navigator.storage.persist === 'function') {
+        Promise.resolve(navigator.storage.persist()).catch(() => {});
+      }
+    } catch { /* persistence is best-effort; never block boot */ }
+
     const overlay = document.getElementById('login-overlay');
     const form = document.getElementById('login-form');
     const passwordInput = document.getElementById('login-password');

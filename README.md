@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← tests for the data/API/nav layer (node --test; 561 total with sw.test.js).
+app.test.js    ← tests for the data/API/nav layer (node --test; 587 total with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -230,26 +230,38 @@ screens import them.
 
 | Function                | Returns / effect                                              |
 |-------------------------|--------------------------------------------------------------|
-| `mergeGalleryPhotos(authored, uploaded)` | Pure merge of an authored photo list with uploaded Firestore `photos` docs. The authored list comes first (in order), then uploaded photos sorted by `takenAt` ascending. Deduped by URL, capped at `REMINISCE_GALLERY_MAX` (12), each normalized to `{ url, alt }` (uploaded photos get `alt: "Photo by <uploader>"`). Every URL is validated through `safeUrl` — anything rejected is dropped. Exported for tests + the bootstrap. The function is unchanged; the reminisce render path calls it with an empty authored array (`mergeGalleryPhotos([], docs)`) so the gallery shows uploaded photos only. |
+| `mergeGalleryPhotos(authored, uploaded)` | Pure merge of an authored photo list with uploaded Firestore `photos` docs. The authored list comes first (in order), then uploaded photos sorted by `takenAt` ascending. Deduped by URL, bounded by `REMINISCE_GALLERY_MAX` (1000 — a sanity ceiling; in practice the gallery shows every uploaded photo), each normalized to `{ url, alt, width?, height? }` (uploaded photos get `alt: "Photo by <uploader>"`; `width`/`height` pass through when both are finite). Every URL is validated through `safeUrl` — anything rejected is dropped. Uploaded docs are additionally origin-gated to `https://firebasestorage.googleapis.com` (defense-in-depth). Exported for tests + the bootstrap. The reminisce render path calls it with an empty authored array (`mergeGalleryPhotos([], docs)`) so the gallery shows uploaded photos only. |
 | `setSubscribePhotos(fn)` | Wires (or clears) the live-photo subscription seam. `fn` is `(iso, cb) => unsubscribe` — `cb` receives the array of uploaded photo docs for that ISO date and is called on every change. The bootstrap wires this to the Firestore `onSnapshot` listener; pass `null` to detach. **When the seam is null** (every test, and any non-Firebase host), `renderDay`'s reminisce branch renders the **empty-state** — the gallery is uploads-only and there is no authored-photo fallback. |
+| `tileSpanClass(width, height)` | Pure mosaic span classifier. Returns `'gallery-tile-tall'` (portrait, h/w ≥ 1.2 → 2 rows), `'gallery-tile-wide'` (landscape, w/h ≥ 1.2 → 2 cols), or `''` (square / missing / non-finite). Used by the reminisce gallery to assign grid spans from each photo's orientation-corrected dims before any image loads. Exported for tests. |
 
 ### The reminisce gallery
 
 On a **past** day (the `'reminisce'` framing), `renderDay` drops the hero slideshow
-and shows a photo gallery instead. The gallery is **uploads-only and live**: it
-shows travelers' **uploaded** photos for that date (read from Firestore in real
-time), so a photo someone adds appears without a reload. The hand-authored stock
-`day.photos` are excluded from the gallery — they continue to drive the hero
-slideshow on anticipation/plan days. Uploads are sorted by capture time, capped at
-12. Tapping a thumbnail opens a full-screen swipeable lightbox. A past day with no
-uploads shows an empty-state note.
+and shows a photo gallery instead. The gallery is **uploads-only, live, and
+scrollable**: it shows every uploaded photo for that date in a **~66vh
+internally-scrollable 2-column mosaic**, so the rest of the day page stays
+reachable regardless of photo count. The hand-authored stock `day.photos` are
+excluded — they continue to drive the hero on anticipation/plan days. Uploads are
+sorted by capture time. Tapping a thumbnail opens a full-screen swipeable lightbox.
+A past day with no uploads shows an empty-state note.
 
-`start()` opens the live subscription and `stop()` closes it. While the first
-snapshot is pending, the seam reads `"Loading…"`. A new photo that arrives while
-the lightbox is open is applied when you close it (the open viewer is never
-disrupted). The gallery is offline-readable from the local cache after the first
-load. Live photos depend on the `firebase-photo-rules` deployment (the same rules
-that govern uploads); with no Firebase the gallery shows the empty-state.
+**Mosaic layout.** Each tile's span is determined by its orientation-corrected
+dimensions (stored in the Firestore doc at upload time, so no layout shift while
+scrolling): portrait (h/w ≥ 1.2) → 2-row tall tile; landscape (w/h ≥ 1.2) → 2-col
+wide tile; otherwise 1×1. Photos without stored dims (bail-path originals) render
+as 1×1.
+
+**Lightbox.** Slides are lazy-loaded — opening the lightbox does not eager-load the
+whole set. Each index change preloads the immediate neighbors (i±1). The counter
+reads "n / N" against the true total.
+
+`start()` opens the live Firestore subscription and `stop()` closes it. While the
+first snapshot is pending, the seam reads `"Loading…"`. A snapshot that arrives
+while the lightbox is open is deferred and applied on close (the open viewer is
+never disrupted). Scrolling position is preserved across live-snapshot rebuilds.
+The gallery is offline-readable from the local cache after the first load. Live
+photos depend on the `firebase-photo-rules` deployment; with no Firebase the
+gallery shows the empty-state.
 
 **Photo upload** — the ☰ menu's **Add photos** row is wired to a real upload flow
 (see "Adding photos" below). These exports are the testable pure cores + the
@@ -415,9 +427,9 @@ The app shell — `index.html`, `app.js`, `data/days.js`, and icons — is preca
 on first visit, so the full itinerary loads with no network. Fonts and hero photos
 are cached the first time you load them (stale-while-revalidate), so
 previously-viewed photos (and the fonts) also load offline afterward. This
-runtime cache is capped at 140 entries (oldest evicted first), so it can't grow
-without bound over a long trip — sized to keep several days of merged reminisce
-galleries warm offline. Google Maps links still require a network connection.
+runtime cache is capped at 450 entries (oldest evicted first), so it can't grow
+without bound over a long trip — sized to keep a full day's photo set warm offline.
+Google Maps links still require a network connection.
 
 ### Maintainer: bump `CACHE_VERSION` when you ship changes
 
@@ -461,7 +473,7 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The test suite (**561 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The test suite (**587 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),
@@ -474,7 +486,8 @@ Hakone content contracts (Romancecar terminus/reserved, transit minutes, veg cov
 the auth gate (login form present + native-submit guard),
 the ☰ nav menu (inline-SVG hamburger icon, hamburger popover, iconified Home/Add-photos rows, the `role="separator"` divider and its focus-trap exclusion, `opts.onAddPhotos` seam),
 the photo-upload flow (EXIF capture-date parsing against synthetic JPEG fixtures, trip-window filtering, composite-key dedup, run summaries, the `wirePhotoSync` orchestrator via injected seams, and the downscale bail path — `sniffImageType` magic-byte detection and the retry-then-honest-label upload),
-and the live reminisce gallery (`mergeGalleryPhotos` ordering/dedup/cap, the `setSubscribePhotos` seam, snapshot re-render + seam count, deferred rebuild while the lightbox is open, uploads-only gallery, the seam-absent empty-state, and the uploaded-URL origin allowlist — `isAllowedUploadOrigin` host-confusion vectors plus authored-kept-vs-uploaded-dropped branch isolation).
+the live reminisce gallery (`mergeGalleryPhotos` ordering/dedup/cap, the `setSubscribePhotos` seam, snapshot re-render + seam count, deferred rebuild while the lightbox is open, uploads-only gallery, the seam-absent empty-state, and the uploaded-URL origin allowlist — `isAllowedUploadOrigin` host-confusion vectors plus authored-kept-vs-uploaded-dropped branch isolation),
+and the scrollable photo mosaic (`tileSpanClass` boundary units for portrait/landscape/square/degenerate inputs, `mergeGalleryPhotos` dims passthrough, dispatcher dims threading, render mosaic span-class assignment, crossorigin attributes, lightbox lazy-load + neighbor preload, scrollTop preservation across snapshot rebuilds, and `wirePhotoSync`→`writeDoc` dims-persistence).
 
 ## Deploy
 

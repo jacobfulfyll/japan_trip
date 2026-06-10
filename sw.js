@@ -20,18 +20,20 @@
 // Every handler is wrapped defensively: any error falls back to a plain
 // fetch(request) so a service-worker bug can never block the page.
 
-const CACHE_VERSION = 'v37';
+const CACHE_VERSION = 'v38';
 const SHELL_CACHE = `app-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `runtime-${CACHE_VERSION}`;
 const EXPECTED_CACHES = [SHELL_CACHE, RUNTIME_CACHE];
 
 // Cap on entries kept in the runtime (photo/font) cache. Without a build step
 // the runtime cache would otherwise grow unbounded across a long trip. Raised
-// from 60 → 140 for the live reminisce gallery: 4 travelers uploading across an
-// 18-day trip, each day's view runtime-caches up to REMINISCE_GALLERY_MAX (12)
-// merged photos, plus fonts/Firebase-SDK entries — 140 keeps several days of
-// galleries warm offline (FIFO-evicting oldest) without unbounded growth.
-const RUNTIME_MAX_ENTRIES = 140;
+// 140 → 450 for the scrollable mosaic gallery: the 12-photo cap is gone, so a
+// single big day can now runtime-cache its FULL set of photos (worst case ~200),
+// plus fonts/Firebase-SDK entries — 450 keeps several full days of galleries warm
+// offline (FIFO-evicting oldest) with headroom for the cache's non-photo tenants,
+// well below where iOS storage pressure would evict. crossorigin="anonymous" imgs
+// keep these entries non-opaque (unpadded) so the count maps to real bytes.
+const RUNTIME_MAX_ENTRIES = 450;
 
 // App-shell files to precache. Relative paths resolve against the SW scope, so
 // this works both at the domain root and under the GitHub Pages subpath
