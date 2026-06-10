@@ -168,4 +168,5 @@ Returns are **deeply frozen and copy-safe** — callers cannot corrupt shared mo
 
 ## Known Issues
 
-_None._
+- **Uploaded photos don't render in the live reminisce gallery (CORS).** The Storage bucket (`gs://japan-trip-5daf1.firebasestorage.app`) has no CORS config, and gallery/lightbox imgs request CORS mode (`crossOrigin='anonymous'`, app.js:1394/1444 — deliberate, test-pinned, do NOT remove). Fix is bucket-side only: the manual task `fix-photo-storage-cors` (TASKS.md v2.2 section) has exact Cloud Shell commands. No code/deploy needed.
+- **Deploy-state trap: CACHE_VERSION v40 is consumed.** origin/main (= the live Pages site) is `4e8d343` — the TEMP date-shift build that shipped `v40`; local main carries the unpushed revert `8ab3daf` (back to `v39` + real dates). The next shell change must bump **v39→v41, skipping v40** (reusing v40 risks a byte-identical sw.js → devices that installed the TEMP build never re-precache). The first push to main also ships the revert. Re-derive "next free version" from origin/main at every merge.
