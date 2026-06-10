@@ -6539,26 +6539,69 @@ test('installSubmitGuard returns false for a missing/invalid form (no throw)', (
 //
 // `endian`: 'II' (little) or 'MM' (big). The builder writes TIFF multi-byte
 // fields in the chosen order so we can prove both endiannesses parse.
-function buildExifJpeg({ dto = null, ifd0DateTime = null, endian = 'II' } = {}) {
+function buildExifJpeg({
+  dto = null,
+  ifd0DateTime = null,
+  endian = 'II',
+  // harden-exif-subifd-truncation-null opt-in extensions (all backward-compatible
+  // — default values reproduce the original layout byte-for-byte):
+  //  • exifPtrOverride: force an 0x8769 Exif-pointer entry into IFD0 even when
+  //    `dto` is null, with this number as its value/offset field. Lets a test
+  //    author a pointer that targets BEYOND the buffer end (truncation evidence)
+  //    while the sub-IFD itself is absent from the bytes.
+  //  • ifd0ValueFirst: write the 0x0132 ASCII value blob immediately AFTER IFD0
+  //    but BEFORE the Exif sub-IFD, instead of after both IFDs. This is the
+  //    discrimination lever: it keeps the 0x0132 value INSIDE the buffer even when
+  //    a later layout pushes the sub-IFD past the end, so old (buggy) code that
+  //    fell back to 0x0132 would return the string while the fixed code returns null.
+  //  • dtoType: the EXIF type written on the 0x9003 sub-IFD entry (default 2 =
+  //    ASCII). A non-2 (or count-0) value is the "malformed entry = genuine
+  //    absence" signal that must still let 0x0132 win.
+  exifPtrOverride = null,
+  ifd0ValueFirst = false,
+  dtoType = 2,
+} = {}) {
   const little = endian === 'II';
 
-  // Count IFD0 entries: 0x8769 pointer (if we have a DTO) + 0x0132 (if given).
-  const ifd0HasExifPtr = dto != null;
+  // Count IFD0 entries: 0x8769 pointer (if we have a DTO OR a forced override)
+  // + 0x0132 (if given).
+  const ifd0HasExifPtr = dto != null || exifPtrOverride != null;
   const ifd0HasDateTime = ifd0DateTime != null;
   const ifd0Count = (ifd0HasExifPtr ? 1 : 0) + (ifd0HasDateTime ? 1 : 0);
+  // The Exif sub-IFD body is emitted only when there's a real DTO to put in it.
+  // An override pointer with no `dto` deliberately points at nothing (or past the
+  // end) — no sub-IFD body is written.
   const exifCount = dto != null ? 1 : 0;
+  const hasExifSubIfd = dto != null;
 
   const ifd0Start = 8;                       // right after the 8-byte TIFF header
   const ifd0Size = 2 + ifd0Count * 12 + 4;   // count + entries + next-IFD ptr
-  const exifStart = ifd0Start + ifd0Size;
+
+  // Layout cursor. Default (ifd0ValueFirst=false): IFD0 → Exif sub-IFD → value
+  // blobs. With ifd0ValueFirst=true: IFD0 → 0x0132 value blob → Exif sub-IFD →
+  // (DTO value blob). We walk the cursor explicitly so the sub-IFD start shifts
+  // correctly and the 0x8769 pointer can target the (shifted) sub-IFD start.
+  let cursor = ifd0Start + ifd0Size;
+
+  let ifd0DtValueOff = -1;
+  if (ifd0HasDateTime && ifd0ValueFirst) { ifd0DtValueOff = cursor; cursor += 20; }
+
+  const exifStart = cursor;                   // sub-IFD start (shifted if value-first)
   const exifSize = 2 + exifCount * 12 + 4;
-  let valueCursor = exifStart + exifSize;     // ASCII value blobs live past the IFDs
+  // When there's a real sub-IFD body, advance the cursor past it. Otherwise (no
+  // `dto`, exifCount 0) NO sub-IFD bytes are emitted, so the cursor stays put —
+  // `exifStart` still marks where one WOULD begin, so the (non-overridden) 0x8769
+  // pointer targets a buffer position even though nothing is written there.
+  if (hasExifSubIfd) cursor += exifSize;
 
   let dtoValueOff = -1;
-  let ifd0DtValueOff = -1;
-  if (dto != null) { dtoValueOff = valueCursor; valueCursor += 20; }
-  if (ifd0DateTime != null) { ifd0DtValueOff = valueCursor; valueCursor += 20; }
+  if (dto != null) { dtoValueOff = cursor; cursor += 20; }
+  if (ifd0HasDateTime && !ifd0ValueFirst) { ifd0DtValueOff = cursor; cursor += 20; }
 
+  // The 0x8769 pointer value: explicit override wins; else the (shifted) sub-IFD start.
+  const exifPtrValue = exifPtrOverride != null ? exifPtrOverride : exifStart;
+
+  const valueCursor = cursor;
   const tiff = new Uint8Array(valueCursor);
 
   const setU16 = (off, v) => {
@@ -6591,17 +6634,24 @@ function buildExifJpeg({ dto = null, ifd0DateTime = null, endian = 'II' } = {}) 
   setU16(2, 0x002a);
   setU32(4, ifd0Start);
 
-  // IFD0.
+  // IFD0. Entries are written 0x8769-then-0x0132 (NON-ascending tag order — the
+  // parser does a linear scan, so order is irrelevant; we keep it to match the
+  // original builder's emitted bytes).
   setU16(ifd0Start, ifd0Count);
   let e = ifd0Start + 2;
-  if (ifd0HasExifPtr) { setEntry(e, 0x8769, 4, 1, exifStart); e += 12; } // type 4 LONG
+  if (ifd0HasExifPtr) { setEntry(e, 0x8769, 4, 1, exifPtrValue); e += 12; } // type 4 LONG
   if (ifd0HasDateTime) { setEntry(e, 0x0132, 2, 20, ifd0DtValueOff); e += 12; } // type 2 ASCII
   setU32(ifd0Start + 2 + ifd0Count * 12, 0); // next-IFD = 0
 
-  // Exif sub-IFD.
-  setU16(exifStart, exifCount);
-  if (exifCount) setEntry(exifStart + 2, 0x9003, 2, 20, dtoValueOff); // DateTimeOriginal
-  setU32(exifStart + 2 + exifCount * 12, 0); // next-IFD = 0
+  // Exif sub-IFD — only emitted when there's a real DTO. (An exifPtrOverride with
+  // no dto deliberately leaves the pointer dangling at a position with no sub-IFD.)
+  if (hasExifSubIfd) {
+    setU16(exifStart, exifCount);
+    // 0x9003 DateTimeOriginal — `dtoType` is normally 2 (ASCII); a non-2 / count-0
+    // value makes the entry malformed (genuine absence → 0x0132 fallback wins).
+    if (exifCount) setEntry(exifStart + 2, 0x9003, dtoType, dtoType === 2 ? 20 : 1, dtoValueOff);
+    setU32(exifStart + 2 + exifCount * 12, 0); // next-IFD = 0
+  }
 
   // ASCII value blobs.
   if (dto != null) setAscii(dtoValueOff, dto);
@@ -6647,6 +6697,144 @@ test('readExifDateTimeOriginal: prefers sub-IFD 0x9003 over IFD0 0x0132 when bot
 test('readExifDateTimeOriginal: big-endian IFD0-only DateTime fallback', () => {
   const buf = buildExifJpeg({ dto: null, ifd0DateTime: '2026:07:01 12:00:00', endian: 'MM' });
   assert.equal(readExifDateTimeOriginal(buf), '2026:07:01 12:00:00');
+});
+
+// ===========================================================================
+// harden-exif-subifd-truncation-null: truncated sub-IFD must NOT silently fall
+// back to IFD0 0x0132 (a file-EDIT time, wrong as a capture date).
+// ===========================================================================
+// IMPLEMENT taught `readTiffDateTime` to DISTINGUISH truncation evidence from
+// genuine absence. When the 128 KB header slice cuts the Exif sub-IFD (or the
+// IFD0 entry table that could hide the 0x8769 pointer), the walker now returns
+// null rather than the weaker 0x0132 DateTime — because under truncation it
+// CANNOT know whether a 0x9003 it would have preferred was simply sliced away.
+// The discriminator is the module-local `EXIF_TRUNCATED` Symbol (NOT exported);
+// these tests pin the observable contract (string|null, never a Symbol) at the
+// public boundary.
+//
+// DISCRIMINATION REQUIREMENT: the headline fixture must keep the 0x0132 value
+// blob INSIDE the buffer while the sub-IFD is past the end — otherwise old buggy
+// code (which fell through to 0x0132) would also return null and the test would
+// not prove anything. `ifd0ValueFirst: true` places the 0x0132 blob right after
+// IFD0 (before where the sub-IFD would sit), and `exifPtrOverride` dangles the
+// 0x8769 pointer past the buffer end. So: old code → returns the 0x0132 string;
+// fixed code → returns null. (Mutation-checked by reverting the fix; see the
+// WRITE-TESTS report.)
+
+test('readExifDateTimeOriginal: truncated sub-IFD does NOT fall back to IFD0 0x0132 (II)', () => {
+  // IFD0 carries a real 0x0132 (value blob kept in-buffer via ifd0ValueFirst) AND
+  // an 0x8769 Exif pointer aimed BEYOND the buffer end. The walker follows the
+  // pointer, hits the readAscii IFD-start bounds guard (EXIF_TRUNCATED), and —
+  // critically — returns null instead of the in-buffer 0x0132 string. A capture
+  // date we can't trust (sub-IFD sliced away) is worse than no date.
+  const buf = buildExifJpeg({
+    ifd0DateTime: '2001:02:03 04:05:06',
+    ifd0ValueFirst: true,
+    exifPtrOverride: 100000, // way past the ~58-byte TIFF block → sub-IFD past end
+    endian: 'II',
+  });
+  // Prove the discrimination premise: the 0x0132 value IS present and recoverable
+  // when there's no dangling pointer (sanity twin), so the null below is caused by
+  // the truncated pointer, not a missing 0x0132.
+  const sane = buildExifJpeg({ ifd0DateTime: '2001:02:03 04:05:06', endian: 'II' });
+  assert.equal(readExifDateTimeOriginal(sane), '2001:02:03 04:05:06');
+  // The headline: truncated sub-IFD pointer → null, NOT the 0x0132 string.
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+test('readExifDateTimeOriginal: truncated sub-IFD does NOT fall back to IFD0 0x0132 (MM)', () => {
+  // Same discrimination, big-endian — endianness is irrelevant to the truncation
+  // logic, but cheap to cover both byte orders.
+  const buf = buildExifJpeg({
+    ifd0DateTime: '2001:02:03 04:05:06',
+    ifd0ValueFirst: true,
+    exifPtrOverride: 100000,
+    endian: 'MM',
+  });
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+test('readExifDateTimeOriginal: a cut IFD0 entry table -> null via the readPointer(-1) route', () => {
+  // Build a valid fixture (0x0132 value-first + an 0x8769 pointer + a sub-IFD with
+  // a real 0x9003), then slice the JPEG so the IFD0 entry table is cut mid-scan.
+  // readPointer's `e + 12 > len` guard returns -1 → the tail short-circuits to null
+  // (the 0x8769 pointer could be hidden past the cut, so 0x0132 is untrustworthy).
+  //
+  // HONEST NON-DISCRIMINATION NOTE: with ifd0ValueFirst the 0x0132 blob sits right
+  // after IFD0, so any slice landing INSIDE the IFD0 table necessarily also cuts
+  // that blob. Under OLD code, readPointer returned 0 (its old table-cut value),
+  // exifIfdOff was falsy, then readAscii(ifd0, 0x0132) ALSO hit the table cut and
+  // returned null — so old code returned null here too. This test therefore pins
+  // the NEW -1 route's observable behavior (still null, no throw), NOT a behavior
+  // change. The headline tests above carry the discrimination; this one guards the
+  // new code path stays bounds-safe and null-yielding.
+  const full = buildExifJpeg({
+    dto: '2026:06:25 23:30:00',
+    ifd0DateTime: '2001:02:03 04:05:06',
+    ifd0ValueFirst: true,
+    endian: 'II',
+  });
+  // TIFF starts at absolute offset 12 (SOI 2 + APP1 marker 2 + segLen 2 + Exif\0\0 6);
+  // IFD0 at TIFF+8 = 20; the entry table begins at IFD0+2 = 22. With two IFD0 entries
+  // (0x8769 + 0x0132) the table is 24 bytes. Cut at 22+6 to land 6 bytes into the
+  // first 12-byte entry → readPointer's `e + 12 > len` guard trips → -1.
+  const midTable = full.slice(0, 22 + 6);
+  assert.doesNotThrow(() => readExifDateTimeOriginal(midTable));
+  assert.equal(readExifDateTimeOriginal(midTable), null);
+});
+
+test('readExifDateTimeOriginal: a MALFORMED 0x9003 (non-ASCII type) keeps the 0x0132 fallback', () => {
+  // Genuine absence (NOT truncation): the sub-IFD is present and intact, but its
+  // 0x9003 entry is malformed — type ≠ 2 (here type 4 = LONG) — so readAscii's
+  // `type !== 2 || num === 0` guard returns null (genuine "no usable DTO here").
+  // IFD0 still carries a valid 0x0132, so the walker SHOULD fall through to it and
+  // return the 0x0132 string. This pins that the EXIF_TRUNCATED handling did NOT
+  // over-suppress the legitimate fallback path.
+  const buf = buildExifJpeg({
+    dto: '2026:06:25 23:30:00', // present so the sub-IFD body is emitted...
+    dtoType: 4,                 // ...but malformed (LONG, not ASCII) → genuine absence
+    ifd0DateTime: '2026:06:20 08:15:00',
+    endian: 'II',
+  });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:06:20 08:15:00');
+});
+
+test('readExifDateTimeOriginal: a MALFORMED 0x9003 (non-ASCII type) keeps the 0x0132 fallback (MM)', () => {
+  // Big-endian twin of the case above. Endianness is irrelevant to the type guard
+  // itself, but the malformed-entry detection AND the 0x0132 fallback recovery both
+  // read entry type/count and the value blob through the endian-sensitive u16/u32
+  // readers — so a one-line twin cheaply proves the genuine-absence→fallback path
+  // holds under MM byte order too.
+  const buf = buildExifJpeg({
+    dto: '2026:06:25 23:30:00',
+    dtoType: 4,
+    ifd0DateTime: '2026:06:20 08:15:00',
+    endian: 'MM',
+  });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:06:20 08:15:00');
+});
+
+test('readExifDateTimeOriginal: the EXIF_TRUNCATED sentinel NEVER escapes (string|null only)', () => {
+  // The discriminator is a module-local Symbol. Across the whole edge-fixture
+  // family — headline truncation, table-cut slice, malformed-entry fallback, and a
+  // plain valid fixture — the public return must always be a string or null, never
+  // the Symbol leaking out.
+  const headlineTrunc = buildExifJpeg({
+    ifd0DateTime: '2001:02:03 04:05:06', ifd0ValueFirst: true, exifPtrOverride: 100000, endian: 'II',
+  });
+  const fullForCut = buildExifJpeg({
+    dto: '2026:06:25 23:30:00', ifd0DateTime: '2001:02:03 04:05:06', ifd0ValueFirst: true, endian: 'II',
+  });
+  const tableCut = fullForCut.slice(0, 22 + 6);
+  const malformed = buildExifJpeg({
+    dto: '2026:06:25 23:30:00', dtoType: 4, ifd0DateTime: '2026:06:20 08:15:00', endian: 'II',
+  });
+  const valid = buildExifJpeg({ dto: '2026:06:25 23:30:00', endian: 'II' });
+  for (const buf of [headlineTrunc, tableCut, malformed, valid]) {
+    const out = readExifDateTimeOriginal(buf);
+    assert.notEqual(typeof out, 'symbol', 'sentinel must not escape the public boundary');
+    assert.ok(out === null || typeof out === 'string', 'public return is string | null');
+  }
 });
 
 test('readExifDateTimeOriginal: no APP1 / non-Exif APP1 content -> null', () => {

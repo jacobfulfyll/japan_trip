@@ -2558,7 +2558,11 @@ export function renderInto(rootEl, day = getDay('2026-06-24'), framing = 'plan')
  * Walks: SOI `FFD8` → scan APP segments for APP1 `FFE1` carrying `"Exif\0\0"` →
  * read the TIFF header endianness (`II`=little, `MM`=big) → IFD0 → follow the
  * Exif-IFD pointer (tag 0x8769) → read 0x9003. Falls back to IFD0's weaker
- * `DateTime` (0x0132) only if the sub-IFD date is missing. Bounds-checked
+ * `DateTime` (0x0132) only when the sub-IFD is present-and-intact but genuinely
+ * lacks 0x9003. When the 128 KB header slice TRUNCATES the sub-IFD (or the IFD0
+ * entry table that could hide the 0x8769 pointer), returns null instead — 0x0132
+ * is a file-EDIT timestamp, confidently wrong for a capture date, so the caller
+ * degrades to the lastModified-day bucket rather than recording it. Bounds-checked
  * throughout (a truncated/garbage buffer returns null, never throws).
  *
  * @param {ArrayBuffer | ArrayBufferView} buffer
@@ -2945,11 +2949,22 @@ function locateTiffInIsoBmff(bytes, len) {
   return -1;
 }
 
+// Module-local sentinel distinguishing "the slice truncated the bytes we needed"
+// from "the bytes are present but the tag is genuinely absent". It only ever lives
+// inside readTiffDateTime's two closures (readAscii returns it in its string
+// domain; readPointer uses -1 in its number domain) and is consumed before the
+// function returns — it NEVER escapes to a caller (return type stays string|null).
+const EXIF_TRUNCATED = Symbol('exif-truncated');
+
 /**
  * Shared TIFF-block walker: from the TIFF byte-order marker at `tiffStart`, read
- * IFD0 → follow the Exif sub-IFD pointer (0x8769) → read DateTimeOriginal (0x9003),
- * falling back to IFD0's weaker DateTime (0x0132). Bounds-checked throughout
- * (returns null, never throws). Byte-identical to the original JPEG path.
+ * IFD0 → follow the Exif sub-IFD pointer (0x8769) → read DateTimeOriginal (0x9003).
+ * Falls back to IFD0's weaker DateTime (0x0132) ONLY when the sub-IFD is
+ * present-and-intact but genuinely lacks 0x9003. If the slice TRUNCATES the
+ * sub-IFD (or the IFD0 entry table that could hide the 0x8769 pointer), returns
+ * null instead — 0x0132 is a file-edit time, wrong for a capture date. Bounds-
+ * checked throughout (returns null, never throws). The JPEG path stays unchanged
+ * for any non-truncated buffer.
  * @param {Uint8Array} bytes
  * @param {number} tiffStart
  * @param {number} len
@@ -2982,18 +2997,18 @@ function readTiffDateTime(bytes, tiffStart, len) {
   // Read an ASCII value for a tag in the IFD at `ifdOff`. Returns the trimmed
   // string, or null. Handles inline (≤4 byte) and offset values.
   const readAscii = (ifdOff, wantTag) => {
-    if (ifdOff + 2 > len) return null;
+    if (ifdOff + 2 > len) return EXIF_TRUNCATED; // IFD start beyond the slice
     const count = u16(ifdOff);
     let e = ifdOff + 2;
     for (let i = 0; i < count; i += 1, e += 12) {
-      if (e + 12 > len) return null;
+      if (e + 12 > len) return EXIF_TRUNCATED; // entry table cut mid-scan
       const tag = u16(e);
       if (tag !== wantTag) continue;
       const type = u16(e + 2);
       const num = u32(e + 4);
-      if (type !== 2 || num === 0) return null; // ASCII only
+      if (type !== 2 || num === 0) return null; // ASCII only — genuine absence
       const valOff = num <= 4 ? e + 8 : tiffStart + u32(e + 8);
-      if (valOff + num > len) return null;
+      if (valOff + num > len) return EXIF_TRUNCATED; // value bytes beyond the slice
       let s = '';
       for (let k = 0; k < num; k += 1) {
         const c = bytes[valOff + k];
@@ -3006,25 +3021,39 @@ function readTiffDateTime(bytes, tiffStart, len) {
     return null;
   };
 
-  // Find the Exif sub-IFD pointer (tag 0x8769) in IFD0.
+  // Find the Exif sub-IFD pointer (tag 0x8769) in IFD0. Returns the pointer
+  // offset (>0), 0 for "no such tag / empty IFD", or -1 for "entry table
+  // truncated mid-scan" (the pointer could be hidden past the cut). Real returns
+  // are unsigned offsets, so -1 never collides with a valid value.
+  // ASYMMETRY (deliberate — pre-empting a "consistency fix"): the IFD-start guard
+  // below still returns 0, not -1, because IFD0's start is already bounds-checked
+  // at `if (ifd0 + 2 > len) return null` above, so this guard is unreachable for
+  // our only caller and a 0 there is harmless. Two sentinel STYLES also coexist on
+  // purpose: readAscii works in a string domain (Symbol EXIF_TRUNCATED), readPointer
+  // in a number domain (-1) — each picks a value that can't collide with its own
+  // legitimate returns. Do not unify them.
   const readPointer = (ifdOff, wantTag) => {
     if (ifdOff + 2 > len) return 0;
     const count = u16(ifdOff);
     let e = ifdOff + 2;
     for (let i = 0; i < count; i += 1, e += 12) {
-      if (e + 12 > len) return 0;
+      if (e + 12 > len) return -1; // entry table cut mid-scan — 0x8769 may be hidden
       if (u16(e) === wantTag) return u32(e + 8);
     }
     return 0;
   };
 
   const exifIfdOff = readPointer(ifd0, 0x8769);
+  if (exifIfdOff === -1) return null; // IFD0 table truncated — 0x8769 may be hidden past the cut
   if (exifIfdOff) {
     const subDate = readAscii(tiffStart + exifIfdOff, 0x9003); // DateTimeOriginal
+    if (subDate === EXIF_TRUNCATED) return null; // MUST precede truthiness — Symbols are truthy
     if (subDate) return subDate;
   }
   // Weaker fallback: IFD0 DateTime (0x0132) — file-modification time, not capture.
-  return readAscii(ifd0, 0x0132);
+  // Only reached on GENUINE sub-IFD absence; a truncated 0x0132 read collapses to null.
+  const fb = readAscii(ifd0, 0x0132);
+  return fb === EXIF_TRUNCATED ? null : fb; // sentinel never escapes
 }
 
 /**
