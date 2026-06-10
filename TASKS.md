@@ -2,7 +2,22 @@
 
 ## Active Tasks
 
-_None._
+### redesign-gallery-mosaic
+**Task**: "Seigaiha" gallery — card-bleed 3-col square mosaic @75vh, hash crests + dims-gated panoramas, hole-free via list-based demotion + property test
+**Pipeline**: code-workflow
+**Branch**: task/redesign-gallery-mosaic
+**Worktree**: .worktree/redesign-gallery-mosaic
+**Base**: main
+**Started**: 2026-06-10
+**Files**:
+- MOD: app.js
+- MOD: index.html
+- MOD: app.test.js
+- MOD: sw.js
+- MOD: sw.test.js
+- MOD: CLAUDE.md
+- MOD: README.md
+- MOD: CHANGELOG.md
 
 ---
 
@@ -26,8 +41,6 @@ _None._
 <!-- From 2026-06-09/10 live photo testing + ungroomed-debt triage (16-agent researched+verified 2026-06-10). DEPLOY-STATE GOTCHA: origin/main = 4e8d343 (TEMP date-shift build — CACHE_VERSION v40 is CONSUMED on the live site); local main = 8ab3daf (UNPUSHED revert, back to v39 + real dates). The FIRST code task to merge bumps v39→v41 (SKIP v40 — reuse risks byte-identical sw.js → devices stuck on the shifted build); later merges take the next FREE version, sw.test.js pin in lockstep, re-derived from origin/main at MERGE time. The first push also carries the 8ab3daf revert. The five code tasks all touch app.js + bump CACHE_VERSION → MUTUALLY CONFLICTING; run SERIALLY in listed order. (fix-photo-storage-cors: manual, COMPLETED 2026-06-10 — bucket CORS set, gallery renders live.) Tiers per user decision 2026-06-10: opus:high for complex tasks, opus:medium for fully-specified simple ones. -->
 - [ ] speed-up-photo-picker-handoff: Kill the 30–60s iOS in-picker freeze — accept HEIC originals + multi-container EXIF dating (HEIC ISO-BMFF + PNG eXIf for screenshots) [P1] [conflicts: harden-exif-subifd-truncation-null, fix-modal-stack-overlaps, export-downscale-router-seam] [complex] [tier: opus:high] [code] [planned]
   files: app.js (MOD), app.test.js (MOD), sw.js (MOD), sw.test.js (MOD), CLAUDE.md (MOD), README.md (MOD), CHANGELOG.md (MOD)
-- [ ] redesign-gallery-mosaic: "Seigaiha" gallery — card-bleed 3-col square mosaic @75vh, URL-hash 2×2 crests + dims-gated 3×1 panoramas, hole-free via list-based demotion + exact-placement property test (multi-agent design exploration 2026-06-10, adversarially verified) [P2] [conflicts: speed-up-photo-picker-handoff, harden-exif-subifd-truncation-null, fix-modal-stack-overlaps, export-downscale-router-seam] [complex] [tier: opus:high] [code] [planned]
-  files: app.js (MOD), index.html (MOD), app.test.js (MOD), sw.js (MOD), sw.test.js (MOD), CLAUDE.md (MOD), README.md (MOD), CHANGELOG.md (MOD)
 - [ ] harden-exif-subifd-truncation-null: EXIF slice-truncation evidence → null degrade (never the IFD0 edit-time fallback) [P3] [depends: speed-up-photo-picker-handoff] [conflicts: speed-up-photo-picker-handoff, redesign-gallery-mosaic, fix-modal-stack-overlaps, export-downscale-router-seam] [simple] [tier: opus:medium] [code] [planned]
   files: app.js (MOD), app.test.js (MOD), sw.js (MOD), sw.test.js (MOD), CLAUDE.md (MOD), README.md (MOD), CHANGELOG.md (MOD)
 - [ ] fix-modal-stack-overlaps: Topmost-only keyboard trap for stacked overlays + sweep stale finished upload sheet at next run (bundles stacked-modal-keydown-traps + release-upload-latch-on-done) [P3] [conflicts: speed-up-photo-picker-handoff, harden-exif-subifd-truncation-null, export-downscale-router-seam] [simple] [tier: opus:medium] [code] [planned]
