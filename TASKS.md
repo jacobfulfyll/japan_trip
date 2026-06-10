@@ -2,23 +2,7 @@
 
 ## Active Tasks
 
-### make-gallery-scrollable
-**Task**: Remove 12-photo reminisce cap — ~66vh internally-scrollable chronological mosaic (portrait spans 2 rows, landscape 2 cols, row-dense) from width/height recorded at upload via the downscale bitmap; lazy lightbox + neighbor preload; scrollTop restore across live rebuilds; crossorigin imgs; storage.persist(); RUNTIME_MAX_ENTRIES 140→450
-**Pipeline**: code-workflow
-**Branch**: task/make-gallery-scrollable
-**Worktree**: .worktree/make-gallery-scrollable
-**Base**: main
-**Started**: 2026-06-09
-**Files**:
-- MOD: app.js
-- MOD: photo-worker.js
-- MOD: index.html
-- MOD: app.test.js
-- MOD: sw.js
-- MOD: sw.test.js
-- MOD: CLAUDE.md
-- MOD: README.md
-- MOD: CHANGELOG.md
+_None._
 
 ---
 

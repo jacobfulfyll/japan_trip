@@ -52,3 +52,4 @@
 - [x] harden-upload-bail-path Downscale failure → one main-thread retry → still failing → silently upload ORIGINAL bytes with TRUE contentType/extension (magic-byte sniff) -- 2026-06-09
 - [x] minimize-upload-modal Minimizable upload progress modal (– / backdrop → floating pill) + interrupted-run recovery (jt:upload-run marker, heartbeat, boot-only one-shot notice) -- 2026-06-09
 - [x] harden-uploaded-url-origin Constrain uploaded reminisce-gallery photo URLs to the Firebase Storage origin (defense-in-depth allowlist on mergeGalleryPhotos' uploaded branch; CACHE_VERSION v37) -- 2026-06-10
+- [x] make-gallery-scrollable Remove 12-photo reminisce cap → ~66vh scrollable mosaic gallery (dims-driven spans, lazy lightbox, scrollTop restore, crossorigin, storage.persist, RUNTIME_MAX 450); merged local to main as v38, 587 tests -- 2026-06-10
