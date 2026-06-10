@@ -2,24 +2,6 @@
 
 ## Active Tasks
 
-### harden-upload-bail-path
-**Task**: Downscale failure → one main-thread retry → still failing → silently upload ORIGINAL bytes with TRUE contentType/extension (magic-byte sniff)
-**Pipeline**: code-workflow
-**Branch**: task/harden-upload-bail-path
-**Worktree**: .worktree/harden-upload-bail-path
-**Base**: main
-**Started**: 2026-06-09
-**Files**:
-- MOD: app.js
-- MOD: app.test.js
-- MOD: sw.js
-- MOD: sw.test.js
-- MOD: CLAUDE.md
-- MOD: README.md
-- MOD: CHANGELOG.md
-
----
-
 ### minimize-upload-modal
 **Task**: "–" + backdrop-tap minimize the upload modal to a floating pill (live "N of M", tap to re-expand, "✓ N added" auto-fade) + interrupted-run detection (jt:upload-run marker with heartbeat, boot-only stale check, one-shot recovery notice)
 **Pipeline**: code-workflow

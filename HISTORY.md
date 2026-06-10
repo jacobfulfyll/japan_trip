@@ -49,3 +49,4 @@
 - [~] limit-subscribephotos-query: pruned — superseded by make-gallery-scrollable (uncapped gallery NEEDS all docs); docs are ~200B metadata; a correct limit would require orderBy → composite index, which the design deliberately avoids -- pruned 2026-06-09
 - [~] clamp-worker-downscale-constants: pruned — only caller passes module constants; harden-upload-bail-path's retry chain makes even the hypothetical bad-input failure benign (retry → original upload); standalone ship cost (CACHE_VERSION bump) exceeds the guard's value -- pruned 2026-06-09
 - [x] slice-exif-read Read only first ~128KB per file for EXIF + mount the progress sheet immediately ("Preparing photos…") — fixes the picker→progress dead air -- 2026-06-09
+- [x] harden-upload-bail-path Downscale failure → one main-thread retry → still failing → silently upload ORIGINAL bytes with TRUE contentType/extension (magic-byte sniff) -- 2026-06-09
