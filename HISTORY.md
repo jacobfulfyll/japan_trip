@@ -62,3 +62,4 @@
 - [x] speed-up-photo-picker-handoff Kill the iOS in-picker freeze — accept HEIC originals + multi-container EXIF dating (HEIC ISO-BMFF + PNG eXIf) -- 2026-06-10
 - [x] harden-exif-subifd-truncation-null EXIF slice-truncation evidence → null degrade (never the IFD0 edit-time fallback) — discriminating mutation-proven fixtures, 651 tests, CACHE_VERSION v43 -- 2026-06-10
 - [x] fix-modal-stack-overlaps Topmost-only keyboard trap for stacked overlays + sweep stale finished upload sheet at next run -- 2026-06-10
+- [x] export-downscale-router-seam Extract exported buildDownscaleRouter factory so the worker→main retry contract is unit-testable -- 2026-06-10

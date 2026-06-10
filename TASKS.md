@@ -2,21 +2,7 @@
 
 ## Active Tasks
 
-### export-downscale-router-seam
-**Task**: Extract exported buildDownscaleRouter factory so the worker→main retry contract is unit-testable
-**Pipeline**: code-workflow
-**Branch**: task/export-downscale-router-seam
-**Worktree**: .worktree/export-downscale-router-seam
-**Base**: main
-**Started**: 2026-06-10
-**Files**:
-- MOD: app.js
-- MOD: app.test.js
-- MOD: sw.js
-- MOD: sw.test.js
-- MOD: CLAUDE.md
-- MOD: README.md
-- MOD: CHANGELOG.md
+_None._
 
 ---
 
