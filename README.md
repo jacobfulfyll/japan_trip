@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← tests for the data/API/nav layer (node --test; 600 total with sw.test.js).
+app.test.js    ← tests for the data/API/nav layer (node --test; 614 total with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -232,25 +232,36 @@ screens import them.
 |-------------------------|--------------------------------------------------------------|
 | `mergeGalleryPhotos(authored, uploaded)` | Pure merge of an authored photo list with uploaded Firestore `photos` docs. The authored list comes first (in order), then uploaded photos sorted by `takenAt` ascending. Deduped by URL, bounded by `REMINISCE_GALLERY_MAX` (1000 — a sanity ceiling; in practice the gallery shows every uploaded photo), each normalized to `{ url, alt, width?, height? }` (uploaded photos get `alt: "Photo by <uploader>"`; `width`/`height` pass through when both are finite). Every URL is validated through `safeUrl` — anything rejected is dropped. Uploaded docs are additionally origin-gated to `https://firebasestorage.googleapis.com` (defense-in-depth). Exported for tests + the bootstrap. The reminisce render path calls it with an empty authored array (`mergeGalleryPhotos([], docs)`) so the gallery shows uploaded photos only. |
 | `setSubscribePhotos(fn)` | Wires (or clears) the live-photo subscription seam. `fn` is `(iso, cb) => unsubscribe` — `cb` receives the array of uploaded photo docs for that ISO date and is called on every change. The bootstrap wires this to the Firestore `onSnapshot` listener; pass `null` to detach. **When the seam is null** (every test, and any non-Firebase host), `renderDay`'s reminisce branch renders the **empty-state** — the gallery is uploads-only and there is no authored-photo fallback. |
-| `tileSpanClass(width, height)` | Pure mosaic span classifier. Returns `'gallery-tile-tall'` (portrait, h/w ≥ 1.2 → 2 rows), `'gallery-tile-wide'` (landscape, w/h ≥ 1.2 → 2 cols), or `''` (square / missing / non-finite). Used by the reminisce gallery to assign grid spans from each photo's orientation-corrected dims before any image loads. Exported for tests. |
+| `assignTileSpans(photos)` | Pure, **list-based** Seigaiha-mosaic span assigner. Takes the gallery's photo array and returns a parallel `string[]` of span classes — `''` (plain square, the default), `'gallery-tile-feature'` (a 2×2 "crest"), or `'gallery-tile-pano'` (a full-row 3×1 "panorama"). A photo with finite dims and w/h ≥ 1.7 is a panorama; otherwise a `fnv1a(url) % 7 === 3` hash promotes ~1-in-7 photos to crests (**panorama outranks crest**). A backward credit pass demotes any crest/pano that the following squares can't backfill, so the `grid-auto-flow: row dense` layout is **provably hole-free** (an exhaustive + seeded-random property test against an exact dense-placement simulator is the authority). List-based, not per-tile, because hole-freeness depends on how many squares follow each big tile. Exported for tests. |
+| `fnv1a(str)` | Pure 32-bit unsigned FNV-1a string hash — tiny, deterministic, dependency-free. Used to pick crests from a photo's immutable Storage URL so a tile's size never reshuffles when later uploads re-sort the gallery. Exported for tests. |
+| `isFeatureUrl(url)` | Pure: `true` iff `fnv1a(url) % 7 === 3` — the crest predicate. Exported so tests/fixtures **derive** which URLs are crests rather than hard-coding hashes. |
+| `GALLERY_COLS` | The mosaic column count (`3`). The credit math and the `.reminisce-gallery` CSS (`repeat(3, 1fr)`) both derive from it; a test reads `index.html` to keep them in lockstep. |
 | `toDirectionsUrl(mapUrl)` | Pure helper. Rewrites a `https://maps.google.com/?q=<place>` authored URL into `https://www.google.com/maps/dir/?api=1&destination=<place>` (origin = current location; no `travelmode` — Google remembers the last-used mode). Returns `null` on any miss: no `?q=` param, empty value, or an unsafe/relative URL. Callers fall back to the original via `?? mapUrl`. Exported for tests. |
 
 ### The reminisce gallery
 
 On a **past** day (the `'reminisce'` framing), `renderDay` drops the hero slideshow
 and shows a photo gallery instead. The gallery is **uploads-only, live, and
-scrollable**: it shows every uploaded photo for that date in a **~66vh
-internally-scrollable 2-column mosaic**, so the rest of the day page stays
-reachable regardless of photo count. The hand-authored stock `day.photos` are
-excluded — they continue to drive the hero on anticipation/plan days. Uploads are
-sorted by capture time. Tapping a thumbnail opens a full-screen swipeable lightbox.
-A past day with no uploads shows an empty-state note.
+scrollable** — the "Seigaiha" mosaic: it shows every uploaded photo for that date
+in a **3-column square grid** inside a **~75vh internally-scrollable window**, so the
+rest of the day page stays reachable regardless of photo count. The grid bleeds to
+the full width of the day-view card; top and bottom edges fade out so the scroll
+feels endless. The hand-authored stock `day.photos` are excluded — they continue to
+drive the hero on anticipation/plan days. Uploads are sorted by capture time.
+Tapping a thumbnail opens a full-screen swipeable lightbox. A past day with no
+uploads shows an empty-state note.
 
-**Mosaic layout.** Each tile's span is determined by its orientation-corrected
-dimensions (stored in the Firestore doc at upload time, so no layout shift while
-scrolling): portrait (h/w ≥ 1.2) → 2-row tall tile; landscape (w/h ≥ 1.2) → 2-col
-wide tile; otherwise 1×1. Photos without stored dims (bail-path originals) render
-as 1×1.
+**Mosaic layout.** The **square is the default** — every photo crops to a square via
+`object-fit: cover` on a 3-column grid (`repeat(3, 1fr)`, `grid-auto-flow: row
+dense`). Two larger shapes punctuate the calm grid: a **2×2 "crest"** (~1-in-7
+photos, chosen by `fnv1a(url) % 7 === 3` — a hash of the immutable Storage URL, so a
+tile's size is stable across live re-sorts) and a full-row **3×1 "panorama"** (a
+photo with stored dims and w/h ≥ 1.7 — **panorama outranks crest**). Photos without
+stored dims (bail-path originals) are never panoramas. The spans come from a single
+`assignTileSpans(photos)` pass whose backward credit algorithm demotes any crest or
+panorama the following squares can't backfill, so the `dense` layout is **provably
+hole-free** (guaranteed by an exact CSS-Grid dense-placement simulator property
+test, not per-tile thresholds).
 
 **Lightbox.** Slides are lazy-loaded — opening the lightbox does not eager-load the
 whole set. Each index change preloads the immediate neighbors (i±1). The counter
@@ -474,7 +485,7 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The test suite (**600 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The test suite (**614 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),
@@ -488,7 +499,7 @@ the auth gate (login form present + native-submit guard),
 the ☰ nav menu (inline-SVG hamburger icon, hamburger popover, iconified Home/Add-photos rows, the `role="separator"` divider and its focus-trap exclusion, `opts.onAddPhotos` seam),
 the photo-upload flow (EXIF capture-date parsing against synthetic JPEG fixtures, trip-window filtering, composite-key dedup, run summaries, the `wirePhotoSync` orchestrator via injected seams, and the downscale bail path — `sniffImageType` magic-byte detection and the retry-then-honest-label upload),
 the live reminisce gallery (`mergeGalleryPhotos` ordering/dedup/cap, the `setSubscribePhotos` seam, snapshot re-render + seam count, deferred rebuild while the lightbox is open, uploads-only gallery, the seam-absent empty-state, and the uploaded-URL origin allowlist — `isAllowedUploadOrigin` host-confusion vectors plus authored-kept-vs-uploaded-dropped branch isolation),
-the scrollable photo mosaic (`tileSpanClass` boundary units for portrait/landscape/square/degenerate inputs, `mergeGalleryPhotos` dims passthrough, dispatcher dims threading, render mosaic span-class assignment, crossorigin attributes, lightbox lazy-load + neighbor preload, scrollTop preservation across snapshot rebuilds, and `wirePhotoSync`→`writeDoc` dims-persistence),
+the Seigaiha photo mosaic (`fnv1a`/`isFeatureUrl` hash units, `assignTileSpans` hole-freeness proven by an exact CSS-Grid `row dense` simulator property test — exhaustive n ≤ 16 + 20k seeded-random n ≤ 80 + a mutation check — plus panorama-outranks-crest and dim-less-never-pano cases, the `repeat(3, 1fr)`/`GALLERY_COLS` lockstep invariant read from `index.html`, `mergeGalleryPhotos` dims passthrough, dispatcher dims threading, render span-class assignment, crossorigin attributes, lightbox lazy-load + neighbor preload, scrollTop preservation across snapshot rebuilds, and `wirePhotoSync`→`writeDoc` dims-persistence),
 and map directions (`toDirectionsUrl` rewrite units — valid `?q=` URLs, missing param, empty, unsafe/relative inputs — plus render tests for the dual 📍/ⓘ rec-card links and the directions-only plan-item and lodging call sites).
 
 ## Deploy

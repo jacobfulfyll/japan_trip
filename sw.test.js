@@ -620,10 +620,12 @@ test('a non-/firebasejs/ path on www.gstatic.com is NOT intercepted by the Fireb
   assert.equal(event._responded, false, 'only the /firebasejs/ path should route to the SDK cache');
 });
 
-test('CACHE_VERSION is v39 (map pins open Google Maps directions mode + ⓘ place link on rec cards — index.html + app.js shell change)', () => {
+test('CACHE_VERSION is v41 (Seigaiha gallery mosaic — 3-col square-default redesign; index.html + app.js shell change; SKIPS consumed v40)', () => {
   // sw.test.js derives CACHE_VERSION from the sw.js literal; this pins the
   // expected value so an accidental revert of the bump fails loudly.
-  assert.equal(CACHE_VERSION, 'v39');
+  // v40 was consumed by the deployed TEMP date-shift build — skip it so a
+  // byte-identical sw.js never strands devices stuck on that build.
+  assert.equal(CACHE_VERSION, 'v41');
 });
 
 // ===========================================================================
@@ -687,6 +689,17 @@ const INDEX_SRC = readFileSync(join(HERE, 'index.html'), 'utf8');
 
 test('index.html links the web app manifest', () => {
   assert.match(INDEX_SRC, /<link\s+rel="manifest"\s+href="manifest\.json"/);
+});
+
+// Cross-file invariant (redesign-gallery-mosaic): app.js's assignTileSpans credit
+// math (CREST_COST/PANO_COST/GALLERY_COLS=3) is derived from a THREE-column grid.
+// If the CSS column count silently changed, the hole-freeness proof would rot.
+// Pin the coupling: the .reminisce-gallery rule must declare repeat(3, 1fr).
+test('index.html .reminisce-gallery grid is 3 columns (matches app.js GALLERY_COLS)', () => {
+  const rule = INDEX_SRC.match(/\.reminisce-gallery\s*\{[^}]*\}/);
+  assert.ok(rule, 'could not find the .reminisce-gallery CSS rule');
+  assert.match(rule[0], /grid-template-columns:\s*repeat\(3,\s*1fr\)/,
+    '.reminisce-gallery must be a 3-column grid (repeat(3, 1fr))');
 });
 
 test('index.html theme-color meta matches the manifest theme_color', () => {

@@ -1210,7 +1210,7 @@ function buildLodging(lodging) {
 // ---------------------------------------------------------------------------
 
 // Sanity ceiling on how many photos a day's gallery / lightbox materializes. This
-// is NOT a UX cap anymore — the gallery is a ~66vh internally-scrollable mosaic
+// is NOT a UX cap anymore — the gallery is a 75vh internally-scrollable mosaic
 // that shows EVERY photo of the day (driven by content-visibility + lazy images),
 // so the true total reaches the seam count and the lightbox. This bound only
 // guards against a pathological doc set blowing up the DOM; at trip scale (worst
@@ -1356,38 +1356,155 @@ export function mergeGalleryPhotos(authored, uploaded) {
   return out.slice(0, REMINISCE_GALLERY_MAX);
 }
 
+// === Seigaiha mosaic tile-span assignment (redesign-gallery-mosaic) =========
+// The gallery is a 3-column CSS grid with `grid-auto-flow: row dense`. The
+// SQUARE is the default tile; two larger shapes punctuate the calm grid:
+//   - 'gallery-tile-feature' — a 2×2 "crest", chosen by a hash of the photo's
+//     immutable Storage URL (NOT its dims/index) so a photo's size never
+//     reshuffles when later uploads re-sort the gallery.
+//   - 'gallery-tile-pano'    — a full-row 3×1 "panorama break", for genuinely
+//     wide shots only (recorded w/h ≥ 1.7).
+//
+// `grid-auto-flow: dense` can only backfill a gap a big tile opens if a tile of
+// the matching size exists LATER in the stream — which is why squares-as-default
+// is load-bearing, and why a per-tile classifier CANNOT be hole-free (it can't
+// see how many squares follow). The assignment is therefore LIST-BASED with a
+// backward credit pass: a crest/pano survives only if enough plain squares
+// follow it to backfill the cells it displaces; otherwise it's demoted to a
+// square. The exact-placement property test in app.test.js is the AUTHORITY for
+// the cost constants below — never ship with that test red.
+
+/** Grid column count. The credit math (CREST_COST/PANO_COST) and the
+ *  `.reminisce-gallery` CSS (`repeat(3, 1fr)`) both derive from this — keep them
+ *  in lockstep (a test reads index.html for `repeat(3, 1fr)`). */
+export const GALLERY_COLS = 3;
+
+/** Plain squares that must follow a 2×2 crest for `dense` to backfill the cells
+ *  it displaces. Validated by the exact-placement property test, not by argument. */
+const CREST_COST = 3;
+/** Plain squares that must follow a 3×1 panorama. Validated by the property test. */
+const PANO_COST = 2;
+
+/** Aspect threshold (w/h) at or above which a photo earns a full-row panorama. */
+const PANO_ASPECT = 1.7;
+
 /**
- * Classify a tile's grid span from its orientation-corrected dimensions. Drives
- * the mosaic: portrait (h/w ≥ 1.2) spans two rows, landscape (w/h ≥ 1.2) spans two
- * columns, everything else (incl. missing/zero/NaN dims) is a 1×1 tile. Pure.
- *
- * @param {number} width
- * @param {number} height
- * @returns {'gallery-tile-tall' | 'gallery-tile-wide' | ''}
+ * 32-bit unsigned FNV-1a hash over a string. Tiny, deterministic, dependency-free.
+ * Used to pick which photos become crests from their stable Storage URL. Pure.
+ * @param {string} str
+ * @returns {number} 32-bit unsigned hash
  */
-export function tileSpanClass(width, height) {
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-    return '';
+export function fnv1a(str) {
+  let h = 0x811c9dc5;
+  const s = String(str);
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    // h *= 16777619, kept in 32-bit unsigned range via Math.imul + >>> 0.
+    h = Math.imul(h, 0x01000193);
   }
-  if (height / width >= 1.2) return 'gallery-tile-tall';
-  if (width / height >= 1.2) return 'gallery-tile-wide';
-  return '';
+  return h >>> 0;
+}
+
+/**
+ * A URL is a "crest" candidate iff its FNV-1a hash mod 7 equals 3 — picks ~1-in-7
+ * photos as feature tiles, forever, independent of their position in the gallery.
+ * Pure. Exported so tests/fixtures DERIVE which URLs are crests, never hard-code.
+ * @param {string} url
+ * @returns {boolean}
+ */
+export function isFeatureUrl(url) {
+  return fnv1a(url) % 7 === 3;
+}
+
+/**
+ * Assign one grid-span class per photo for the Seigaiha mosaic. LIST-BASED (not
+ * per-tile) so hole-freeness — which depends on how many squares follow a big
+ * tile — is provable. Returns a parallel array of '' | 'gallery-tile-feature' |
+ * 'gallery-tile-pano' (same length/order as `photos`).
+ *
+ * Per-photo flags: `pano` requires finite dims AND w/h ≥ PANO_ASPECT; `crest` is
+ * `!pano && isFeatureUrl(url)` — PANORAMA OUTRANKS CREST when both could match.
+ * Dim-less photos (bail-path originals) are never panos → plain square unless the
+ * hash promotes them to a crest.
+ *
+ * Backward credit pass (end → start): plain squares add credit; a crest is kept
+ * only if `credit ≥ CREST_COST` (then spends it), a pano only if `credit ≥
+ * PANO_COST` — otherwise it's demoted to a square (and itself adds credit). This
+ * guarantees `dense` always has enough following squares to backfill.
+ *
+ * NOTE (tail crest↔square flip): a crest/pano near the array TAIL can flip to a
+ * square (or back) across live rebuilds as later uploads change the trailing
+ * credit. BOTH states are hole-safe by construction — the flip is invisible near
+ * the scroll fold and never opens a gap. Pure: no DOM, no Date, no randomness.
+ *
+ * @param {Array<{url?: string, width?: number, height?: number}>} photos
+ * @returns {string[]} parallel class array ('' for a plain square)
+ */
+export function assignTileSpans(photos) {
+  if (!Array.isArray(photos)) return [];
+  const n = photos.length;
+  // Pass 1: intrinsic flags (kind), independent of position.
+  // kind: 0 = square, 1 = crest, 2 = pano.
+  const kind = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const p = photos[i] || {};
+    const w = p.width;
+    const h = p.height;
+    const pano = Number.isFinite(w) && Number.isFinite(h) && h > 0 && w / h >= PANO_ASPECT;
+    if (pano) {
+      kind[i] = 2;
+    } else if (isFeatureUrl(p.url)) {
+      kind[i] = 1; // crest (panorama already outranked it above)
+    } else {
+      kind[i] = 0;
+    }
+  }
+  // Pass 2: backward credit demotion → hole-free placement.
+  const out = new Array(n);
+  let credit = 0;
+  for (let i = n - 1; i >= 0; i--) {
+    const k = kind[i];
+    if (k === 2) {
+      if (credit >= PANO_COST) {
+        out[i] = 'gallery-tile-pano';
+        credit -= PANO_COST;
+      } else {
+        out[i] = '';
+        credit += 1; // demoted to a square — itself becomes backfill
+      }
+    } else if (k === 1) {
+      if (credit >= CREST_COST) {
+        out[i] = 'gallery-tile-feature';
+        credit -= CREST_COST;
+      } else {
+        out[i] = '';
+        credit += 1;
+      }
+    } else {
+      out[i] = '';
+      credit += 1;
+    }
+  }
+  return out;
 }
 
 /**
  * Mosaic photo grid of focusable buttons. `onOpen(index)` fires on activation.
- * Each tile's span (tall/wide/1×1) is computed from the photo's recorded dims so
- * the layout is stable BEFORE any image downloads (no shift while scrolling).
- * Images request CORS so Firebase Storage responses are non-opaque (unpadded
- * cache accounting). XSS-safe: URLs pass through safeUrl(); text via textContent.
+ * Each tile's span (square / 2×2 crest / 3×1 panorama) comes from a single
+ * `assignTileSpans(photos)` pass so the layout is stable BEFORE any image
+ * downloads (no shift while scrolling) and provably hole-free. Spans are indexed
+ * by `i` so the `safeUrl` skip below does NOT misalign them. Images request CORS
+ * so Firebase Storage responses are non-opaque (unpadded cache accounting).
+ * XSS-safe: URLs pass through safeUrl(); text via textContent.
  */
 function buildReminisceGallery(photos, onOpen) {
   const gallery = el('section', 'reminisce-gallery');
   gallery.setAttribute('aria-label', 'Photos from this day');
+  const spans = assignTileSpans(photos);
   photos.forEach((p, i) => {
     const src = safeUrl(p?.url);
     if (!src) return;
-    const spanClass = tileSpanClass(p?.width, p?.height);
+    const spanClass = spans[i];
     const btn = el('button', 'reminisce-photo' + (spanClass ? ' ' + spanClass : ''));
     btn.type = 'button';
     const img = el('img');
@@ -1658,7 +1775,7 @@ export function renderDay(day, framingName = 'plan') {
     const renderGallery = (photos) => {
       if (lightbox) { lightbox.destroy(); lightbox = null; }
       // Preserve the scroll position across a live-snapshot rebuild — the host is
-      // a fixed ~66vh scroll window, so wiping it would otherwise teleport a
+      // a fixed 75vh scroll window, so wiping it would otherwise teleport a
       // mid-browse user back to the top on every snapshot.
       const prevScroll = galleryHost.scrollTop || 0;
       galleryHost.textContent = '';

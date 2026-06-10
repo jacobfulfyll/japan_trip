@@ -56,7 +56,10 @@ import {
   sniffImageType,
   wirePhotoSync,
   mergeGalleryPhotos,
-  tileSpanClass,
+  assignTileSpans,
+  fnv1a,
+  isFeatureUrl,
+  GALLERY_COLS,
   isAllowedUploadOrigin,
   setSubscribePhotos,
   createWorkerDownscaler,
@@ -1937,14 +1940,20 @@ test('reminisce gallery renders ALL of a day\'s uploads (12-cap removed)', (t) =
 
 // --- make-gallery-scrollable: mosaic render (span classes + crossorigin) -----
 // Uploaded doc with width/height. Helper kept local so we control dims per-photo.
-function uploadedDocWithDims(i, width, height, uploader = 'Jo') {
-  return {
-    url: `https://firebasestorage.googleapis.com/u${i}.jpg`,
+// A Storage-origin uploaded doc with a CHOSEN url + optional dims. Each call gets
+// a monotonically increasing takenAt so mergeGalleryPhotos preserves call order
+// (the mosaic span layout depends on order). Width/height omitted when undefined.
+let _docSeq = 0;
+function docWithUrlDims(url, width, height, uploader = 'Jo') {
+  const i = _docSeq++;
+  const doc = {
+    url,
     uploader,
     takenAt: `2026-06-24 ${String(i).padStart(2, '0')}:00:00`,
-    width,
-    height,
   };
+  if (width !== undefined) doc.width = width;
+  if (height !== undefined) doc.height = height;
+  return doc;
 }
 
 test('reminisce gallery: a large fixture renders one tile per doc and the seam reads the true total', (t) => {
@@ -1961,40 +1970,87 @@ test('reminisce gallery: a large fixture renders one tile per doc and the seam r
   });
 });
 
-test('reminisce gallery: tile span classes match each doc\'s dims (tall / wide / 1×1)', (t) => {
+test('reminisce gallery: span classes render (square default + 2×2 crest + 3×1 pano)', (t) => {
   t.after(() => setSubscribePhotos(null));
   withDom(() => {
     const stub = makeSubscribeStub();
     setSubscribePhotos(stub.subscribe);
     const r = renderDay(fullDayFixture(), 'reminisce');
     r.start();
-    // takenAt order: 0 (tall portrait), 1 (wide landscape), 2 (square → no span).
-    stub.push([
-      uploadedDocWithDims(0, 800, 1600),  // h/w = 2.0 → tall
-      uploadedDocWithDims(1, 1600, 800),  // w/h = 2.0 → wide
-      uploadedDocWithDims(2, 1000, 1000), // square → no span class
-    ]);
-    assert.equal(r.node.byClass('reminisce-photo').length, 3, 'three tiles');
-    assert.equal(r.node.byClass('gallery-tile-tall').length, 1, 'exactly one tall tile');
-    assert.equal(r.node.byClass('gallery-tile-wide').length, 1, 'exactly one wide tile');
-    // The tall tile is also a .reminisce-photo (span class is appended to className).
-    const tall = r.node.firstByClass('gallery-tile-tall');
-    assert.ok(tall.classList.contains('reminisce-photo'), 'span class coexists with reminisce-photo');
+    // Hand-pick URLs via the exported hash so the layout is DERIVED, not magic.
+    // A leading crest needs ≥3 following squares to survive the demotion pass;
+    // the pano (w/h ≥ 1.7) needs ≥2. Layout: crest, 3 squares, pano, 2 squares.
+    const docs = [
+      docWithUrlDims(featureUrl('render-crest'), undefined, undefined), // crest by hash
+      docWithUrlDims(plainUrl('rs1'), undefined, undefined),
+      docWithUrlDims(plainUrl('rs2'), undefined, undefined),
+      docWithUrlDims(plainUrl('rs3'), undefined, undefined),
+      docWithUrlDims(plainUrl('rpano'), 1800, 1000), // w/h = 1.8 → pano
+      docWithUrlDims(plainUrl('rs4'), undefined, undefined),
+      docWithUrlDims(plainUrl('rs5'), undefined, undefined),
+      docWithUrlDims(plainUrl('rs6'), undefined, undefined),
+    ];
+    stub.push(docs);
+    assert.equal(r.node.byClass('reminisce-photo').length, 8, 'eight tiles');
+    assert.equal(r.node.byClass('gallery-tile-feature').length, 1, 'exactly one crest');
+    assert.equal(r.node.byClass('gallery-tile-pano').length, 1, 'exactly one panorama');
+    // The crest is also a .reminisce-photo (span class is appended to className).
+    const crest = r.node.firstByClass('gallery-tile-feature');
+    assert.ok(crest.classList.contains('reminisce-photo'), 'span class coexists with reminisce-photo');
+    // Old vocabulary is fully retired.
+    assert.equal(r.node.byClass('gallery-tile-tall').length, 0, 'no legacy tall tiles');
+    assert.equal(r.node.byClass('gallery-tile-wide').length, 0, 'no legacy wide tiles');
     r.stop();
   });
 });
 
-test('reminisce gallery: docs WITHOUT dims render tiles with NO span class', (t) => {
+test('reminisce gallery: non-crest docs WITHOUT dims render tiles with NO span class', (t) => {
   t.after(() => setSubscribePhotos(null));
   withDom(() => {
     const stub = makeSubscribeStub();
     setSubscribePhotos(stub.subscribe);
     const r = renderDay(fullDayFixture(), 'reminisce');
     r.start();
-    stub.push([uploadedDoc(0), uploadedDoc(1)]); // uploadedDoc carries NO dims
+    // Dim-less AND non-crest (plainUrl) → guaranteed plain squares: no span class.
+    stub.push([
+      docWithUrlDims(plainUrl('ns0'), undefined, undefined),
+      docWithUrlDims(plainUrl('ns1'), undefined, undefined),
+    ]);
     assert.equal(r.node.byClass('reminisce-photo').length, 2, 'two 1×1 tiles');
-    assert.equal(r.node.byClass('gallery-tile-tall').length, 0, 'no tall tiles for dim-less docs');
-    assert.equal(r.node.byClass('gallery-tile-wide').length, 0, 'no wide tiles for dim-less docs');
+    assert.equal(r.node.byClass('gallery-tile-feature').length, 0, 'no crests for plain dim-less docs');
+    assert.equal(r.node.byClass('gallery-tile-pano').length, 0, 'no panos for dim-less docs');
+    r.stop();
+  });
+});
+
+test('reminisce gallery: a dropped (unsafe-url) doc does NOT shift the surviving tiles\' span classes', (t) => {
+  // mergeGalleryPhotos drops the javascript: doc BEFORE assignTileSpans runs, so
+  // the spans are computed over the SURVIVING array and stay aligned: the crest
+  // (now the first surviving photo, followed by ≥3 squares) keeps its feature
+  // span. A bug that indexed spans by the pre-filter position would mis-class it.
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    // [unsafe] is dropped; the crest then has 3 trailing squares → survives demotion.
+    stub.push([
+      docWithUrlDims('javascript:alert(1)', undefined, undefined),       // DROPPED by safeUrl/merge
+      docWithUrlDims(featureUrl('align-crest'), undefined, undefined),   // crest by hash
+      docWithUrlDims(plainUrl('al1'), undefined, undefined),
+      docWithUrlDims(plainUrl('al2'), undefined, undefined),
+      docWithUrlDims(plainUrl('al3'), undefined, undefined),
+    ]);
+    const tiles = r.node.byClass('reminisce-photo');
+    assert.equal(tiles.length, 4, 'the unsafe doc is dropped — four surviving tiles');
+    assert.equal(r.node.byClass('gallery-tile-feature').length, 1, 'exactly one crest survives');
+    // The crest is the FIRST surviving tile and the only one carrying the feature class.
+    assert.ok(tiles[0].classList.contains('gallery-tile-feature'),
+      'the first surviving tile is the crest — spans aligned to the post-filter order');
+    tiles.slice(1).forEach((t2, i) =>
+      assert.ok(!t2.classList.contains('gallery-tile-feature') && !t2.classList.contains('gallery-tile-pano'),
+        `surviving square ${i + 1} carries no big-tile span`));
     r.stop();
   });
 });
@@ -2277,57 +2333,387 @@ test('mergeGalleryPhotos: authored photos never carry dims (even if mixed with d
   assert.equal(out[1].height, 1600);
 });
 
-// --- make-gallery-scrollable: tileSpanClass(width, height) -------------------
-// Pure ratio classifier for the mosaic. Portrait (h/w ≥ 1.2) → 'gallery-tile-tall',
-// landscape (w/h ≥ 1.2) → 'gallery-tile-wide', everything else (square-ish,
-// missing/zero/negative/NaN/Infinity dims) → '' (1×1 tile).
+// === redesign-gallery-mosaic: assignTileSpans + the hole-free property test ===
+// The Seigaiha mosaic is a 3-column `grid-auto-flow: row dense` grid. The square
+// is the default; ~1-in-7 photos (hash-chosen) become 2×2 "crests" and genuinely
+// wide photos (w/h ≥ 1.7) become full-row 3×1 "panoramas". assignTileSpans() is a
+// LIST-BASED assignment with a backward credit demotion pass that GUARANTEES the
+// dense backfill never leaves a hole. The property test below re-proves that on
+// every run against an exact simulator of CSS Grid row-dense placement.
 
-test('tileSpanClass: exact square (equal dims) → "" (1×1 tile)', () => {
-  assert.equal(tileSpanClass(1000, 1000), '');
-  assert.equal(tileSpanClass(7, 7), '');
+// --- hash helpers ----------------------------------------------------------
+test('fnv1a: deterministic, 32-bit unsigned, distinguishes similar strings', () => {
+  assert.equal(fnv1a('abc'), fnv1a('abc'), 'same input → same hash');
+  assert.ok(Number.isInteger(fnv1a('x')) && fnv1a('x') >= 0, 'unsigned integer');
+  assert.ok(fnv1a('x') <= 0xffffffff, 'fits in 32 bits');
+  assert.notEqual(fnv1a('photo-1.jpg'), fnv1a('photo-2.jpg'), 'one-char change → different hash');
+  assert.equal(fnv1a(''), 0x811c9dc5, 'empty string → the FNV offset basis');
 });
 
-test('tileSpanClass: ratio just below 1.2 (1.19) is square → ""', () => {
-  // 1190 / 1000 = 1.19 (both orientations stay below the 1.2 threshold).
-  assert.equal(tileSpanClass(1000, 1190), '', 'h/w = 1.19 → not tall');
-  assert.equal(tileSpanClass(1190, 1000), '', 'w/h = 1.19 → not wide');
+test('isFeatureUrl: true iff fnv1a(url) % 7 === 3 (so fixtures derive crests)', () => {
+  // Derive, never hard-code: scan for a URL the hash promotes and one it doesn't.
+  let crest = null;
+  let plain = null;
+  for (let i = 0; i < 200 && (crest === null || plain === null); i++) {
+    const u = `https://firebasestorage.googleapis.com/x${i}.jpg`;
+    if (isFeatureUrl(u)) { if (crest === null) crest = u; }
+    else if (plain === null) plain = u;
+  }
+  assert.ok(crest && plain, 'found both a crest and a non-crest URL');
+  assert.equal(fnv1a(crest) % 7, 3, 'crest URL hashes to 3 mod 7');
+  assert.notEqual(fnv1a(plain) % 7, 3, 'plain URL does not');
+  assert.equal(isFeatureUrl(crest), true);
+  assert.equal(isFeatureUrl(plain), false);
 });
 
-test('tileSpanClass: ratio exactly 1.2 spans (>= boundary is inclusive)', () => {
-  assert.equal(tileSpanClass(1000, 1200), 'gallery-tile-tall', 'h/w = 1.2 → tall');
-  assert.equal(tileSpanClass(1200, 1000), 'gallery-tile-wide', 'w/h = 1.2 → wide');
+test('GALLERY_COLS is 3 (drives the credit math + the index.html grid)', () => {
+  assert.equal(GALLERY_COLS, 3);
 });
 
-test('tileSpanClass: ratio above 1.2 (1.21) spans in both orientations', () => {
-  assert.equal(tileSpanClass(1000, 1210), 'gallery-tile-tall', 'h/w = 1.21 → tall');
-  assert.equal(tileSpanClass(1210, 1000), 'gallery-tile-wide', 'w/h = 1.21 → wide');
+// --- helpers that derive feature/plain URLs from the exported hash ----------
+function featureUrl(seed) {
+  for (let i = 0; i < 5000; i++) {
+    const u = `https://firebasestorage.googleapis.com/${seed}-${i}.jpg`;
+    if (isFeatureUrl(u)) return u;
+  }
+  throw new Error('no feature URL found (hash space exhausted)');
+}
+function plainUrl(seed) {
+  for (let i = 0; i < 5000; i++) {
+    const u = `https://firebasestorage.googleapis.com/${seed}-${i}.jpg`;
+    if (!isFeatureUrl(u)) return u;
+  }
+  throw new Error('no plain URL found');
+}
+
+// --- assignTileSpans unit behavior -----------------------------------------
+test('assignTileSpans: dim-less, non-crest photos are all plain squares', () => {
+  const photos = [0, 1, 2, 3].map((i) => ({ url: plainUrl('sq' + i) }));
+  assert.deepEqual(assignTileSpans(photos), ['', '', '', '']);
 });
 
-test('tileSpanClass: strongly portrait → tall; strongly landscape → wide', () => {
-  assert.equal(tileSpanClass(800, 1600), 'gallery-tile-tall', 'portrait spans rows');
-  assert.equal(tileSpanClass(1600, 800), 'gallery-tile-wide', 'landscape spans cols');
+test('assignTileSpans: a crest URL becomes a feature when enough squares follow', () => {
+  // crest first, then 3 plain squares → credit 3 ≥ CREST_COST → kept.
+  const photos = [
+    { url: featureUrl('c') },
+    { url: plainUrl('a') },
+    { url: plainUrl('b') },
+    { url: plainUrl('d') },
+  ];
+  assert.deepEqual(assignTileSpans(photos),
+    ['gallery-tile-feature', '', '', '']);
 });
 
-test('tileSpanClass: missing dims (undefined) → ""', () => {
-  assert.equal(tileSpanClass(undefined, undefined), '');
-  assert.equal(tileSpanClass(1000, undefined), '', 'one missing → square');
-  assert.equal(tileSpanClass(undefined, 1000), '', 'one missing → square');
+test('assignTileSpans: a crest at the TAIL is DEMOTED (no following squares)', () => {
+  // Two plain squares, then a crest with NOTHING after it → credit 0 → demote.
+  const photos = [
+    { url: plainUrl('a') },
+    { url: plainUrl('b') },
+    { url: featureUrl('c') }, // last → 0 following squares → demoted to ''
+  ];
+  assert.deepEqual(assignTileSpans(photos), ['', '', '']);
 });
 
-test('tileSpanClass: zero / negative dims → ""', () => {
-  assert.equal(tileSpanClass(0, 1000), '', 'zero width → square');
-  assert.equal(tileSpanClass(1000, 0), '', 'zero height → square');
-  assert.equal(tileSpanClass(0, 0), '', 'both zero → square');
-  assert.equal(tileSpanClass(-5, 1000), '', 'negative width → square');
-  assert.equal(tileSpanClass(1000, -5), '', 'negative height → square');
+test('assignTileSpans: dims are IGNORED for crest selection (hash only)', () => {
+  // A non-wide photo whose URL hashes to a crest is a crest regardless of dims;
+  // a wide-by-dims photo whose URL is NOT a crest stays a square unless w/h≥1.7.
+  const photos = [
+    { url: featureUrl('c'), width: 1000, height: 1000 }, // square dims, crest URL
+    { url: plainUrl('a') },
+    { url: plainUrl('b') },
+    { url: plainUrl('d') },
+  ];
+  assert.equal(assignTileSpans(photos)[0], 'gallery-tile-feature', 'crest by hash, not dims');
 });
 
-test('tileSpanClass: NaN / Infinity dims → ""', () => {
-  assert.equal(tileSpanClass(NaN, 1000), '');
-  assert.equal(tileSpanClass(1000, NaN), '');
-  assert.equal(tileSpanClass(Infinity, 1000), '');
-  assert.equal(tileSpanClass(1000, Infinity), '');
-  assert.equal(tileSpanClass(-Infinity, -Infinity), '');
+test('assignTileSpans: w/h ≥ 1.7 is a panorama; just below 1.7 is not', () => {
+  const pano = [
+    { url: plainUrl('p'), width: 1700, height: 1000 }, // w/h = 1.7 → pano
+    { url: plainUrl('a') },
+    { url: plainUrl('b') },
+  ];
+  assert.equal(assignTileSpans(pano)[0], 'gallery-tile-pano', 'w/h = 1.7 → pano');
+
+  const notPano = [
+    { url: plainUrl('q'), width: 1699, height: 1000 }, // w/h = 1.699 → square
+    { url: plainUrl('a') },
+    { url: plainUrl('b') },
+  ];
+  assert.equal(assignTileSpans(notPano)[0], '', 'w/h < 1.7 → not a pano');
+});
+
+test('assignTileSpans: PANORAMA OUTRANKS crest when both could match', () => {
+  // A wide-by-dims photo whose URL ALSO hashes to a crest renders as a pano.
+  const url = featureUrl('both');
+  assert.equal(isFeatureUrl(url), true, 'precondition: URL is a crest by hash');
+  const photos = [
+    { url, width: 2000, height: 1000 }, // w/h = 2.0 → pano wins
+    { url: plainUrl('a') },
+    { url: plainUrl('b') },
+  ];
+  assert.equal(assignTileSpans(photos)[0], 'gallery-tile-pano', 'pano outranks crest');
+});
+
+test('assignTileSpans: dim-less photos are never panoramas (→ square unless crest)', () => {
+  const photos = [{ url: plainUrl('a') }, { url: plainUrl('b') }];
+  assert.deepEqual(assignTileSpans(photos), ['', ''], 'no dims → no pano');
+});
+
+test('assignTileSpans: non-array / empty input → []', () => {
+  assert.deepEqual(assignTileSpans(null), []);
+  assert.deepEqual(assignTileSpans(undefined), []);
+  assert.deepEqual(assignTileSpans('nope'), []);
+  assert.deepEqual(assignTileSpans([]), []);
+});
+
+test('assignTileSpans: returns a parallel array of the same length', () => {
+  const photos = Array.from({ length: 9 }, (_, i) => ({ url: plainUrl('len' + i) }));
+  assert.equal(assignTileSpans(photos).length, 9);
+});
+
+// --- hostile / malformed element edge inputs (no throw, deterministic) -------
+// buildReminisceGallery runs over photos coming from mergeGalleryPhotos (which
+// filters), but assignTileSpans is the EXPORTED contract and must not crash on a
+// null element, a photo with no url, or a degenerate dimension — fnv1a stringifies
+// its input, so a missing url hashes deterministically rather than throwing.
+test('assignTileSpans: a null element inside the array does not throw and is a plain square', () => {
+  let out;
+  assert.doesNotThrow(() => { out = assignTileSpans([null, { url: plainUrl('x') }]); });
+  assert.deepEqual(out, ['', ''], 'null element → square; safe-by-construction');
+});
+
+test('assignTileSpans: photos with no url / url:undefined hash deterministically (no throw)', () => {
+  // fnv1a(String(undefined)) is a fixed value — same class every call, never a crash.
+  const a = assignTileSpans([{}, { url: undefined }]);
+  const b = assignTileSpans([{}, { url: undefined }]);
+  assert.deepEqual(a, b, 'identical inputs → identical classes (deterministic)');
+  assert.equal(a.length, 2, 'one class per element');
+  a.forEach((c) => assert.ok(c === '' || c === 'gallery-tile-feature',
+    'a url-less photo is a square or (by the fixed hash) a crest, never a pano (no dims)'));
+});
+
+test('assignTileSpans: pano dims with height 0 do NOT divide-by-zero into a false pano', () => {
+  // Without an h > 0 guard, 1800/0 = Infinity ≥ 1.7 would mislabel this a panorama.
+  const photos = [
+    { url: plainUrl('z'), width: 1800, height: 0 }, // degenerate height
+    { url: plainUrl('a') },
+    { url: plainUrl('b') },
+  ];
+  assert.equal(assignTileSpans(photos)[0], '', 'height 0 → square, not a false pano');
+});
+
+test('assignTileSpans: a crest with NO dims at all still promotes (hash hit, dims irrelevant)', () => {
+  // Bail-path originals carry no width/height; a crest-by-hash must still feature.
+  const photos = [
+    { url: featureUrl('dimless-crest') }, // crest by hash, zero dims
+    { url: plainUrl('a') },
+    { url: plainUrl('b') },
+    { url: plainUrl('c') },
+  ];
+  assert.equal(assignTileSpans(photos)[0], 'gallery-tile-feature',
+    'crest promotes without any dims');
+});
+
+test('assignTileSpans: hash stability — same URLs (any prefix) → same crest set', () => {
+  // The crest decision is per-URL, so a stable prefix of a longer list keeps its
+  // crest flags except possibly near the tail (credit changes). Here all crests
+  // sit early with plenty of trailing squares, so they are identical.
+  const head = [
+    { url: featureUrl('s1') },
+    { url: plainUrl('s2') },
+    { url: plainUrl('s3') },
+    { url: plainUrl('s4') },
+  ];
+  const more = head.concat([
+    { url: plainUrl('s5') },
+    { url: plainUrl('s6') },
+  ]);
+  const a = assignTileSpans(head);
+  const b = assignTileSpans(more);
+  assert.equal(a[0], 'gallery-tile-feature');
+  assert.equal(b[0], 'gallery-tile-feature', 'crest flag stable as the list grows');
+});
+
+// --- exact CSS Grid row-dense placement simulator + property test ----------
+// Models `grid-auto-flow: row dense` on GALLERY_COLS columns: place items in
+// order; each item scans row-major from the grid origin for the EARLIEST cell
+// where its footprint fits without overlapping any placed cell, then occupies it.
+// Shapes: square 1×1, feature 2×2, pano (full row) 1×GALLERY_COLS.
+const COLS = GALLERY_COLS;
+
+function shapeOf(cls) {
+  if (cls === 'gallery-tile-feature') return { w: 2, h: 2 };
+  if (cls === 'gallery-tile-pano') return { w: COLS, h: 1 };
+  return { w: 1, h: 1 };
+}
+
+// Returns { grid, rows } where grid[r][c] is the 0-based item index occupying the
+// cell, or -1 if vacant. An exact model of the browser's dense placement.
+function simulateDense(classes) {
+  const grid = []; // grid[r] = Int array of length COLS
+  const ensureRow = (r) => { while (grid.length <= r) grid.push(new Array(COLS).fill(-1)); };
+  const fits = (r, c, w, h) => {
+    if (c + w > COLS) return false;
+    for (let dr = 0; dr < h; dr++) {
+      ensureRow(r + dr);
+      for (let dc = 0; dc < w; dc++) {
+        if (grid[r + dr][c + dc] !== -1) return false;
+      }
+    }
+    return true;
+  };
+  for (let i = 0; i < classes.length; i++) {
+    const { w, h } = shapeOf(classes[i]);
+    let placed = false;
+    for (let r = 0; !placed; r++) {
+      ensureRow(r);
+      for (let c = 0; c < COLS && !placed; c++) {
+        if (fits(r, c, w, h)) {
+          for (let dr = 0; dr < h; dr++) {
+            for (let dc = 0; dc < w; dc++) grid[r + dr][c + dc] = i;
+          }
+          placed = true;
+        }
+      }
+    }
+  }
+  return { grid, rows: grid.length };
+}
+
+// A vacancy is a HOLE iff a later tile occupies a cell PAST it in row-major scan
+// order. Reasoning: earliest-fit places each tile at the first scan position that
+// fits, so once a cell (r,c) is vacant, the only reason any later tile sits at a
+// position > (r,c) is that the vacancy could not be filled — and a 1×1 always
+// fits a single empty cell. So any occupied cell scan-after a vacancy proves a
+// hole. The ONLY permitted vacancies are the trailing cells of the final ragged
+// row (count not divisible by 3, no big tiles) — nothing is placed past them.
+function findHole(classes) {
+  const { grid, rows } = simulateDense(classes);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (grid[r][c] !== -1) continue;
+      const pos = r * COLS + c;
+      for (let rr = 0; rr < rows; rr++) {
+        for (let cc = 0; cc < COLS; cc++) {
+          if (grid[rr][cc] !== -1 && rr * COLS + cc > pos) {
+            return { r, c, classes: classes.slice() };
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Tiny deterministic PRNG (mulberry32) — NO Math.random, fully reproducible.
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Build a photo list from per-item {crest, pano} flags. We must produce URLs the
+// REAL isFeatureUrl agrees with (crest) or rejects (plain), and dims that make
+// the REAL pano test fire or not — so assignTileSpans sees exactly the intended
+// intrinsic kinds and the property test exercises the SHIPPED code, not a mock.
+function photosFromFlags(flags) {
+  return flags.map((f, i) => {
+    if (f.pano) {
+      // pano outranks crest; URL irrelevant, dims make w/h ≥ 1.7.
+      return { url: plainUrl('pano' + i), width: 1800, height: 1000 };
+    }
+    if (f.crest) return { url: featureUrl('cr' + i) };
+    return { url: plainUrl('pl' + i) };
+  });
+}
+
+test('property: assignTileSpans is HOLE-FREE — exhaustive flag space, n ≤ 16', () => {
+  // Each item is square / crest / pano → 3 states. Exhaustive over 3^n is too big
+  // for n=16, so enumerate all (crest,pano) combinations as a base-3 counter up
+  // to a cap, covering every small n fully and a deep slice of larger n.
+  let checked = 0;
+  for (let n = 0; n <= 16; n++) {
+    const total = Math.pow(3, n);
+    // Full exhaustion for n ≤ 9 (≤ 19683); a strided sample for 10 ≤ n ≤ 16.
+    const stride = n <= 9 ? 1 : Math.max(1, Math.floor(total / 60000));
+    for (let code = 0; code < total; code += stride) {
+      const flags = [];
+      let x = code;
+      for (let i = 0; i < n; i++) {
+        const d = x % 3; x = Math.floor(x / 3);
+        flags.push({ crest: d === 1, pano: d === 2 });
+      }
+      const spans = assignTileSpans(photosFromFlags(flags));
+      const hole = findHole(spans);
+      assert.equal(hole, null,
+        `HOLE at n=${n}, code=${code}: ${hole ? JSON.stringify(hole) : ''}`);
+      checked++;
+    }
+  }
+  assert.ok(checked > 50000, `ran a substantial exhaustive sweep (${checked} cases)`);
+});
+
+test('property: assignTileSpans is HOLE-FREE — ≥20k seeded-random sequences, n ≤ 80', () => {
+  const rng = mulberry32(0xC0FFEE);
+  const RUNS = 20000;
+  for (let run = 0; run < RUNS; run++) {
+    const n = 1 + Math.floor(rng() * 80);
+    const flags = [];
+    for (let i = 0; i < n; i++) {
+      const r = rng();
+      // ~1/7 crest, ~1/12 pano, rest square — roughly the real-world mix.
+      flags.push({ crest: r < 1 / 7, pano: r >= 1 / 7 && r < 1 / 7 + 1 / 12 });
+    }
+    const spans = assignTileSpans(photosFromFlags(flags));
+    const hole = findHole(spans);
+    assert.equal(hole, null, `HOLE on run ${run} (n=${n}): ${hole ? JSON.stringify(hole) : ''}`);
+  }
+});
+
+test('property MUTATION CHECK: disabling the demotion pass MUST produce a hole', () => {
+  // Prove the property test bites: a "naive" assignment that keeps EVERY crest/
+  // pano with no backward credit demotion must be caught by findHole on at least
+  // one input. (This mirrors what assignTileSpans would do if its credit pass
+  // were deleted.) If this ever stops finding a hole, the property test above is
+  // toothless and must be hardened.
+  function assignNoDemotion(photos) {
+    return photos.map((p) => {
+      const w = p && p.width, h = p && p.height;
+      if (Number.isFinite(w) && Number.isFinite(h) && h > 0 && w / h >= 1.7) return 'gallery-tile-pano';
+      if (isFeatureUrl(p && p.url)) return 'gallery-tile-feature';
+      return '';
+    });
+  }
+  // The task documents a counterexample at count=5 with a feature at index 2.
+  const url2 = featureUrl('mut');
+  const naive = assignNoDemotion([
+    { url: plainUrl('m0') },
+    { url: plainUrl('m1') },
+    { url: url2 },
+    { url: plainUrl('m3') },
+    { url: plainUrl('m4') },
+  ]);
+  assert.equal(naive[2], 'gallery-tile-feature', 'precondition: index 2 is a kept feature');
+  // Search a small space for ANY input the naive (no-demotion) assignment leaves
+  // holed — and assert the SHIPPED assignTileSpans does NOT hole the same input.
+  let foundNaiveHole = false;
+  for (let code = 0; code < Math.pow(3, 10) && !foundNaiveHole; code++) {
+    const flags = [];
+    let x = code;
+    for (let i = 0; i < 10; i++) { const d = x % 3; x = Math.floor(x / 3); flags.push({ crest: d === 1, pano: d === 2 }); }
+    const photos = photosFromFlags(flags);
+    if (findHole(assignNoDemotion(photos))) {
+      foundNaiveHole = true;
+      // The shipped function must NOT hole the very same input.
+      assert.equal(findHole(assignTileSpans(photos)), null,
+        'shipped assignTileSpans must be hole-free where the naive version holes');
+    }
+  }
+  assert.ok(foundNaiveHole, 'mutation check found an input the no-demotion assignment holes — test bites');
 });
 
 test('mergeGalleryPhotos: uploaded alt is "Photo by <uploader>"; missing uploader → "Photo by a traveler"', () => {
