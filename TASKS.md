@@ -2,23 +2,6 @@
 
 ## Active Tasks
 
-### minimize-upload-modal
-**Task**: "–" + backdrop-tap minimize the upload modal to a floating pill (live "N of M", tap to re-expand, "✓ N added" auto-fade) + interrupted-run detection (jt:upload-run marker with heartbeat, boot-only stale check, one-shot recovery notice)
-**Pipeline**: code-workflow
-**Branch**: task/minimize-upload-modal
-**Worktree**: .worktree/minimize-upload-modal
-**Base**: main
-**Started**: 2026-06-09
-**Files**:
-- MOD: app.js
-- MOD: index.html
-- MOD: app.test.js
-- MOD: sw.js
-- MOD: sw.test.js
-- MOD: CLAUDE.md
-- MOD: README.md
-- MOD: CHANGELOG.md
-
 ### make-gallery-scrollable
 **Task**: Remove 12-photo reminisce cap — ~66vh internally-scrollable chronological mosaic (portrait spans 2 rows, landscape 2 cols, row-dense) from width/height recorded at upload via the downscale bitmap; lazy lightbox + neighbor preload; scrollTop restore across live rebuilds; crossorigin imgs; storage.persist(); RUNTIME_MAX_ENTRIES 140→450
 **Pipeline**: code-workflow
@@ -53,7 +36,7 @@
 <!-- Four-task plan (replaces the old photo-upload-flow + reminisce-photo-gallery). Serial critical path: nav-redesign → firebase-photo-rules → photo-upload-flow → reminisce-gallery-live. Tasks 1/3/4 all touch app.js + index.html (+ sw.js for #4) → run serially, reconciling sw.js CACHE_VERSION to the next free value at each merge. -->
 
 ### Photo Journal & Nav Polish (v2.1)
-<!-- v2.1 polish/perf on the photo journal + day-view UX. ALL SIX tasks below touch app.js + bump sw.js CACHE_VERSION → MUTUALLY CONFLICTING; run SERIALLY in listed order, reconciling CACHE_VERSION to the next FREE value at each merge (currently v35 after harden-upload-bail-path merged 2026-06-09; lockstep: sw.js:23 + sw.test.js pinned title + assert — check main at merge time, not branch time). make-gallery-scrollable HARD-depends on harden-upload-bail-path (same downscale-result destructure). Each task also updates the test-count claim in CLAUDE.md/README/CHANGELOG. All tiered fable:high by user decision (serial chain, 7 days to trip): run pickup sessions on Fable, e.g. /reggie-code-workflow --tier fable:high. -->
+<!-- v2.1 polish/perf on the photo journal + day-view UX. ALL SIX tasks below touch app.js + bump sw.js CACHE_VERSION → MUTUALLY CONFLICTING; run SERIALLY in listed order, reconciling CACHE_VERSION to the next FREE value at each merge (currently v36 after minimize-upload-modal merged 2026-06-09; lockstep: sw.js:23 + sw.test.js pinned title + assert — check main at merge time, not branch time). make-gallery-scrollable HARD-depends on harden-upload-bail-path (same downscale-result destructure). Each task also updates the test-count claim in CLAUDE.md/README/CHANGELOG. All tiered fable:high by user decision (serial chain, 7 days to trip): run pickup sessions on Fable, e.g. /reggie-code-workflow --tier fable:high. -->
 - [ ] make-map-links-directions: Map pins open Google Maps directions from current location (📍 = directions everywhere; ⓘ = place page on rec cards) — render-time URL rewrite, no data edits, no travelmode forced [P2] [conflicts: slice-exif-read, harden-upload-bail-path, make-gallery-scrollable, minimize-upload-modal, harden-uploaded-url-origin] [simple] [tier: fable:high] [code] [planned]
   files: app.js (MOD), index.html (MOD), app.test.js (MOD), sw.js (MOD), sw.test.js (MOD), CLAUDE.md (MOD), README.md (MOD), CHANGELOG.md (MOD)
 - [ ] harden-uploaded-url-origin: Constrain uploaded photo URLs in the reminisce gallery to the Firebase Storage origin (allowlist on mergeGalleryPhotos' uploaded branch; authored/relative unaffected) — defense-in-depth [P3] [conflicts: slice-exif-read, harden-upload-bail-path, make-gallery-scrollable, minimize-upload-modal, make-map-links-directions] [simple] [tier: fable:high] [code] [planned]

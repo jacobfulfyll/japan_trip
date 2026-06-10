@@ -50,3 +50,4 @@
 - [~] clamp-worker-downscale-constants: pruned — only caller passes module constants; harden-upload-bail-path's retry chain makes even the hypothetical bad-input failure benign (retry → original upload); standalone ship cost (CACHE_VERSION bump) exceeds the guard's value -- pruned 2026-06-09
 - [x] slice-exif-read Read only first ~128KB per file for EXIF + mount the progress sheet immediately ("Preparing photos…") — fixes the picker→progress dead air -- 2026-06-09
 - [x] harden-upload-bail-path Downscale failure → one main-thread retry → still failing → silently upload ORIGINAL bytes with TRUE contentType/extension (magic-byte sniff) -- 2026-06-09
+- [x] minimize-upload-modal Minimizable upload progress modal (– / backdrop → floating pill) + interrupted-run recovery (jt:upload-run marker, heartbeat, boot-only one-shot notice) -- 2026-06-09
