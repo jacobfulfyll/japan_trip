@@ -620,15 +620,13 @@ test('a non-/firebasejs/ path on www.gstatic.com is NOT intercepted by the Fireb
   assert.equal(event._responded, false, 'only the /firebasejs/ path should route to the SDK cache');
 });
 
-test('CACHE_VERSION is v45 (exported downscale-router seam — app.js shell change)', () => {
+test('CACHE_VERSION is v46 (TEMP Jun 1 date shift — data/days.js shell change)', () => {
   // sw.test.js derives CACHE_VERSION from the sw.js literal; this pins the
   // expected value so an accidental revert of the bump fails loudly.
-  // app.js gained the exported buildDownscaleRouter factory (a precached shell
-  // file changed), so CACHE_VERSION must bump. This task authored v43, then
-  // reconciled to v44, then to v45 — each prior value consumed by a sibling
-  // (harden-exif v43, fix-modal-stack-overlaps v44) merging mid-flight in the
-  // parallel v2.2 chain. Next free version re-derived from main at merge time.
-  assert.equal(CACHE_VERSION, 'v45');
+  // data/days.js (a precached shell file) re-shifted the trip dates to start
+  // Jun 1 for live testing, so CACHE_VERSION must bump. v40 (the first TEMP
+  // shift build, live on Pages) is consumed — next free after v45 is v46.
+  assert.equal(CACHE_VERSION, 'v46');
 });
 
 // ===========================================================================
