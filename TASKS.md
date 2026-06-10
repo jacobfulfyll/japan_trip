@@ -2,24 +2,6 @@
 
 ## Active Tasks
 
-### slice-exif-read
-**Task**: Read only first ~128KB per file for EXIF + mount the progress sheet immediately ("Preparing photos…") — fixes the picker→progress dead air
-**Pipeline**: code-workflow
-**Branch**: task/slice-exif-read
-**Worktree**: .worktree/slice-exif-read
-**Base**: main
-**Started**: 2026-06-09
-**Files**:
-- MOD: app.js
-- MOD: app.test.js
-- MOD: sw.js
-- MOD: sw.test.js
-- MOD: CLAUDE.md
-- MOD: README.md
-- MOD: CHANGELOG.md
-
----
-
 ### harden-upload-bail-path
 **Task**: Downscale failure → one main-thread retry → still failing → silently upload ORIGINAL bytes with TRUE contentType/extension (magic-byte sniff)
 **Pipeline**: code-workflow
