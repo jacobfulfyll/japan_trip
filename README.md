@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← tests for the data/API/nav layer (node --test; 651 total with sw.test.js).
+app.test.js    ← tests for the data/API/nav layer (node --test; 659 total with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -265,7 +265,10 @@ test, not per-tile thresholds).
 
 **Lightbox.** Slides are lazy-loaded — opening the lightbox does not eager-load the
 whole set. Each index change preloads the immediate neighbors (i±1). The counter
-reads "n / N" against the true total.
+reads "n / N" against the true total. When overlays stack (e.g. an error modal
+opens over the lightbox), only the visually-topmost one handles Tab and Esc — Esc
+closes one dialog at a time, and closing the top one hands the keyboard back to the
+layer beneath.
 
 `start()` opens the live Firestore subscription and `stop()` closes it. While the
 first snapshot is pending, the seam reads `"Loading…"`. A snapshot that arrives
@@ -485,7 +488,7 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The test suite (**651 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The test suite (**659 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),

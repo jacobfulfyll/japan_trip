@@ -1531,6 +1531,15 @@ function buildReminisceGallery(photos, onOpen) {
  * rebuild that arrived while the viewer was open (so an open lightbox is never
  * yanked out from under the user). Omitted → no behavior change (existing callers).
  */
+// Shared topmost-only keyboard-trap stack. Every overlay (modal sheets via
+// buildModalSheet, the lightbox via buildLightbox) pushes its onKey on open and
+// splices it out on close; only the handler at the top of the stack acts (others
+// return immediately). Registration order matches visual z-order in every
+// reachable stack (batch-date prompt over the progress sheet; an error modal over
+// an open lightbox), so the topmost handler is the visually-topmost overlay — and
+// Esc peels exactly one layer. Avoids two stacked overlays fighting over Tab/Esc.
+const trapStack = [];
+
 function buildLightbox(photos, dayLabel, opts = {}) {
   const onClose = typeof opts.onClose === 'function' ? opts.onClose : null;
   const overlay = el('div', 'lightbox');
@@ -1637,6 +1646,11 @@ function buildLightbox(photos, dayLabel, opts = {}) {
     isOpen = false;
     overlay.hidden = true;
     document.removeEventListener('keydown', onKey);
+    // Splice by indexOf (paired with the open() push) — may not be topmost if
+    // layers closed out of order. Runs only past the early !isOpen return above,
+    // so push/splice stay perfectly balanced.
+    const ti = trapStack.indexOf(onKey);
+    if (ti !== -1) trapStack.splice(ti, 1);
     unmount();
     if (restoreFocus && lastFocused && typeof lastFocused.focus === 'function') lastFocused.focus();
   }
@@ -1650,6 +1664,7 @@ function buildLightbox(photos, dayLabel, opts = {}) {
   }
 
   function onKey(e) {
+    if (trapStack[trapStack.length - 1] !== onKey) return; // only the topmost overlay acts
     if (e.key === 'Escape') { e.preventDefault(); close(); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); scrollToIndex(Math.min(current + 1, photos.length - 1), true); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); scrollToIndex(Math.max(current - 1, 0), true); }
@@ -1669,6 +1684,7 @@ function buildLightbox(photos, dayLabel, opts = {}) {
         document.body.appendChild(overlay);
       }
       document.addEventListener('keydown', onKey);
+      trapStack.push(onKey); // topmost-only trap; spliced out in teardown()
     }
     overlay.hidden = false;
     setCounter(i);
@@ -3743,6 +3759,7 @@ function buildModalSheet({ titleText, dismissible = true, onClose, onBackdrop } 
   }
 
   function onKey(e) {
+    if (trapStack[trapStack.length - 1] !== onKey) return; // only the topmost overlay acts
     if (dismissible && e.key === 'Escape') { e.preventDefault(); close(); return; }
     if (e.key === 'Tab') {
       const items = focusables();
@@ -3766,6 +3783,7 @@ function buildModalSheet({ titleText, dismissible = true, onClose, onBackdrop } 
     }
     overlay.hidden = false;
     document.addEventListener('keydown', onKey);
+    trapStack.push(onKey); // topmost-only trap; spliced out in close()
     const items = focusables();
     (items[0] ?? card).focus?.();
   }
@@ -3775,6 +3793,10 @@ function buildModalSheet({ titleText, dismissible = true, onClose, onBackdrop } 
     isOpen = false;
     overlay.hidden = true;
     document.removeEventListener('keydown', onKey);
+    // Splice by indexOf (paired with the open() push) — may not be topmost if
+    // layers closed out of order.
+    const ti = trapStack.indexOf(onKey);
+    if (ti !== -1) trapStack.splice(ti, 1);
     if (overlay.parentNode && typeof overlay.parentNode.removeChild === 'function') {
       overlay.parentNode.removeChild(overlay);
     }
@@ -4170,6 +4192,9 @@ export function wirePhotoSync(deps) {
   };
 
   let running = false; // re-entrancy latch — a double-tap is a no-op while busy.
+  let lastUi = null; // the prior run's progress sheet — swept before minting a new one,
+                     // so a lingering "✓ N added" success pill can't resurrect a stale
+                     // "finished" modal when a second upload starts.
 
   async function resolveUploader() {
     const stored = getStoredUploader();
@@ -4204,7 +4229,14 @@ export function wirePhotoSync(deps) {
       // Every exit after this point MUST settle the sheet — finish() on the normal
       // path, destroy() on the early "nothing prepared" return, and destroy()-then-
       // rethrow on an unexpected throw (the catch below) — so it can never orphan.
+      //
+      // Sweep a prior run's still-lingering sheet/pill (e.g. a minimized "✓ N added"
+      // success pill mid-fade) BEFORE minting the new one — order is load-bearing:
+      // sweep old → mint new → record new.
+      try { if (lastUi) lastUi.destroy(); } catch { /* best-effort sweep of a prior run's lingering sheet/pill */ }
+      lastUi = null;
       const ui = progress();
+      lastUi = ui;
       try {
         const cleanUploader = sanitizePathSegment(uploader);
         const windowSet = new Set(windowDates());

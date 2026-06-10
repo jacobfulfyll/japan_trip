@@ -620,13 +620,15 @@ test('a non-/firebasejs/ path on www.gstatic.com is NOT intercepted by the Fireb
   assert.equal(event._responded, false, 'only the /firebasejs/ path should route to the SDK cache');
 });
 
-test('CACHE_VERSION is v43 (EXIF sub-IFD truncation → null degrade — app.js shell change)', () => {
+test('CACHE_VERSION is v44 (topmost-only keyboard-trap stack + stale upload-sheet sweep — app.js shell change)', () => {
   // sw.test.js derives CACHE_VERSION from the sw.js literal; this pins the
   // expected value so an accidental revert of the bump fails loudly.
   // v40 was consumed by the deployed TEMP date-shift build; v41 by the Seigaiha
-  // gallery redesign; v42 by the HEIC/PNG multi-container EXIF task — this task
-  // (harden-exif-subifd-truncation-null) takes the next free version v43.
-  assert.equal(CACHE_VERSION, 'v43');
+  // gallery redesign; v42 by the HEIC/PNG picker-handoff task; v43 by the EXIF
+  // sub-IFD truncation→null fix (merged first in the parallel v2.2 chain) — this
+  // task (fix-modal-stack-overlaps) reconciled to the next free version v44 at
+  // merge time so a byte-identical sw.js never strands devices on an older build.
+  assert.equal(CACHE_VERSION, 'v44');
 });
 
 // ===========================================================================

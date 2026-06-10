@@ -2193,6 +2193,280 @@ test('reminisce lightbox: renderDay stop() tears down an open lightbox (no leak 
 });
 
 // ===========================================================================
+// fix-modal-stack-overlaps: topmost-only keyboard-trap stack
+//
+// Two overlays can be open at once — the reminisce lightbox (body-mounted) with
+// an upload progress sheet stacked on top (e.g. the user taps "Add photos" with
+// the lightbox open). Before this fix both registered a document `keydown`
+// listener and BOTH acted on every Tab/Esc, so Tab yanked focus to the lightbox's
+// close button from under the modal and a single Esc closed both. The fix: a
+// module-level `trapStack` — every overlay pushes its onKey on open and splices it
+// out on close; each onKey early-returns unless it's at the top of the stack. So
+// only the topmost overlay handles keys, closing the top reactivates the one
+// beneath, and Esc peels exactly one layer.
+//
+// Vehicle: a reminisce lightbox (bottom, opened via renderDay reminisce + a thumb
+// click) + `buildProgressSheet()` (top — it body-mounts + opens at construction,
+// pushing its trap). The DOM stub's `document._fire('keydown', …)` dispatches to
+// ALL document listeners in registration order — exactly the stacked-trap shape.
+// The progress sheet is dismissible:false, so it owns Tab/Esc while open but its
+// own Esc is a no-op; the meaningful assertions are (a) the lightbox NEVER acts
+// while the sheet is on top, and (b) the lightbox's trap RESUMES once the sheet is
+// destroyed. Uploaded fixtures use uploadedDoc() (Storage-origin URLs) so the
+// mergeGalleryPhotos uploaded-origin allowlist keeps the tiles.
+// ===========================================================================
+
+test('stacked trap: a modal over the lightbox owns Tab — the lightbox close button never gets focus while stacked', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    stub.push([uploadedDoc(1), uploadedDoc(2), uploadedDoc(3)]);
+
+    // Open the lightbox (bottom layer).
+    r.node.byClass('reminisce-photo')[0]._fire('click');
+    const lb = document.body.firstByClass('lightbox');
+    assert.ok(lb, 'lightbox open (bottom layer)');
+    const closeBtn = lb.firstByClass('lightbox-close');
+    assert.ok(closeBtn, 'lightbox has a close button (its sole Tab target)');
+
+    // Open the progress sheet on top (auto-opens + body-mounts at construction).
+    const sheet = buildProgressSheet();
+    const modal = document.body.firstByClass('photo-modal');
+    assert.ok(modal, 'progress sheet modal is body-mounted on top');
+    const minBtn = modal.firstByClass('photo-modal-minimize');
+    assert.ok(minBtn, 'modal has its minimize button (the only visible focusable while running)');
+    // Construction focus already landed on the modal's minimize button.
+    assert.equal(document.activeElement, minBtn, 'focus opened inside the topmost modal, not the lightbox');
+
+    // Park focus somewhere neutral so a stray lightbox handler would be detectable
+    // by moving focus to the lightbox close button.
+    minBtn.focus();
+    // Spy on the lightbox close button's focus(): the lightbox onKey is registered
+    // FIRST, so without the topmost guard it runs on the same Tab event and calls
+    // closeBtn.focus() — even though the modal (registered later) then refocuses
+    // minBtn, masking it in the final activeElement. The spy catches that the
+    // guarded lightbox handler NEVER ran at all, not just that focus ended right.
+    let closeFocusCount = 0;
+    const realCloseFocus = closeBtn.focus.bind(closeBtn);
+    closeBtn.focus = () => { closeFocusCount += 1; return realCloseFocus(); };
+
+    // Fire Tab at the document. BOTH onKey handlers receive it, but only the
+    // topmost (the modal) may act — the modal's trap keeps focus on minBtn.
+    document._fire('keydown', { key: 'Tab', shiftKey: false, preventDefault() {} });
+    assert.equal(closeFocusCount, 0,
+      'the guarded lightbox Tab handler never ran while the modal was stacked on top');
+    assert.equal(document.activeElement, minBtn,
+      'Tab cycles within the modal (single focusable → stays on minBtn)');
+    assert.notEqual(document.activeElement, closeBtn,
+      'the lightbox close button NEVER receives focus while the modal is stacked on top');
+
+    sheet.destroy();
+    r.stop();
+  });
+});
+
+test('stacked trap: while a non-dismissible modal is on top, Esc does NOT close the lightbox beneath', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    stub.push([uploadedDoc(1), uploadedDoc(2), uploadedDoc(3)]);
+
+    r.node.byClass('reminisce-photo')[0]._fire('click');
+    assert.equal(document.body.byClass('lightbox').length, 1, 'lightbox open');
+
+    const sheet = buildProgressSheet(); // dismissible:false, opens on top
+    assert.equal(document.body.byClass('photo-modal').length, 1, 'modal open on top');
+
+    // Esc: the modal is topmost so the lightbox's onKey early-returns; the modal
+    // is non-dismissible so it ignores Esc too → NOTHING closes.
+    document._fire('keydown', { key: 'Escape', preventDefault() {} });
+    assert.equal(document.body.byClass('lightbox').length, 1,
+      'the lightbox stays open — its Esc handler is guarded while the modal is on top');
+    assert.equal(document.body.byClass('photo-modal').length, 1,
+      'the non-dismissible modal also ignores Esc — Esc peeled nothing');
+
+    sheet.destroy();
+    r.stop();
+  });
+});
+
+test('stacked trap: destroying the top modal resumes the lightbox trap — Esc then closes the lightbox', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    stub.push([uploadedDoc(1), uploadedDoc(2), uploadedDoc(3)]);
+
+    r.node.byClass('reminisce-photo')[0]._fire('click');
+    const sheet = buildProgressSheet();
+    assert.equal(document.body.byClass('lightbox').length, 1, 'lightbox open beneath');
+    assert.equal(document.body.byClass('photo-modal').length, 1, 'modal open on top');
+
+    // Tear down the top modal — its onKey splices out of the trap stack, so the
+    // lightbox is topmost again.
+    sheet.destroy();
+    assert.equal(document.body.byClass('photo-modal').length, 0, 'modal torn down');
+    assert.equal(document.body.byClass('lightbox').length, 1, 'lightbox still open after the modal closes');
+
+    // Esc now reaches the (re-topmost) lightbox and closes it.
+    document._fire('keydown', { key: 'Escape', preventDefault() {} });
+    assert.equal(document.body.byClass('lightbox').length, 0,
+      'with the modal gone, the lightbox trap resumed and Esc closed it');
+    r.stop();
+  });
+});
+
+test('stacked trap: destroying the top modal resumes the lightbox Tab trap — Tab focuses the lightbox close button', (t) => {
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    stub.push([uploadedDoc(1), uploadedDoc(2), uploadedDoc(3)]);
+
+    r.node.byClass('reminisce-photo')[0]._fire('click');
+    const lb = document.body.firstByClass('lightbox');
+    const closeBtn = lb.firstByClass('lightbox-close');
+
+    const sheet = buildProgressSheet();
+    // While stacked, Tab does NOT reach the lightbox (covered above). Destroy the
+    // top modal so the lightbox is topmost again.
+    sheet.destroy();
+
+    // Move focus off the close button so a working trap is observable when it
+    // pulls focus back.
+    document.activeElement = null;
+    document._fire('keydown', { key: 'Tab', shiftKey: false, preventDefault() {} });
+    assert.equal(document.activeElement, closeBtn,
+      'the lightbox Tab trap resumed: Tab focuses its sole focusable (the close button)');
+    r.stop();
+  });
+});
+
+test('stacked trap: two stacked progress sheets — only the topmost acts; closing it reactivates the one beneath', (t) => {
+  // Pure trap-stack semantics with two like overlays (no lightbox), proving the
+  // stack is generic and LIFO: the second sheet owns keys; destroying it hands
+  // ownership back to the first. Each buildProgressSheet() opens + pushes its trap.
+  withDom(() => {
+    const first = buildProgressSheet();
+    const firstModal = document.body.byClass('photo-modal')[0];
+    const firstMin = firstModal.firstByClass('photo-modal-minimize');
+
+    const second = buildProgressSheet();
+    const modals = document.body.byClass('photo-modal');
+    assert.equal(modals.length, 2, 'both modals are body-mounted (no auto-close of the first)');
+    const secondModal = modals[1];
+    const secondMin = secondModal.firstByClass('photo-modal-minimize');
+    assert.equal(document.activeElement, secondMin, 'focus opened inside the SECOND (topmost) modal');
+
+    // Park focus on the FIRST modal's control, then Tab: only the topmost (second)
+    // modal acts, so focus moves to the SECOND modal's control — never staying on
+    // the first modal's button. Spy on the FIRST modal's focusables: its onKey is
+    // registered first, so without the guard it runs on this Tab and refocuses its
+    // OWN control before the second modal overrides — the spy catches that.
+    firstMin.focus();
+    let firstActed = false;
+    const realFirstFocus = firstMin.focus.bind(firstMin);
+    firstMin.focus = () => { firstActed = true; return realFirstFocus(); };
+    document._fire('keydown', { key: 'Tab', shiftKey: false, preventDefault() {} });
+    assert.equal(firstActed, false,
+      'the first (lower) modal’s trap did NOT act while the second was stacked on top');
+    assert.equal(document.activeElement, secondMin,
+      'the topmost (second) modal owns Tab and pulls focus to its own control');
+
+    // Close the top modal → its trap splices out → the first modal is topmost.
+    second.destroy();
+    assert.equal(document.body.byClass('photo-modal').length, 1, 'second modal torn down');
+    // Now Tab is owned by the first modal: park focus elsewhere, Tab lands on its
+    // own control.
+    document.activeElement = null;
+    document._fire('keydown', { key: 'Tab', shiftKey: false, preventDefault() {} });
+    assert.equal(document.activeElement, firstMin,
+      'the first modal trap resumed once the top one closed');
+
+    first.destroy();
+  });
+});
+
+test('stacked trap: closing the lightbox while it is on TOP of a modal hands keys back to the modal (lightbox-side splice)', (t) => {
+  // The mirror of the modal-side splice tests, for the LIGHTBOX's own
+  // teardown() splice (app.js:1652-1653). For the dead lightbox onKey to strand
+  // the trap stack and deaden the layer beneath, the lightbox must be the TOP of
+  // the stack when it tears down — so here the MODAL opens FIRST (bottom) and the
+  // lightbox opens on TOP, then the lightbox is torn down (out of order, via the
+  // day view's stop() → lightbox.destroy()) while the modal stays up. With the
+  // splice, the lightbox's onKey leaves the stack → the modal beneath becomes
+  // topmost and reowns Tab/Esc. WITHOUT the splice, the dead lightbox onKey is
+  // stranded as the stack's top → every later Tab early-returns in the modal's
+  // onKey (it is no longer topmost) and the modal is deadened.
+  //
+  // The assertion spies on the modal's minimize-button focus() (its sole Tab
+  // target): activeElement alone is a false-green here because focus could already
+  // be sitting on minBtn from construction, so we PARK focus on the lightbox's
+  // (now-detached) close button first and prove the modal's trap actively pulls it
+  // back — i.e. the modal's onKey genuinely ran.
+  t.after(() => setSubscribePhotos(null));
+  withDom(() => {
+    const stub = makeSubscribeStub();
+    setSubscribePhotos(stub.subscribe);
+    const r = renderDay(fullDayFixture(), 'reminisce');
+    r.start();
+    stub.push([uploadedDoc(1), uploadedDoc(2), uploadedDoc(3)]);
+
+    // Open the progress sheet FIRST — it becomes the bottom layer.
+    const sheet = buildProgressSheet();
+    const modal = document.body.firstByClass('photo-modal');
+    assert.ok(modal, 'progress sheet modal is body-mounted (bottom layer)');
+    const minBtn = modal.firstByClass('photo-modal-minimize');
+    assert.ok(minBtn, 'modal has its minimize button (its sole Tab target)');
+
+    // Open the lightbox ON TOP of the modal — it pushes its trap last, so it owns
+    // keys and is the stack's top.
+    r.node.byClass('reminisce-photo')[0]._fire('click');
+    const lb = document.body.firstByClass('lightbox');
+    assert.ok(lb, 'lightbox open on top of the modal');
+    const closeBtn = lb.firstByClass('lightbox-close');
+    assert.ok(closeBtn, 'lightbox has a close button');
+
+    // Tear the lightbox down OUT OF ORDER (the modal is still up) via the day
+    // view's stop() → reminisceStop() → lightbox.destroy() → teardown(false),
+    // which runs the lightbox-side trapStack splice.
+    r.stop();
+    assert.equal(document.body.byClass('lightbox').length, 0, 'lightbox torn down');
+    assert.equal(document.body.byClass('photo-modal').length, 1, 'modal still open beneath');
+
+    // Park focus on the now-detached lightbox close button so a working modal trap
+    // is observable when it pulls focus back to minBtn.
+    let minFocusCount = 0;
+    const realMinFocus = minBtn.focus.bind(minBtn);
+    minBtn.focus = () => { minFocusCount += 1; return realMinFocus(); };
+    document.activeElement = closeBtn;
+
+    // Fire Tab: with the lightbox spliced out, the modal is topmost again and its
+    // trap runs — moving focus to its own minimize button. Without the splice the
+    // dead lightbox onKey is stranded on top, the modal's onKey early-returns, and
+    // minBtn.focus() is never called (minFocusCount stays 0, focus stays on the
+    // detached close button).
+    document._fire('keydown', { key: 'Tab', shiftKey: false, preventDefault() {} });
+    assert.ok(minFocusCount > 0,
+      'the modal trap resumed: its Tab handler ran and focused its own control');
+    assert.equal(document.activeElement, minBtn,
+      'Tab cycles within the modal (single focusable → lands on minBtn), not the dead lightbox');
+
+    sheet.destroy();
+  });
+});
+
+// ===========================================================================
 // reminisce-gallery-live: mergeGalleryPhotos (pure) + the live subscription layer
 //
 // mergeGalleryPhotos is a pure function (no DOM). The live layer is driven through
@@ -7915,10 +8189,26 @@ function makePhotoHarness(opts = {}) {
     concurrency = 3,
   } = opts;
 
-  const progressSheet = {
+  // Mint a FRESH progress-sheet stub per `progress()` call (each run mounts its
+  // own sheet). Collected into `sheets` so per-instance truths are assertable.
+  // The FIRST minted instance IS the `progressSheet` object below (same identity)
+  // so the ~30 existing tests that grab `harness.progressSheet` and/or mutate its
+  // methods BEFORE `run()` keep working unchanged — those mutations land on the
+  // instance run #1 actually uses. Run #2+ get brand-new stubs (`sheets[1]`, …),
+  // which is the per-instance truth the stale-sheet-sweep tests need.
+  const makeSheet = () => ({
     setProgress: syncSpy(),
     finish: syncSpy(),
     destroy: syncSpy(),
+  });
+  const progressSheet = makeSheet();
+  const sheets = [];
+  let minted = 0;
+  const mintSheet = () => {
+    const sheet = minted === 0 ? progressSheet : makeSheet();
+    minted += 1;
+    sheets.push(sheet);
+    return sheet;
   };
 
   const deps = {
@@ -7939,7 +8229,7 @@ function makePhotoHarness(opts = {}) {
     setStoredUploader: syncSpy(),
     askUploader: asyncSpy(() => askUploaderResult),
     askBatchDate: asyncSpy(() => askBatchDateResult),
-    progress: syncSpy(() => progressSheet),
+    progress: syncSpy(() => mintSheet()),
     onError: syncSpy(),
     isOnline: syncSpy(() => isOnline),
     now: syncSpy(() => now),
@@ -7947,7 +8237,7 @@ function makePhotoHarness(opts = {}) {
     concurrency,
   };
 
-  return { deps, progressSheet };
+  return { deps, progressSheet, sheets };
 }
 
 // A dated, in-window EXIF file: name -> {exifDateTime,date}.
@@ -8589,7 +8879,7 @@ test('wirePhotoSync: re-entrancy latch clears after a post-mount throw (a later 
   // SAME stub closures read — the dep references never change.
   const good = datedFile('good.jpg', '2026-06-25', 36002);
   let phase = 'throw';
-  const { deps, progressSheet } = makePhotoHarness({
+  const { deps, progressSheet, sheets } = makePhotoHarness({
     // First run: a no-date file routes through askBatchDate (which throws). Second
     // run: pickFiles returns a dated, in-window file that needs no batch prompt.
     dateFor: (file) => (phase === 'throw'
@@ -8601,16 +8891,81 @@ test('wirePhotoSync: re-entrancy latch clears after a post-mount throw (a later 
   const { run } = wirePhotoSync(deps);
 
   await assert.rejects(() => runQuiet(() => run('2026-06-25')).then((r) => r.result), /first run blows up/);
+  // `progressSheet` is the FIRST minted instance (run #1's own sheet).
   assert.equal(progressSheet.destroy.calls.length, 1, 'the failed run tore its own sheet down');
   assert.equal(progressSheet.finish.calls.length, 0, 'the failed run never finished');
+  assert.equal(sheets.length, 1, 'only run #1 has minted a sheet so far');
 
   // Second run: a clean, dated, in-window file uploads normally — proving the
   // latch cleared and the orchestrator recovered from the throw.
   phase = 'ok';
   const { result } = await runQuiet(() => run('2026-06-25'));
   assert.equal(result.added, 1, 'a later run runs normally after the error');
-  assert.equal(progressSheet.finish.calls.length, 1, 'the recovered run finished its own sheet');
-  assert.equal(progressSheet.destroy.calls.length, 1, 'no extra teardown on the clean run');
+  // The recovered run mints its OWN (second) sheet and finishes THAT one — the
+  // first run's sheet was already torn down on its throw path.
+  assert.equal(sheets.length, 2, 'the recovered run minted a fresh sheet');
+  assert.equal(sheets[1].finish.calls.length, 1, 'the recovered run finished its own (new) sheet');
+  assert.equal(sheets[1].destroy.calls.length, 0, 'no teardown on the clean run’s own sheet');
+  // The stale-sheet sweep on run #2’s entry destroys run #1’s lingering sheet a
+  // second time (idempotent destroy) — that is the new, correct behavior.
+  assert.equal(progressSheet.destroy.calls.length, 2,
+    'run #2 swept run #1’s lingering sheet before minting its own (own teardown + sweep)');
+  assert.equal(progressSheet.finish.calls.length, 0, 'the failed run still never finished');
+});
+
+// --- fix-modal-stack-overlaps: stale-sheet sweep across two runs -------------
+// wirePhotoSync keeps a `lastUi` ref to the prior run's progress sheet. On the
+// next run's entry — BEFORE minting the new sheet — it sweeps `lastUi.destroy()`,
+// so a lingering "✓ N added" success pill mid-fade from run #1 can't coexist with
+// run #2's fresh sheet. Order is load-bearing: sweep old → mint new.
+
+test('wirePhotoSync: a second run sweeps the first run’s progress sheet BEFORE minting its own', async () => {
+  const order = [];
+  const { deps, sheets } = makePhotoHarness({
+    files: [datedFile('a.jpg', '2026-06-25', 40001)],
+  });
+  // Wrap the factory to log each mint and instrument that instance's destroy, so
+  // we can prove the sweep of run #1's sheet happens before run #2's mint.
+  const origProgress = deps.progress;
+  deps.progress = syncSpy(() => {
+    const sheet = origProgress();           // mints sheets[n] (shared harness logic)
+    const idx = sheets.indexOf(sheet);
+    order.push(`mint#${idx}`);
+    const origDestroy = sheet.destroy;
+    sheet.destroy = syncSpy((...a) => { order.push(`destroy#${idx}`); return origDestroy(...a); });
+    return sheet;
+  });
+  const { run } = wirePhotoSync(deps);
+
+  // Run #1 completes normally (finish called, sheet left as lastUi).
+  await runQuiet(() => run('2026-06-25'));
+  assert.equal(sheets.length, 1, 'run #1 minted exactly one sheet');
+  assert.equal(sheets[0].finish.calls.length, 1, 'run #1 finished its sheet');
+  assert.equal(sheets[0].destroy.calls.length, 0, 'run #1 did NOT destroy its own sheet (left for the sweep)');
+
+  // Run #2 starts — it must sweep run #1's sheet, then mint its own.
+  await runQuiet(() => run('2026-06-25'));
+  assert.equal(sheets.length, 2, 'exactly two sheets were ever minted across the two runs');
+  assert.equal(sheets[0].destroy.calls.length, 1, 'run #1’s lingering sheet was swept exactly once');
+  assert.equal(sheets[1].finish.calls.length, 1, 'run #2 finished its OWN (second) sheet');
+
+  // The decisive ordering: run #1's sheet is destroyed BEFORE run #2's sheet is
+  // minted (the sweep precedes the new mount), and run #2 mints exactly one sheet.
+  assert.deepEqual(order, ['mint#0', 'destroy#0', 'mint#1'],
+    'sweep of run #1 (destroy#0) lands between the two mints — old swept, then new minted');
+});
+
+test('wirePhotoSync: the very first run sweeps nothing (lastUi starts null) and mints one sheet', async () => {
+  // Guards the `if (lastUi)` guard on the FIRST run — there is no prior sheet to
+  // sweep, so the run mints exactly one sheet and destroys nothing extra.
+  const { deps, sheets, progressSheet } = makePhotoHarness({
+    files: [datedFile('a.jpg', '2026-06-25', 41001)],
+  });
+  const { run } = wirePhotoSync(deps);
+  await runQuiet(() => run('2026-06-25'));
+  assert.equal(sheets.length, 1, 'first run mints exactly one sheet');
+  assert.equal(progressSheet.finish.calls.length, 1, 'and finishes it');
+  assert.equal(progressSheet.destroy.calls.length, 0, 'no spurious sweep-destroy on the first run');
 });
 
 // ===========================================================================
