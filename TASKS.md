@@ -2,7 +2,22 @@
 
 ## Active Tasks
 
-_None._
+### make-map-links-directions
+**Task**: Map pins open Google Maps directions from current location (📍 = directions everywhere; ⓘ = place page on rec cards)
+**Pipeline**: code-workflow
+**Branch**: task/make-map-links-directions
+**Worktree**: .worktree/make-map-links-directions
+**Base**: main
+**Started**: 2026-06-10
+**Files**:
+- MOD: app.js
+- MOD: index.html
+- MOD: app.test.js
+- MOD: sw.js
+- MOD: sw.test.js
+- MOD: CLAUDE.md
+- MOD: README.md
+- MOD: CHANGELOG.md
 
 ---
 
@@ -21,9 +36,6 @@ _None._
 
 ### Photo Journal & Nav Polish (v2.1)
 <!-- v2.1 polish/perf on the photo journal + day-view UX. ALL SIX tasks below touch app.js + bump sw.js CACHE_VERSION → MUTUALLY CONFLICTING; run SERIALLY in listed order, reconciling CACHE_VERSION to the next FREE value at each merge (currently v36 after minimize-upload-modal merged 2026-06-09; lockstep: sw.js:23 + sw.test.js pinned title + assert — check main at merge time, not branch time). make-gallery-scrollable HARD-depends on harden-upload-bail-path (same downscale-result destructure). Each task also updates the test-count claim in CLAUDE.md/README/CHANGELOG. All tiered fable:high by user decision (serial chain, 7 days to trip): run pickup sessions on Fable, e.g. /reggie-code-workflow --tier fable:high. -->
-- [ ] make-map-links-directions: Map pins open Google Maps directions from current location (📍 = directions everywhere; ⓘ = place page on rec cards) — render-time URL rewrite, no data edits, no travelmode forced [P2] [conflicts: slice-exif-read, harden-upload-bail-path, make-gallery-scrollable, minimize-upload-modal, harden-uploaded-url-origin] [simple] [tier: fable:high] [code] [planned]
-  files: app.js (MOD), index.html (MOD), app.test.js (MOD), sw.js (MOD), sw.test.js (MOD), CLAUDE.md (MOD), README.md (MOD), CHANGELOG.md (MOD)
-
 ### Ungroomed
 
 <!-- Discovered-issue backlog (code). Surfaced by pipeline stages; not yet groomed into tasks. (Previous 7 items triaged 2026-06-09 via /reggie-init-tasks: 2 formalized, 2 merged into harden-upload-bail-path, 3 pruned — see HISTORY.md.) -->
