@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← tests for the data/API/nav layer (node --test; 614 total with sw.test.js).
+app.test.js    ← tests for the data/API/nav layer (node --test; 645 total with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -485,7 +485,7 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The test suite (**614 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The test suite (**645 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),
@@ -497,7 +497,7 @@ collapsible day-parts (`bucketPlanByDayPart` bucketing, `dayParts` validation, d
 Hakone content contracts (Romancecar terminus/reserved, transit minutes, veg coverage, lodging consistency, contiguous 18-day span),
 the auth gate (login form present + native-submit guard),
 the ☰ nav menu (inline-SVG hamburger icon, hamburger popover, iconified Home/Add-photos rows, the `role="separator"` divider and its focus-trap exclusion, `opts.onAddPhotos` seam),
-the photo-upload flow (EXIF capture-date parsing against synthetic JPEG fixtures, trip-window filtering, composite-key dedup, run summaries, the `wirePhotoSync` orchestrator via injected seams, and the downscale bail path — `sniffImageType` magic-byte detection and the retry-then-honest-label upload),
+the photo-upload flow (multi-container EXIF capture-date parsing against synthetic JPEG / HEIC ISO-BMFF / PNG `eXIf` fixtures — the picker declares HEIC via `PICKER_ACCEPT` so iOS skips its in-picker transcode freeze — trip-window filtering, composite-key dedup, run summaries, the `wirePhotoSync` orchestrator via injected seams, and the downscale bail path — `sniffImageType` magic-byte detection and the retry-then-honest-label upload),
 the live reminisce gallery (`mergeGalleryPhotos` ordering/dedup/cap, the `setSubscribePhotos` seam, snapshot re-render + seam count, deferred rebuild while the lightbox is open, uploads-only gallery, the seam-absent empty-state, and the uploaded-URL origin allowlist — `isAllowedUploadOrigin` host-confusion vectors plus authored-kept-vs-uploaded-dropped branch isolation),
 the Seigaiha photo mosaic (`fnv1a`/`isFeatureUrl` hash units, `assignTileSpans` hole-freeness proven by an exact CSS-Grid `row dense` simulator property test — exhaustive n ≤ 16 + 20k seeded-random n ≤ 80 + a mutation check — plus panorama-outranks-crest and dim-less-never-pano cases, the `repeat(3, 1fr)`/`GALLERY_COLS` lockstep invariant read from `index.html`, `mergeGalleryPhotos` dims passthrough, dispatcher dims threading, render span-class assignment, crossorigin attributes, lightbox lazy-load + neighbor preload, scrollTop preservation across snapshot rebuilds, and `wirePhotoSync`→`writeDoc` dims-persistence),
 and map directions (`toDirectionsUrl` rewrite units — valid `?q=` URLs, missing param, empty, unsafe/relative inputs — plus render tests for the dual 📍/ⓘ rec-card links and the directions-only plan-item and lodging call sites).

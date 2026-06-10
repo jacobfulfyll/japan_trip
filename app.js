@@ -2575,12 +2575,86 @@ export function readExifDateTimeOriginal(buffer) {
   }
   const len = bytes.length;
   if (len < 4) return null;
-  // SOI marker FFD8.
-  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
 
-  // Scan APP segments for APP1 (FFE1) that begins with "Exif\0\0".
-  let p = 2;
+  // Dispatch on container magic, then locate the inner TIFF block's start offset.
+  // All three containers (JPEG APP1 / PNG eXIf / ISO-BMFF HEIC Exif item) wrap the
+  // SAME TIFF block; once located, `readTiffDateTime` does the shared walk.
   let tiffStart = -1;
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) {
+    // JPEG (SOI FFD8).
+    tiffStart = locateTiffInJpeg(bytes, len);
+  } else if (
+    len >= 8 &&
+    bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+    bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a
+  ) {
+    // PNG (89 50 4E 47 0D 0A 1A 0A).
+    tiffStart = locateTiffInPng(bytes, len);
+  } else if (
+    len >= 12 &&
+    bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70 && // "ftyp"
+    isHeicFamilyBrand(bytes, 8)
+  ) {
+    // ISO-BMFF / HEIC-family.
+    tiffStart = locateTiffInIsoBmff(bytes, len);
+  } else {
+    return null;
+  }
+
+  if (tiffStart < 0 || tiffStart + 8 > len) return null;
+  return readTiffDateTime(bytes, tiffStart, len);
+}
+
+/**
+ * True iff a 4-byte brand at offset `off` is a HEIC-family brand we treat as
+ * EXIF-bearing ISO-BMFF: heic/heix/hevc/hevx (image/heic) + mif1/msf1
+ * (image/heif). AVIF is deliberately excluded. Bounds-safe, pure.
+ * @param {Uint8Array} bytes
+ * @param {number} off
+ * @returns {boolean}
+ */
+function isHeicFamilyBrand(bytes, off) {
+  if (off + 4 > bytes.length) return false;
+  const c0 = bytes[off], c1 = bytes[off + 1], c2 = bytes[off + 2], c3 = bytes[off + 3];
+  const is = (a, b, c, d) => c0 === a && c1 === b && c2 === c && c3 === d;
+  return (
+    is(0x68, 0x65, 0x69, 0x63) || // heic
+    is(0x68, 0x65, 0x69, 0x78) || // heix
+    is(0x68, 0x65, 0x76, 0x63) || // hevc
+    is(0x68, 0x65, 0x76, 0x78) || // hevx
+    is(0x6d, 0x69, 0x66, 0x31) || // mif1
+    is(0x6d, 0x73, 0x66, 0x31)    // msf1
+  );
+}
+
+/**
+ * True iff bytes at `off` form a valid TIFF byte-order marker + magic:
+ * "II" (49 49) + 2A 00, or "MM" (4D 4D) + 00 2A. Bounds-checked.
+ * @param {Uint8Array} bytes
+ * @param {number} off
+ * @param {number} len
+ * @returns {boolean}
+ */
+function isTiffMagic(bytes, off, len) {
+  if (off + 4 > len) return false;
+  if (bytes[off] === 0x49 && bytes[off + 1] === 0x49) {
+    return bytes[off + 2] === 0x2a && bytes[off + 3] === 0x00; // II + 2A 00
+  }
+  if (bytes[off] === 0x4d && bytes[off + 1] === 0x4d) {
+    return bytes[off + 2] === 0x00 && bytes[off + 3] === 0x2a; // MM + 00 2A
+  }
+  return false;
+}
+
+/**
+ * Locate the TIFF block inside a JPEG: scan APP segments for APP1 (FFE1) that
+ * begins with "Exif\0\0". Returns the byte offset of the TIFF header, or -1.
+ * @param {Uint8Array} bytes
+ * @param {number} len
+ * @returns {number}
+ */
+function locateTiffInJpeg(bytes, len) {
+  let p = 2;
   while (p + 4 <= len) {
     if (bytes[p] !== 0xff) { p += 1; continue; } // resync on stray padding
     const marker = bytes[p + 1];
@@ -2588,7 +2662,7 @@ export function readExifDateTimeOriginal(buffer) {
     if (marker === 0xd8 || marker === 0xd9 || marker === 0x01 ||
         (marker >= 0xd0 && marker <= 0xd7)) { p += 2; continue; }
     const segLen = (bytes[p + 2] << 8) | bytes[p + 3];
-    if (segLen < 2) return null; // malformed length
+    if (segLen < 2) return -1; // malformed length
     const segStart = p + 4;
     if (marker === 0xe1) {
       // APP1 — check for the "Exif\0\0" signature.
@@ -2596,15 +2670,292 @@ export function readExifDateTimeOriginal(buffer) {
           bytes[segStart] === 0x45 && bytes[segStart + 1] === 0x78 &&
           bytes[segStart + 2] === 0x69 && bytes[segStart + 3] === 0x66 &&
           bytes[segStart + 4] === 0x00 && bytes[segStart + 5] === 0x00) {
-        tiffStart = segStart + 6;
-        break;
+        return segStart + 6;
       }
     }
     if (marker === 0xda) break; // SOS — image data starts; no EXIF beyond.
     p += 2 + segLen;
   }
-  if (tiffStart < 0 || tiffStart + 8 > len) return null;
+  return -1;
+}
 
+/**
+ * Locate the TIFF block inside a PNG: walk chunks for an `eXIf` chunk whose
+ * payload IS the raw TIFF block (no "Exif\0\0" prefix). Stops at IEND. Pure,
+ * bounds-checked, never throws. Returns the TIFF offset, or -1.
+ * @param {Uint8Array} bytes
+ * @param {number} len
+ * @returns {number}
+ */
+function locateTiffInPng(bytes, len) {
+  let p = 8; // after the 8-byte signature
+  while (p + 8 <= len) {
+    const chunkLen = (
+      (bytes[p] << 24) | (bytes[p + 1] << 16) | (bytes[p + 2] << 8) | bytes[p + 3]
+    ) >>> 0;
+    const t0 = bytes[p + 4], t1 = bytes[p + 5], t2 = bytes[p + 6], t3 = bytes[p + 7];
+    const payloadOff = p + 8;
+    // IEND — stop.
+    if (t0 === 0x49 && t1 === 0x45 && t2 === 0x4e && t3 === 0x44) return -1;
+    if (payloadOff + chunkLen > len) return -1; // declared length exceeds the slice
+    // eXIf.
+    if (t0 === 0x65 && t1 === 0x58 && t2 === 0x49 && t3 === 0x66) {
+      if (chunkLen < 8) return -1; // too small for a TIFF header
+      if (!isTiffMagic(bytes, payloadOff, len)) return -1;
+      return payloadOff;
+    }
+    // Advance: payload + 4-byte CRC (CRC not validated).
+    p = payloadOff + chunkLen + 4;
+  }
+  return -1;
+}
+
+/**
+ * Locate the TIFF block inside an ISO-BMFF / HEIC file by walking the box tree to
+ * the `Exif` item's bytes. Handles the `meta` FullBox (+4 version/flags skip),
+ * iinf/infe item-type lookup, and iloc extent resolution (v0/v1/v2,
+ * construction_method 0 + single extent only). Pure, bounds-checked, never throws.
+ * Returns the TIFF offset, or -1.
+ * @param {Uint8Array} bytes
+ * @param {number} len
+ * @returns {number}
+ */
+function locateTiffInIsoBmff(bytes, len) {
+  // Read an n-byte big-endian unsigned int at `off`. Returns Infinity if it would
+  // exceed the slice OR if high bytes beyond ~6 significant bytes are set (so a
+  // value that overflows safe-integer / 32-bit space is flagged out-of-bounds
+  // rather than silently truncated).
+  const uIntBe = (off, n) => {
+    if (off + n > len) return Infinity;
+    let v = 0;
+    for (let i = 0; i < n; i += 1) {
+      const b = bytes[off + i];
+      // If we've already accumulated >~6 significant bytes and more nonzero bytes
+      // arrive, treat as overflow.
+      if (i >= 6 && b !== 0) return Infinity;
+      v = v * 256 + b;
+    }
+    return v;
+  };
+
+  // Iterate the boxes within [start, end), calling cb(type, contentStart, boxEnd).
+  // cb returning truthy stops iteration. Returns nothing; callers read out via cb.
+  const eachBox = (start, end, cb) => {
+    let p = start;
+    while (p + 8 <= end) {
+      let size = uIntBe(p, 4);
+      if (!Number.isFinite(size)) return;
+      const type = (
+        String.fromCharCode(bytes[p + 4]) + String.fromCharCode(bytes[p + 5]) +
+        String.fromCharCode(bytes[p + 6]) + String.fromCharCode(bytes[p + 7])
+      );
+      let headerLen = 8;
+      if (size === 1) {
+        // 64-bit largesize follows the type.
+        const large = uIntBe(p + 8, 8);
+        if (!Number.isFinite(large)) return;
+        size = large;
+        headerLen = 16;
+      } else if (size === 0) {
+        // Box runs to the end of the slice.
+        size = end - p;
+      }
+      if (size < headerLen) return;
+      const boxEnd = p + size;
+      if (boxEnd > end) return;
+      const contentStart = p + headerLen;
+      if (cb(type, contentStart, boxEnd)) return;
+      p = boxEnd;
+    }
+  };
+
+  // Top level: REQUIRE the first box to be ftyp; then locate meta.
+  let metaContentStart = -1;
+  let metaContentEnd = -1;
+  let firstSeen = false;
+  let firstIsFtyp = false;
+  eachBox(0, len, (type, contentStart, boxEnd) => {
+    if (!firstSeen) {
+      firstSeen = true;
+      firstIsFtyp = type === 'ftyp';
+      if (!firstIsFtyp) return true; // stop — invalid
+    }
+    if (type === 'meta') {
+      metaContentStart = contentStart;
+      metaContentEnd = boxEnd;
+      return true; // found meta
+    }
+    return false;
+  });
+  if (!firstIsFtyp || metaContentStart < 0) return -1;
+
+  // `meta` is a FullBox: skip 4 bytes (1 version + 3 flags) before its children.
+  const metaChildrenStart = metaContentStart + 4;
+  if (metaChildrenStart > metaContentEnd) return -1;
+
+  // Within meta children: find iinf (→ Exif item_ID) and iloc (→ extent offset).
+  let exifItemId = -1;
+  let ilocStart = -1;
+  let ilocEnd = -1;
+  eachBox(metaChildrenStart, metaContentEnd, (type, contentStart, boxEnd) => {
+    if (type === 'iinf') {
+      // iinf FullBox: version(1) flags(3) [contentStart points past the box header
+      // but the FullBox version/flags are part of the content]. contentStart here
+      // is just past the 8-byte box header.
+      const version = bytes[contentStart];
+      let cur = contentStart + 4; // skip version + flags
+      // entry_count: u16 for v0, u32 for v1+.
+      let entryCount;
+      if (version === 0) {
+        entryCount = uIntBe(cur, 2); cur += 2;
+      } else {
+        entryCount = uIntBe(cur, 4); cur += 4;
+      }
+      if (!Number.isFinite(entryCount)) return false;
+      // Scan infe boxes.
+      eachBox(cur, boxEnd, (itype, ics) => {
+        if (itype !== 'infe') return false;
+        const iv = bytes[ics]; // infe FullBox version
+        let itemId = -1;
+        let itemTypeOff = -1;
+        if (iv === 2) {
+          itemId = uIntBe(ics + 4, 2);
+          itemTypeOff = ics + 8;
+        } else if (iv === 3) {
+          itemId = uIntBe(ics + 4, 4);
+          itemTypeOff = ics + 10;
+        } else {
+          return false; // v0/v1 carry no item_type — skip
+        }
+        if (!Number.isFinite(itemId)) return false;
+        if (itemTypeOff + 4 > len) return false;
+        // item_type "Exif" (45 78 69 66).
+        if (bytes[itemTypeOff] === 0x45 && bytes[itemTypeOff + 1] === 0x78 &&
+            bytes[itemTypeOff + 2] === 0x69 && bytes[itemTypeOff + 3] === 0x66) {
+          exifItemId = itemId;
+          return true; // found it
+        }
+        return false;
+      });
+      return false;
+    }
+    if (type === 'iloc') {
+      ilocStart = contentStart;
+      ilocEnd = boxEnd;
+      return false;
+    }
+    return false;
+  });
+
+  if (exifItemId < 0 || ilocStart < 0) return -1;
+
+  // Parse iloc to resolve the Exif item's single, file-relative extent.
+  const ilocVersion = bytes[ilocStart];
+  let cur = ilocStart + 4; // skip version + flags
+  // Nibble-packed sizes.
+  const sizeByte = bytes[cur]; cur += 1;
+  const offsetSize = (sizeByte >> 4) & 0x0f;
+  const lengthSize = sizeByte & 0x0f;
+  const baseIdxByte = bytes[cur]; cur += 1;
+  const baseOffsetSize = (baseIdxByte >> 4) & 0x0f;
+  const indexSize = baseIdxByte & 0x0f;
+  // item_count: u16 (v0/v1) or u32 (v2).
+  let itemCount;
+  if (ilocVersion === 2) { itemCount = uIntBe(cur, 4); cur += 4; }
+  else { itemCount = uIntBe(cur, 2); cur += 2; }
+  if (!Number.isFinite(itemCount)) return -1;
+
+  for (let i = 0; i < itemCount; i += 1) {
+    if (cur > ilocEnd) return -1;
+    // item_ID.
+    let itemId;
+    if (ilocVersion === 2) { itemId = uIntBe(cur, 4); cur += 4; }
+    else { itemId = uIntBe(cur, 2); cur += 2; }
+    if (!Number.isFinite(itemId)) return -1;
+    // construction_method (v1/v2): 2-byte field, low 4 bits.
+    let constructionMethod = 0;
+    if (ilocVersion === 1 || ilocVersion === 2) {
+      const cm = uIntBe(cur, 2); cur += 2;
+      if (!Number.isFinite(cm)) return -1;
+      constructionMethod = cm & 0x0f;
+    }
+    // data_reference_index.
+    cur += 2;
+    // base_offset.
+    let baseOffset = 0;
+    if (baseOffsetSize > 0) {
+      baseOffset = uIntBe(cur, baseOffsetSize); cur += baseOffsetSize;
+      if (!Number.isFinite(baseOffset)) return -1;
+    }
+    // extent_count.
+    const extentCount = uIntBe(cur, 2); cur += 2;
+    if (!Number.isFinite(extentCount)) return -1;
+
+    const isTarget = itemId === exifItemId;
+    if (isTarget) {
+      if (constructionMethod !== 0) return -1; // only file-relative supported
+      if (extentCount !== 1) return -1;        // only single-extent supported
+    }
+
+    // Per-extent byte width consumed by the real loop below: the optional
+    // extent_index (v1/v2 with index_size > 0) plus offset + length fields.
+    const perExtentBytes =
+      (((ilocVersion === 1 || ilocVersion === 2) && indexSize > 0) ? indexSize : 0) +
+      offsetSize + lengthSize;
+
+    if (!isTarget) {
+      // NON-target item: we never read its extents — only need the cursor to land
+      // on the next item. Advance ARITHMETICALLY past all extents in one step
+      // instead of spinning the inner loop. (A crafted file can declare a huge
+      // extent_count with zero-width offset/length; looping that burns main-thread
+      // time for no purpose. Arithmetic skip is O(1).)
+      cur += extentCount * perExtentBytes;
+      if (cur > ilocEnd || cur > len) return -1;
+      continue;
+    }
+
+    // TARGET item: run the real extent loop (extentCount is guaranteed 1 above).
+    // Belt-and-suspenders cap in case the invariant ever loosens.
+    if (extentCount > 4096) return -1;
+    let targetTiffStart = -1;
+    for (let e = 0; e < extentCount; e += 1) {
+      // extent_index (v1/v2 with index_size > 0).
+      if ((ilocVersion === 1 || ilocVersion === 2) && indexSize > 0) {
+        cur += indexSize;
+      }
+      const extentOffset = uIntBe(cur, offsetSize); cur += offsetSize;
+      const extentLength = uIntBe(cur, lengthSize); cur += lengthSize;
+      if (e === 0) {
+        if (!Number.isFinite(extentOffset) || !Number.isFinite(extentLength)) return -1;
+        const targetPos = baseOffset + extentOffset;
+        if (!Number.isFinite(targetPos)) return -1;
+        if (targetPos + 4 > len) return -1;
+        if (targetPos + extentLength > len) return -1;
+        // Exif item payload: u32 exif_tiff_header_offset, then the TIFF block.
+        const exifTiffHeaderOffset = uIntBe(targetPos, 4);
+        if (!Number.isFinite(exifTiffHeaderOffset)) return -1;
+        const ts = targetPos + 4 + exifTiffHeaderOffset;
+        if (!Number.isFinite(ts) || ts + 8 > len) return -1;
+        if (!isTiffMagic(bytes, ts, len)) return -1;
+        targetTiffStart = ts;
+      }
+    }
+    return targetTiffStart;
+  }
+  return -1;
+}
+
+/**
+ * Shared TIFF-block walker: from the TIFF byte-order marker at `tiffStart`, read
+ * IFD0 → follow the Exif sub-IFD pointer (0x8769) → read DateTimeOriginal (0x9003),
+ * falling back to IFD0's weaker DateTime (0x0132). Bounds-checked throughout
+ * (returns null, never throws). Byte-identical to the original JPEG path.
+ * @param {Uint8Array} bytes
+ * @param {number} tiffStart
+ * @param {number} len
+ * @returns {string | null} raw EXIF datetime, e.g. "2026:06:25 23:30:00"
+ */
+function readTiffDateTime(bytes, tiffStart, len) {
   // TIFF header: byte-order ("II"/"MM"), magic 0x002A, IFD0 offset.
   const b0 = bytes[tiffStart];
   const b1 = bytes[tiffStart + 1];
@@ -3698,6 +4049,15 @@ function showInterruptedRunNotice(marker) {
 // ---- Orchestrator (injected-seam, testable) -------------------------------
 
 /**
+ * The file-picker `accept` filter. `image/*` covers the common families, but
+ * iOS Safari historically excludes HEIC/HEIF from `image/*` unless they're named
+ * explicitly — so we append `image/heic,image/heif` to surface untranscoded
+ * iPhone captures in the picker.
+ * @type {string}
+ */
+export const PICKER_ACCEPT = 'image/*,image/heic,image/heif';
+
+/**
  * Default browser file picker: a hidden multi-select <input type="file"> that
  * resolves with the chosen File[] (or [] if cancelled). Resets `value` each call
  * so re-selecting the SAME photos still fires `change`. Browser-only.
@@ -3707,16 +4067,17 @@ function pickFilesBrowser() {
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'image/*';
+    input.accept = PICKER_ACCEPT;
     input.multiple = true;
     input.style.position = 'fixed';
     input.style.left = '-9999px';
     let settled = false;
     const done = (files) => { if (settled) return; settled = true; cleanup(); resolve(files); };
     const onChange = () => done(input.files ? Array.from(input.files) : []);
-    // A 'cancel' event (supported in newer browsers) or a focus-return with no
-    // selection resolves to []. We listen for 'change'; if the user cancels, the
-    // promise resolves on the next picker (the input is discarded).
+    // 'change' resolves with the chosen files; 'cancel' (newer browsers) resolves
+    // with []. On browsers without the 'cancel' event a dismissed picker leaves
+    // this promise pending — harmless, since the next pick supersedes it (the
+    // discarded input is cleaned up and a fresh one opens).
     input.addEventListener('change', onChange);
     input.addEventListener('cancel', () => done([]));
     function cleanup() {

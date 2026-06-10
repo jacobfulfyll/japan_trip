@@ -70,6 +70,7 @@ import {
   createRunMarker,
   checkInterruptedRun,
   buildProgressSheet,
+  PICKER_ACCEPT,
 } from './app.js';
 import { TRIP, DAYS } from './data/days.js';
 
@@ -6786,6 +6787,622 @@ test('readExifDateTimeOriginal: header slice of a large file (EXIF in front, pad
   const sliced = big.slice(0, EXIF_SCAN_BYTES);
   assert.equal(readExifDateTimeOriginal(sliced), '2026:07:02 17:05:00');
   assert.equal(readCaptureDate(sliced), '2026-07-02 17:05:00');
+});
+
+// ===========================================================================
+// speed-up-photo-picker-handoff: multi-container EXIF dating + PICKER_ACCEPT
+// ===========================================================================
+// IMPLEMENT added container dispatch to `readExifDateTimeOriginal`: beyond JPEG
+// APP1, it now reads the EXIF DateTimeOriginal from PNG `eXIf` chunks (iOS
+// screenshots) and ISO-BMFF / HEIC-family files (untranscoded iPhone photos).
+// All three containers wrap the SAME inner TIFF block. We extract that TIFF-block
+// author into a STANDALONE helper (`buildTiffBlock`) — NOT a refactor of the
+// existing `buildExifJpeg`, so its emitted bytes stay byte-for-byte identical and
+// every prior JPEG-EXIF test keeps passing untouched. `buildTiffBlock` duplicates
+// `buildExifJpeg`'s inner TIFF construction verbatim (the two must agree); new
+// `buildExifPng` / `buildExifHeic` wrap the shared block. Every "should be null"
+// case is also an implicit "must not throw" — the parser is documented to degrade
+// to null on any anomaly, never throw.
+
+// --- Shared TIFF-block author ------------------------------------------------
+// Builds JUST the TIFF block (header II/MM + magic + IFD0 [optional 0x8769 Exif
+// sub-IFD pointer + optional 0x0132 DateTime] + Exif sub-IFD [optional 0x9003
+// DateTimeOriginal], ASCII value blobs past the IFDs). This is the identical
+// inner block JPEG APP1 / PNG eXIf / HEIC Exif-item all carry. Returns a
+// Uint8Array whose offset 0 is the TIFF byte-order marker.
+function buildTiffBlock({ dto = null, ifd0DateTime = null, endian = 'II' } = {}) {
+  const little = endian === 'II';
+
+  const ifd0HasExifPtr = dto != null;
+  const ifd0HasDateTime = ifd0DateTime != null;
+  const ifd0Count = (ifd0HasExifPtr ? 1 : 0) + (ifd0HasDateTime ? 1 : 0);
+  const exifCount = dto != null ? 1 : 0;
+
+  const ifd0Start = 8;
+  const ifd0Size = 2 + ifd0Count * 12 + 4;
+  const exifStart = ifd0Start + ifd0Size;
+  const exifSize = 2 + exifCount * 12 + 4;
+  let valueCursor = exifStart + exifSize;
+
+  let dtoValueOff = -1;
+  let ifd0DtValueOff = -1;
+  if (dto != null) { dtoValueOff = valueCursor; valueCursor += 20; }
+  if (ifd0DateTime != null) { ifd0DtValueOff = valueCursor; valueCursor += 20; }
+
+  const tiff = new Uint8Array(valueCursor);
+  const setU16 = (off, v) => {
+    if (little) { tiff[off] = v & 0xff; tiff[off + 1] = (v >> 8) & 0xff; }
+    else { tiff[off] = (v >> 8) & 0xff; tiff[off + 1] = v & 0xff; }
+  };
+  const setU32 = (off, v) => {
+    if (little) {
+      tiff[off] = v & 0xff; tiff[off + 1] = (v >> 8) & 0xff;
+      tiff[off + 2] = (v >> 16) & 0xff; tiff[off + 3] = (v >> 24) & 0xff;
+    } else {
+      tiff[off] = (v >> 24) & 0xff; tiff[off + 1] = (v >> 16) & 0xff;
+      tiff[off + 2] = (v >> 8) & 0xff; tiff[off + 3] = v & 0xff;
+    }
+  };
+  const setAscii = (off, str) => {
+    for (let i = 0; i < str.length; i += 1) tiff[off + i] = str.charCodeAt(i) & 0xff;
+    tiff[off + str.length] = 0;
+  };
+  const setEntry = (off, tag, type, count, valueOrOffset) => {
+    setU16(off, tag); setU16(off + 2, type);
+    setU32(off + 4, count); setU32(off + 8, valueOrOffset);
+  };
+
+  if (little) { tiff[0] = 0x49; tiff[1] = 0x49; } else { tiff[0] = 0x4d; tiff[1] = 0x4d; }
+  setU16(2, 0x002a);
+  setU32(4, ifd0Start);
+
+  setU16(ifd0Start, ifd0Count);
+  let e = ifd0Start + 2;
+  if (ifd0HasExifPtr) { setEntry(e, 0x8769, 4, 1, exifStart); e += 12; }
+  if (ifd0HasDateTime) { setEntry(e, 0x0132, 2, 20, ifd0DtValueOff); e += 12; }
+  setU32(ifd0Start + 2 + ifd0Count * 12, 0);
+
+  setU16(exifStart, exifCount);
+  if (exifCount) setEntry(exifStart + 2, 0x9003, 2, 20, dtoValueOff);
+  setU32(exifStart + 2 + exifCount * 12, 0);
+
+  if (dto != null) setAscii(dtoValueOff, dto);
+  if (ifd0DateTime != null) setAscii(ifd0DtValueOff, ifd0DateTime);
+  return tiff;
+}
+
+// --- Shared TIFF-block sanity: agrees with buildExifJpeg's inner block --------
+test('buildTiffBlock: the standalone block matches the JPEG path (shared-block sanity)', () => {
+  // Wrap buildTiffBlock's output in the SAME JPEG SOI/APP1/EOI frame buildExifJpeg
+  // uses, and assert the JPEG parser recovers the date — proving the standalone
+  // block is byte-compatible with the inner block the existing JPEG tests rely on.
+  const tiff = buildTiffBlock({ dto: '2026:06:25 23:30:00', endian: 'II' });
+  const sig = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00]; // "Exif\0\0"
+  const segLen = sig.length + tiff.length + 2;
+  const out = [0xff, 0xd8, 0xff, 0xe1, (segLen >> 8) & 0xff, segLen & 0xff, ...sig, ...tiff, 0xff, 0xd9];
+  assert.equal(readExifDateTimeOriginal(new Uint8Array(out)), '2026:06:25 23:30:00');
+});
+
+// --- PNG / eXIf builder ------------------------------------------------------
+// Real PNG chunk framing: u32-BE length + 4cc type + payload + 4-byte CRC. The
+// parser does NOT validate CRC, so we write zero CRCs. The `eXIf` payload IS the
+// raw TIFF block (no "Exif\0\0" prefix). `chunks` is an array of {type, payload}.
+function buildPng(chunks) {
+  const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  const out = [...SIG];
+  for (const { type, payload } of chunks) {
+    const len = payload.length;
+    out.push((len >>> 24) & 0xff, (len >>> 16) & 0xff, (len >>> 8) & 0xff, len & 0xff);
+    for (let i = 0; i < 4; i += 1) out.push(type.charCodeAt(i) & 0xff);
+    out.push(...payload);
+    out.push(0, 0, 0, 0); // CRC (not validated)
+  }
+  return new Uint8Array(out);
+}
+// A minimal IHDR payload (13 bytes; contents irrelevant to the parser, which only
+// matches chunk TYPES and walks past payloads it doesn't care about).
+const PNG_IHDR_STUB = new Uint8Array(13).fill(0x01);
+// Convenience: a spec-shaped PNG carrying an eXIf chunk with the shared TIFF block.
+function buildExifPng({ dto = null, ifd0DateTime = null, endian = 'II', extraBefore = [], extraAfter = [] } = {}) {
+  const tiff = buildTiffBlock({ dto, ifd0DateTime, endian });
+  return buildPng([
+    { type: 'IHDR', payload: PNG_IHDR_STUB },
+    ...extraBefore,
+    { type: 'eXIf', payload: tiff },
+    ...extraAfter,
+    { type: 'IEND', payload: new Uint8Array(0) },
+  ]);
+}
+
+// --- ISO-BMFF / HEIC builder -------------------------------------------------
+// Builds a minimal but spec-valid HEIC file the parser can walk:
+//   ftyp(brand) | meta(FullBox){ iinf{ infe v2 item_type "Exif", id } iloc(v0|v1) }
+//   then the Exif item payload = u32 exif_tiff_header_offset(0) + shared TIFF block.
+// The iloc extent points (file-relative, construction_method 0, single extent) at
+// the Exif item payload appended after the meta box.
+function be32(v) { return [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff]; }
+function be16(v) { return [(v >>> 8) & 0xff, v & 0xff]; }
+function box(type, body) {
+  // size(u32) + type(4cc) + body.
+  const size = 8 + body.length;
+  return [...be32(size), ...type.split('').map((c) => c.charCodeAt(0)), ...body];
+}
+function fullBox(type, version, flags, body) {
+  // FullBox: size + type + version(1) + flags(3) + body.
+  return box(type, [version, (flags >> 16) & 0xff, (flags >> 8) & 0xff, flags & 0xff, ...body]);
+}
+function buildExifHeic({
+  dto = '2026:06:25 23:30:00', ifd0DateTime = null, endian = 'II',
+  brand = 'heic', ilocVersion = 0, constructionMethod = 0, extentCount = 1,
+  itemType = 'Exif', tiffHeaderOffset = 0, badTiffMagic = false, offsetPastEnd = false,
+} = {}) {
+  const itemId = 1;
+  // Exif item payload: u32 exif_tiff_header_offset + TIFF block.
+  let tiff = buildTiffBlock({ dto, ifd0DateTime, endian });
+  if (badTiffMagic) { tiff = tiff.slice(); tiff[0] = 0x58; tiff[1] = 0x58; } // "XX"
+  const exifItemPayload = [...be32(tiffHeaderOffset), ...tiff];
+
+  // ftyp: major_brand + minor_version + compatible_brands.
+  const ftyp = box('ftyp', [
+    ...brand.split('').map((c) => c.charCodeAt(0)),
+    ...be32(0),
+    ...brand.split('').map((c) => c.charCodeAt(0)),
+  ]);
+
+  // infe v2: item_ID(u16) + item_protection_index(u16) + item_type(4cc).
+  const infe = fullBox('infe', 2, 0, [
+    ...be16(itemId), ...be16(0),
+    ...itemType.padEnd(4, '\0').slice(0, 4).split('').map((c) => c.charCodeAt(0)),
+  ]);
+  // iinf v0: entry_count(u16) + infe boxes.
+  const iinf = fullBox('iinf', 0, 0, [...be16(1), ...infe]);
+
+  // iloc. offset_size=4, length_size=4, base_offset_size=0, index_size=0.
+  // Layout per item: [item_ID][ (v1/v2) construction_method u16 ][data_ref_index u16]
+  //                  [base_offset:0][extent_count u16][ per extent: offset(4) length(4) ]
+  // We compute the absolute extent offset AFTER assembling the boxes, so first
+  // build a placeholder iloc, measure, then rebuild with the real offset.
+  const buildIloc = (extentOffset) => {
+    const perItem = [];
+    perItem.push(...be16(itemId));
+    if (ilocVersion === 1) perItem.push(...be16(constructionMethod)); // construction_method
+    perItem.push(...be16(0)); // data_reference_index
+    // base_offset omitted (base_offset_size = 0).
+    perItem.push(...be16(extentCount));
+    for (let i = 0; i < extentCount; i += 1) {
+      // each extent: offset(4) + length(4). For a multi-extent fixture the 2nd
+      // extent is a dummy (the parser bails on extentCount !== 1 before reading it,
+      // but we still emit well-formed bytes so the box length is honest).
+      perItem.push(...be32(i === 0 ? extentOffset : 0));
+      perItem.push(...be32(i === 0 ? exifItemPayload.length : 0));
+    }
+    const sizeNibbles = (4 << 4) | 4;        // offset_size=4, length_size=4
+    const baseIdxNibbles = (0 << 4) | 0;     // base_offset_size=0, index_size=0
+    const body = [sizeNibbles, baseIdxNibbles, ...be16(1) /* item_count */, ...perItem];
+    return fullBox('iloc', ilocVersion, 0, body);
+  };
+
+  // meta is a FullBox; its children are iinf + iloc.
+  const metaWith = (extentOffset) => fullBox('meta', 0, 0, [...iinf, ...buildIloc(extentOffset)]);
+
+  // First pass: measure where the Exif item payload will land (after ftyp + meta).
+  const meta0 = metaWith(0);
+  const payloadStart = ftyp.length + meta0.length;
+  // Rebuild meta with the real (or deliberately-past-end) extent offset.
+  const realOffset = offsetPastEnd ? payloadStart + 100000 : payloadStart;
+  const meta = metaWith(realOffset);
+  // meta length is identical across passes (offset is a fixed-width field), so
+  // payloadStart stays valid.
+  return new Uint8Array([...ftyp, ...meta, ...exifItemPayload]);
+}
+
+// --- PICKER_ACCEPT -----------------------------------------------------------
+
+test('PICKER_ACCEPT: equals the HEIC/HEIF-inclusive accept string', () => {
+  assert.equal(PICKER_ACCEPT, 'image/*,image/heic,image/heif');
+});
+
+// --- HEIC / ISO-BMFF EXIF dating ---------------------------------------------
+
+test('readExifDateTimeOriginal: HEIC fixture, little-endian (II) TIFF -> date', () => {
+  const buf = buildExifHeic({ dto: '2026:06:25 23:30:00', endian: 'II' });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:06:25 23:30:00');
+  assert.equal(readCaptureDate(buf), '2026-06-25 23:30:00');
+});
+
+test('readExifDateTimeOriginal: HEIC fixture, big-endian (MM) TIFF -> date', () => {
+  const buf = buildExifHeic({ dto: '2026:07:01 12:00:00', endian: 'MM' });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:07:01 12:00:00');
+  assert.equal(readCaptureDate(buf), '2026-07-01 12:00:00');
+});
+
+test('readExifDateTimeOriginal: HEIC meta-FullBox +4 skip is honored (spec-shaped fixture parses)', () => {
+  // The natural spec shape: `meta` is a FullBox, so the parser must skip 4
+  // version/flags bytes before scanning its children. Our fixture is built exactly
+  // that way; if the parser forgot the +4 skip it would mis-locate iinf/iloc and
+  // return null. A clean date proves the skip is correct.
+  const buf = buildExifHeic({ dto: '2026:06:30 08:15:00', endian: 'II' });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:06:30 08:15:00');
+});
+
+// NOTE: iloc v2 (u32 item_count / u32 item_ID) is unexercised here — it shares the
+// same never-throw, bounds-checked walk as v0/v1 and is low-risk (iOS 17 captures
+// emit iloc v1), so no dedicated v2 fixture is built.
+test('readExifDateTimeOriginal: HEIC with iloc v1 (construction_method field) -> date', () => {
+  // iloc v1 adds the 2-byte construction_method field per item; method 0 is
+  // file-relative (supported). Exercises the v1 layout branch.
+  const buf = buildExifHeic({ dto: '2026:06:26 14:20:00', endian: 'II', ilocVersion: 1, constructionMethod: 0 });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:06:26 14:20:00');
+});
+
+test('readExifDateTimeOriginal: HEIC with a heif-family brand (mif1) -> date', () => {
+  // mif1/msf1 are HEIF (image/heif) brands the dispatcher also accepts.
+  const buf = buildExifHeic({ dto: '2026:06:27 10:00:00', endian: 'II', brand: 'mif1' });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:06:27 10:00:00');
+});
+
+test('readExifDateTimeOriginal: HEIC with a non-HEIC ftyp brand (mp42) -> null (not dispatched)', () => {
+  // ftyp present but the brand is a video brand, not a HEIC-family brand — the
+  // dispatcher must NOT treat it as ISO-BMFF EXIF-bearing.
+  const buf = buildExifHeic({ dto: '2026:06:25 23:30:00', brand: 'mp42' });
+  assert.doesNotThrow(() => readExifDateTimeOriginal(buf));
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+test('readExifDateTimeOriginal: HEIC truncated at various boundaries -> null, no throw', () => {
+  const full = buildExifHeic({ dto: '2026:06:25 23:30:00', endian: 'II' });
+  // Cut mid-ftyp (within the first box).
+  const midFtyp = full.slice(0, 14);
+  // Cut mid-meta (somewhere inside the meta box, after ftyp).
+  const midMeta = full.slice(0, full.length - 40);
+  // Cut mid-iloc / just before the Exif item payload.
+  const midIloc = full.slice(0, full.length - 8);
+  for (const s of [midFtyp, midMeta, midIloc]) {
+    assert.doesNotThrow(() => readExifDateTimeOriginal(s));
+    assert.equal(readExifDateTimeOriginal(s), null);
+  }
+});
+
+test('readExifDateTimeOriginal: HEIC with garbage after ftyp (no meta) -> null, no throw', () => {
+  const ftyp = box('ftyp', [...'heic'.split('').map((c) => c.charCodeAt(0)), ...be32(0)]);
+  const garbage = new Uint8Array(20).fill(0x5a);
+  const buf = new Uint8Array([...ftyp, ...garbage]);
+  assert.doesNotThrow(() => readExifDateTimeOriginal(buf));
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+test('readExifDateTimeOriginal: HEIC iloc construction_method !== 0 -> null', () => {
+  // Non-file-relative items (idat/item offsets) are unsupported → degrade to null.
+  const buf = buildExifHeic({ dto: '2026:06:25 23:30:00', ilocVersion: 1, constructionMethod: 1 });
+  assert.doesNotThrow(() => readExifDateTimeOriginal(buf));
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+test('readExifDateTimeOriginal: HEIC iloc multi-extent (extent_count=2) -> null', () => {
+  // We only support single-extent Exif items; >1 extent → null.
+  const buf = buildExifHeic({ dto: '2026:06:25 23:30:00', extentCount: 2 });
+  assert.doesNotThrow(() => readExifDateTimeOriginal(buf));
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+test('readExifDateTimeOriginal: HEIC with no Exif item (infe item_type != "Exif") -> null', () => {
+  // The infe declares a non-Exif item type, so no Exif item_ID is found.
+  const buf = buildExifHeic({ dto: '2026:06:25 23:30:00', itemType: 'hvc1' });
+  assert.doesNotThrow(() => readExifDateTimeOriginal(buf));
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+test('readExifDateTimeOriginal: HEIC Exif item offset beyond slice end -> null', () => {
+  // The iloc extent_offset points past the buffer — the bounds guard rejects it.
+  const buf = buildExifHeic({ dto: '2026:06:25 23:30:00', offsetPastEnd: true });
+  assert.doesNotThrow(() => readExifDateTimeOriginal(buf));
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+test('readExifDateTimeOriginal: HEIC with bad TIFF magic in the Exif item -> null', () => {
+  // The Exif item resolves but its TIFF byte-order marker is corrupt → null.
+  const buf = buildExifHeic({ dto: '2026:06:25 23:30:00', badTiffMagic: true });
+  assert.doesNotThrow(() => readExifDateTimeOriginal(buf));
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+// --- iloc extent-loop hardening (speed-up-photo-picker-handoff) ---------------
+// SECURITY HARDENING: the iloc per-item extent loop previously iterated
+// `extent_count` times for EVERY item — including NON-target items whose extents
+// we never read. A crafted HEIC could declare a non-target item with a huge
+// extent_count (e.g. 0xFFFF) and burn ~seconds of synchronous main-thread time.
+// The fix arithmetic-skips a non-target item's extents in O(1) (cursor advances
+// by extent_count * perExtentBytes) instead of looping. The highest-signal proof
+// is that a benign non-target item PRECEDING the real Exif target item still lets
+// the walk land EXACTLY on the target (off-by-one in the skip → date missed).
+//
+// Hand-built fixture: ftyp | meta{ iinf{ infe(id=99,"hvc1"), infe(id=1,"Exif") },
+// iloc(v0, two items: id=99 non-target with N extents, id=1 target with 1) } |
+// Exif item payload. offset_size = length_size = 4, base_offset_size = index_size = 0,
+// so each extent is exactly 8 bytes — the cursor must advance N*8 past item 99.
+function buildHeicWithLeadingNonTargetItem({
+  nonTargetExtentCount = 3, dto = '2026:06:29 16:45:00', endian = 'II',
+  // When set, the non-target item's HEADER declares this extent_count while the
+  // box physically carries only `nonTargetExtentCount` extents — the crafted
+  // attack: a huge declared count with no backing bytes. The arithmetic skip
+  // overshoots ilocEnd and the parser bails to -1 instead of spinning a loop.
+  declaredNonTargetExtentCount = null,
+} = {}) {
+  const tiff = buildTiffBlock({ dto, endian });
+  const exifItemPayload = [...be32(0), ...tiff]; // u32 tiff_header_offset(0) + TIFF
+
+  const ftyp = box('ftyp', [
+    ...'heic'.split('').map((c) => c.charCodeAt(0)),
+    ...be32(0),
+    ...'heic'.split('').map((c) => c.charCodeAt(0)),
+  ]);
+
+  // Two infe entries: a non-target item (id=99, type "hvc1") and the Exif item (id=1).
+  const infeNonTarget = fullBox('infe', 2, 0, [
+    ...be16(99), ...be16(0), ...'hvc1'.split('').map((c) => c.charCodeAt(0)),
+  ]);
+  const infeExif = fullBox('infe', 2, 0, [
+    ...be16(1), ...be16(0), ...'Exif'.split('').map((c) => c.charCodeAt(0)),
+  ]);
+  const iinf = fullBox('iinf', 0, 0, [...be16(2), ...infeNonTarget, ...infeExif]);
+
+  // iloc v0, offset_size=4 length_size=4 base_offset_size=0 index_size=0.
+  // Item layout (v0): item_ID(u16) data_ref_index(u16) extent_count(u16)
+  //                   [ per extent: offset(4) length(4) ].
+  const buildIloc = (exifExtentOffset) => {
+    const declared = declaredNonTargetExtentCount == null
+      ? nonTargetExtentCount : declaredNonTargetExtentCount;
+    const nonTargetItem = [
+      ...be16(99), ...be16(0), ...be16(declared),
+    ];
+    // The non-target item's extents carry honest (but unread) bytes so the box
+    // length is truthful and the cursor must skip exactly N*8 to reach item id=1.
+    // (Physical extent bytes emitted = nonTargetExtentCount; if `declared` is
+    // larger, the header lies and the skip overshoots — the crafted-file case.)
+    for (let i = 0; i < nonTargetExtentCount; i += 1) {
+      nonTargetItem.push(...be32(0xdead0000 + i)); // offset (ignored)
+      nonTargetItem.push(...be32(0xbeef0000 + i)); // length (ignored)
+    }
+    const exifItem = [
+      ...be16(1), ...be16(0), ...be16(1),
+      ...be32(exifExtentOffset), ...be32(exifItemPayload.length),
+    ];
+    const sizeNibbles = (4 << 4) | 4;     // offset_size=4, length_size=4
+    const baseIdxNibbles = (0 << 4) | 0;  // base_offset_size=0, index_size=0
+    const body = [sizeNibbles, baseIdxNibbles, ...be16(2) /* item_count */, ...nonTargetItem, ...exifItem];
+    return fullBox('iloc', 0, 0, body);
+  };
+
+  const metaWith = (off) => fullBox('meta', 0, 0, [...iinf, ...buildIloc(off)]);
+  const meta0 = metaWith(0);
+  const payloadStart = ftyp.length + meta0.length; // payload lands after ftyp+meta
+  const meta = metaWith(payloadStart);             // fixed-width offset → length stable
+  return new Uint8Array([...ftyp, ...meta, ...exifItemPayload]);
+}
+
+test('readExifDateTimeOriginal: HEIC with a benign non-target item BEFORE the Exif item still finds the date (arithmetic skip lands exactly on the target)', () => {
+  // This is the off-by-one tripwire for the extent-skip math: if the cursor does
+  // not advance exactly extent_count * (offset_size + length_size) past item 99,
+  // it will mis-read item 1 and the date will be lost. A clean date proves the
+  // skip is byte-exact.
+  const buf = buildHeicWithLeadingNonTargetItem({ nonTargetExtentCount: 3, dto: '2026:06:29 16:45:00' });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:06:29 16:45:00');
+  assert.equal(readCaptureDate(buf), '2026-06-29 16:45:00');
+});
+
+test('readExifDateTimeOriginal: HEIC non-target item declaring a HUGE extent_count with no backing bytes is rejected quickly, no throw (no extent-loop spin)', () => {
+  // The crafted attack: the non-target item HEADER declares 0xFFFF extents but the
+  // box physically carries only 1. Pre-fix, the inner loop would spin up to 65535
+  // times (uIntBe past the slice each iteration → Infinity → -1, but only after
+  // burning the iterations). With the arithmetic skip the cursor jumps 0xFFFF*8
+  // bytes in ONE step, overshoots ilocEnd, and the bounds guard returns -1 → null.
+  // Key assertion is correctness + never-throw, not timing.
+  const buf = buildHeicWithLeadingNonTargetItem({
+    nonTargetExtentCount: 1, declaredNonTargetExtentCount: 0xffff,
+  });
+  assert.doesNotThrow(() => readExifDateTimeOriginal(buf));
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+// --- PNG / eXIf EXIF dating (iOS screenshots) --------------------------------
+
+test('readExifDateTimeOriginal: PNG eXIf chunk, little-endian (II) TIFF -> date', () => {
+  const buf = buildExifPng({ dto: '2026:06:25 23:30:00', endian: 'II' });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:06:25 23:30:00');
+  assert.equal(readCaptureDate(buf), '2026-06-25 23:30:00');
+});
+
+test('readExifDateTimeOriginal: PNG eXIf chunk, big-endian (MM) TIFF -> date', () => {
+  const buf = buildExifPng({ dto: '2026:07:01 12:00:00', endian: 'MM' });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:07:01 12:00:00');
+  assert.equal(readCaptureDate(buf), '2026-07-01 12:00:00');
+});
+
+test('readExifDateTimeOriginal: synthetic iOS-screenshot-shaped PNG (IHDR->eXIf->iTXt->IDAT->IEND) parses', () => {
+  // Mirror the real chunk order an iOS screenshot carries: IHDR, then eXIf, then
+  // textual + image-data chunks, then IEND. The parser must find eXIf regardless
+  // of the surrounding chunks.
+  const buf = buildExifPng({
+    dto: '2026:06:28 09:45:00', endian: 'II',
+    extraAfter: [
+      { type: 'iTXt', payload: new Uint8Array([0x58, 0x4d, 0x4c]) }, // "XML"-ish stub
+      { type: 'IDAT', payload: new Uint8Array(32).fill(0x42) },
+    ],
+  });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:06:28 09:45:00');
+  assert.equal(readCaptureDate(buf), '2026-06-28 09:45:00');
+});
+
+test('readExifDateTimeOriginal: PNG with no eXIf chunk (IHDR->IDAT->IEND) -> null, no throw', () => {
+  const buf = buildPng([
+    { type: 'IHDR', payload: PNG_IHDR_STUB },
+    { type: 'IDAT', payload: new Uint8Array(16).fill(0x42) },
+    { type: 'IEND', payload: new Uint8Array(0) },
+  ]);
+  assert.doesNotThrow(() => readExifDateTimeOriginal(buf));
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+test('readExifDateTimeOriginal: PNG truncated mid chunk-header -> null, no throw', () => {
+  // Cut inside a chunk length/type field so the 8-byte header can't be read.
+  const full = buildExifPng({ dto: '2026:06:25 23:30:00' });
+  // 8-byte sig + IHDR(8 hdr + 13 payload + 4 crc = 25) lands us at the eXIf chunk;
+  // cut a few bytes into the eXIf chunk's length field.
+  const cut = full.slice(0, 8 + 25 + 2);
+  assert.doesNotThrow(() => readExifDateTimeOriginal(cut));
+  assert.equal(readExifDateTimeOriginal(cut), null);
+});
+
+test('readExifDateTimeOriginal: PNG eXIf chunk length claims more than the slice holds -> null', () => {
+  // Hand-build a PNG where the eXIf chunk declares a payload length larger than
+  // the bytes that actually follow — the `payloadOff + chunkLen > len` guard trips.
+  const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  const tiff = buildTiffBlock({ dto: '2026:06:25 23:30:00' });
+  const liedLen = tiff.length + 5000; // claims 5000 bytes more than present
+  const buf = new Uint8Array([
+    ...SIG,
+    ...be32(liedLen), ...'eXIf'.split('').map((c) => c.charCodeAt(0)),
+    ...tiff, // actual payload is short of the claimed length
+  ]);
+  assert.doesNotThrow(() => readExifDateTimeOriginal(buf));
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+test('readExifDateTimeOriginal: PNG eXIf payload with bad TIFF magic -> null', () => {
+  const tiff = buildTiffBlock({ dto: '2026:06:25 23:30:00' });
+  const corrupt = tiff.slice();
+  corrupt[0] = 0x58; corrupt[1] = 0x58; // "XX" — neither II nor MM
+  const buf = buildPng([
+    { type: 'IHDR', payload: PNG_IHDR_STUB },
+    { type: 'eXIf', payload: corrupt },
+    { type: 'IEND', payload: new Uint8Array(0) },
+  ]);
+  assert.doesNotThrow(() => readExifDateTimeOriginal(buf));
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+test('readExifDateTimeOriginal: PNG with IEND before any eXIf -> null (stops at IEND)', () => {
+  // An eXIf chunk placed AFTER IEND must never be reached — the walker stops at IEND.
+  const tiff = buildTiffBlock({ dto: '2026:06:25 23:30:00' });
+  const buf = buildPng([
+    { type: 'IHDR', payload: PNG_IHDR_STUB },
+    { type: 'IEND', payload: new Uint8Array(0) },
+    { type: 'eXIf', payload: tiff }, // unreachable
+  ]);
+  assert.doesNotThrow(() => readExifDateTimeOriginal(buf));
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+test('readExifDateTimeOriginal: PNG with ancillary chunks BEFORE eXIf still finds it (multi-hop advance)', () => {
+  // Several chunks precede eXIf (IHDR + two unknown ancillary chunks). Proves the
+  // chunk-advance arithmetic (payloadOff + chunkLen + 4-byte CRC) is correct
+  // across multiple hops, not just the single IHDR->eXIf hop the basic builder uses.
+  const buf = buildExifPng({
+    dto: '2026:06:29 16:40:00', endian: 'II',
+    extraBefore: [
+      { type: 'pHYs', payload: new Uint8Array(9).fill(0x07) },  // 9-byte ancillary
+      { type: 'tEXt', payload: new Uint8Array(11).fill(0x21) }, // 11-byte ancillary
+    ],
+  });
+  assert.equal(readExifDateTimeOriginal(buf), '2026:06:29 16:40:00');
+  assert.equal(readCaptureDate(buf), '2026-06-29 16:40:00');
+});
+
+test('readExifDateTimeOriginal: PNG eXIf chunk DECLARED length 7 (< 8) over a valid TIFF payload -> null (isolates the chunkLen<8 guard)', () => {
+  // Isolation target: the `chunkLen < 8` guard in locateTiffInPng (app.js ~2561).
+  // The eXIf payload bytes ARE a full, valid TIFF block (real DateTimeOriginal),
+  // but the chunk's DECLARED length field is hand-patched down to 7. The ONLY thing
+  // producing null is the chunkLen<8 guard: with it deleted, isTiffMagic passes on
+  // the real magic, tiffStart+8<=len holds (the bytes are present), and
+  // readTiffDateTime walks the block to a real date — so the test FLIPS to non-null.
+  // (The `payloadOff + chunkLen > len` co-guard is satisfied — 7 bytes "fit" — and
+  // the dispatcher's `tiffStart + 8 > len` co-guard is satisfied since the real
+  // block is fully present, so neither of those is what yields null here.)
+  const tiff = buildTiffBlock({ dto: '2026:06:25 23:30:00', endian: 'II' });
+  // Build the PNG normally (declares the TRUE length), then patch the eXIf chunk's
+  // 4-byte length field down to 7 in place. buildPng lays out: 8-byte SIG, then for
+  // IHDR: 4-len + "IHDR" + 13 payload + 4 CRC = 25 bytes. The eXIf length field
+  // begins right after, at offset 8 + 25 = 33.
+  const buf = buildPng([
+    { type: 'IHDR', payload: PNG_IHDR_STUB },
+    { type: 'eXIf', payload: tiff }, // real, valid TIFF block bytes remain in the buffer
+    { type: 'IEND', payload: new Uint8Array(0) },
+  ]);
+  const exifLenOff = 8 /* SIG */ + 4 /* IHDR len */ + 4 /* "IHDR" */ + PNG_IHDR_STUB.length /* payload */ + 4 /* CRC */;
+  // Sanity: the 4cc right after the length field must be "eXIf" (0x65 0x58 0x49 0x66).
+  assert.deepEqual(
+    Array.from(buf.slice(exifLenOff + 4, exifLenOff + 8)),
+    [0x65, 0x58, 0x49, 0x66],
+  );
+  buf[exifLenOff] = 0x00; buf[exifLenOff + 1] = 0x00; buf[exifLenOff + 2] = 0x00; buf[exifLenOff + 3] = 0x07; // declare len = 7
+  assert.doesNotThrow(() => readExifDateTimeOriginal(buf));
+  assert.equal(readExifDateTimeOriginal(buf), null);
+});
+
+test('readExifDateTimeOriginal: PNG/HEIC also accept an ArrayBuffer (not just Uint8Array)', () => {
+  // The top-level coercion is shared, but the NEW container branches (PNG/HEIC)
+  // were only exercised with Uint8Array inputs — lock the ArrayBuffer form for both.
+  const pngU8 = buildExifPng({ dto: '2026:06:24 11:11:00', endian: 'II' });
+  const pngAb = pngU8.buffer.slice(pngU8.byteOffset, pngU8.byteOffset + pngU8.byteLength);
+  assert.equal(readExifDateTimeOriginal(pngAb), '2026:06:24 11:11:00');
+
+  const heicU8 = buildExifHeic({ dto: '2026:06:23 13:13:00', endian: 'II' });
+  const heicAb = heicU8.buffer.slice(heicU8.byteOffset, heicU8.byteOffset + heicU8.byteLength);
+  assert.equal(readExifDateTimeOriginal(heicAb), '2026:06:23 13:13:00');
+});
+
+test('readExifDateTimeOriginal: short buffers carrying a PNG/HEIC prefix but too few bytes -> null, no throw', () => {
+  // The dispatcher reads bytes[0..7] for the PNG signature and bytes[4..11] for
+  // the HEIC ftyp+brand. A buffer that begins with those prefix bytes but is too
+  // short must fall cleanly to null (undefined byte comparisons / the len>=12 HEIC
+  // guard), never throw or mis-read past the end.
+  const tiny = [
+    new Uint8Array([]),                                  // 0-byte
+    new Uint8Array([0x89]),                              // 1-byte (PNG sig start)
+    new Uint8Array([0x89, 0x50, 0x4e]),                 // 3-byte (PNG sig prefix)
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47]),           // exactly 4 (PNG magic, no rest of sig)
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d]),     // 5-byte: PNG prefix, too short for bytes[5..7]
+    new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66]),     // 5-byte: 'f' of ftyp at [4], too short for brand
+    new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69]), // 11-byte: ftyp+partial 'hei', below len>=12
+  ];
+  for (const b of tiny) {
+    assert.doesNotThrow(() => readExifDateTimeOriginal(b));
+    assert.equal(readExifDateTimeOriginal(b), null);
+  }
+});
+
+// --- Container dispatch -------------------------------------------------------
+
+test('readExifDateTimeOriginal: dispatches on container magic (JPEG / PNG / HEIC / else)', () => {
+  // JPEG path (reuse the existing builder).
+  assert.equal(
+    readExifDateTimeOriginal(buildExifJpeg({ dto: '2026:06:20 08:00:00' })),
+    '2026:06:20 08:00:00',
+  );
+  // PNG path.
+  assert.equal(
+    readExifDateTimeOriginal(buildExifPng({ dto: '2026:06:21 09:00:00' })),
+    '2026:06:21 09:00:00',
+  );
+  // HEIC path.
+  assert.equal(
+    readExifDateTimeOriginal(buildExifHeic({ dto: '2026:06:22 10:00:00' })),
+    '2026:06:22 10:00:00',
+  );
+  // None of the above: a BMP ("BM") header — unsupported container → null.
+  const bmp = new Uint8Array([0x42, 0x4d, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x36, 0x00]);
+  assert.equal(readExifDateTimeOriginal(bmp), null);
+  // Pure random bytes → null.
+  const random = new Uint8Array([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x11, 0x22, 0x33, 0x44]);
+  assert.equal(readExifDateTimeOriginal(random), null);
+});
+
+test('readExifDateTimeOriginal: PNG/HEIC fall back to IFD0 DateTime (0x0132) when no 0x9003', () => {
+  // The shared TIFF walker's IFD0-DateTime fallback applies across all containers.
+  const png = buildExifPng({ dto: null, ifd0DateTime: '2026:06:19 07:00:00' });
+  assert.equal(readExifDateTimeOriginal(png), '2026:06:19 07:00:00');
+  const heic = buildExifHeic({ dto: null, ifd0DateTime: '2026:06:18 06:30:00' });
+  assert.equal(readExifDateTimeOriginal(heic), '2026:06:18 06:30:00');
 });
 
 // --- exifDateTimeString ------------------------------------------------------

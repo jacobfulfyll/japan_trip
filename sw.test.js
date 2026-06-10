@@ -620,12 +620,13 @@ test('a non-/firebasejs/ path on www.gstatic.com is NOT intercepted by the Fireb
   assert.equal(event._responded, false, 'only the /firebasejs/ path should route to the SDK cache');
 });
 
-test('CACHE_VERSION is v41 (Seigaiha gallery mosaic — 3-col square-default redesign; index.html + app.js shell change; SKIPS consumed v40)', () => {
+test('CACHE_VERSION is v42 (HEIC/PNG multi-container EXIF + picker accept=image/heic — app.js shell change; reconciled past the v41 Seigaiha gallery merge)', () => {
   // sw.test.js derives CACHE_VERSION from the sw.js literal; this pins the
   // expected value so an accidental revert of the bump fails loudly.
-  // v40 was consumed by the deployed TEMP date-shift build — skip it so a
-  // byte-identical sw.js never strands devices stuck on that build.
-  assert.equal(CACHE_VERSION, 'v41');
+  // v40 was consumed by the deployed TEMP date-shift build; v41 was consumed by
+  // the Seigaiha gallery redesign (merged first) — this task reconciled to v42
+  // at merge time so a byte-identical sw.js never strands devices on an older build.
+  assert.equal(CACHE_VERSION, 'v42');
 });
 
 // ===========================================================================
