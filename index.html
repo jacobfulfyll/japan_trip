@@ -1068,6 +1068,7 @@
         }
         .photo-modal[hidden] { display: none; }
         .photo-modal-card {
+            position: relative; /* anchors the absolute "–" minimize button */
             width: min(420px, 100%);
             max-height: 88vh;
             overflow-y: auto;
@@ -1178,6 +1179,77 @@
             width: 0%;
             background: linear-gradient(90deg, var(--brand-mid), var(--brand-glow));
             transition: width 0.25s ease;
+        }
+
+        /* "–" minimize control on the progress sheet — top-right of the card,
+           44px tap target, icon-only (aria-label carries the name). */
+        .photo-modal-minimize {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 44px;
+            height: 44px;
+            border: none;
+            background: transparent;
+            color: var(--brand-deep);
+            font-size: 1.7rem;
+            font-weight: 700;
+            line-height: 1;
+            cursor: pointer;
+            border-radius: 50%;
+            transition: background 0.15s ease;
+        }
+        .photo-modal-minimize:hover { background: rgba(18, 98, 143, 0.1); }
+        .photo-modal-minimize:focus-visible {
+            outline: 2px solid var(--brand-mid);
+            outline-offset: 2px;
+        }
+
+        /* Floating upload pill (minimized progress sheet). Body-mounted +
+           position:fixed (same containing-block escape as the lightbox), bottom-
+           center above the in-flow day-nav, below the lightbox (z 1000) and the
+           modal backdrop (z 1100), above the ☰ popover (z 50). One <button> =
+           the whole ≥44px tap target; the fade is an opacity transition the JS
+           removes the node after. */
+        .photo-progress-pill {
+            position: fixed;
+            left: 50%;
+            bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+            transform: translateX(-50%);
+            z-index: 900;
+            min-height: 44px;
+            min-width: 44px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            max-width: calc(100% - 24px);
+            padding: 10px 20px;
+            font-family: inherit;
+            font-size: 0.95rem;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            color: #fbf3df;
+            background: linear-gradient(135deg, var(--brand-mid), var(--brand-deep));
+            border: none;
+            border-radius: 999px;
+            box-shadow: var(--shadow-lg);
+            cursor: pointer;
+            opacity: 1;
+            transition: opacity 0.45s ease;
+        }
+        .photo-progress-pill:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(243, 203, 114, 0.55), var(--shadow-lg);
+        }
+        /* "✓ N added" success state (finish-while-minimized) — anticipation
+           green, then auto-fade. */
+        .photo-progress-pill.is-success {
+            background: linear-gradient(135deg, #2e6b4a, var(--brand-deep));
+        }
+        .photo-progress-pill.is-fading { opacity: 0; }
+        @media (prefers-reduced-motion: reduce) {
+            .photo-progress-pill { transition: none; }
         }
 
         /* --- Evening "Prep for tomorrow" -------------------------------- */

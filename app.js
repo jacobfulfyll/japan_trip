@@ -2525,6 +2525,184 @@ export function setUploader(name) {
   }
 }
 
+// ---- Interrupted-run marker (minimize-upload-modal) ------------------------
+//
+// A per-device localStorage marker (`jt:upload-run`) that exists ONLY while an
+// upload run is alive: written when a run starts (post-prepared, so a cancelled
+// picker never strands one), re-stamped by a heartbeat while running, removed
+// when the run ends in-page. boot() checks it ONCE per page boot: a stale
+// heartbeat with done < total means the previous run died mid-flight (page
+// killed under memory pressure / long background) → one-shot recovery notice.
+// Resume-from-background never reboots the page, so the notice CANNOT appear
+// on the resume path — the false-positive guard is structural, not tuned. A
+// FRESH heartbeat means a live run owns the marker (e.g. another tab) → it is
+// silently left alone.
+
+const UPLOAD_RUN_KEY = 'jt:upload-run';
+
+/** Heartbeat re-stamp period while a run is alive. */
+const RUN_HEARTBEAT_MS = 7000;
+
+/** A heartbeat older than this is a dead run (live runs re-stamp every ~7s). */
+export const RUN_MARKER_STALE_MS = 60_000;
+
+/**
+ * Read the upload-run marker, or null. Throw-safe (private mode → null). A
+ * malformed/partial marker is treated as absent AND cleared so it can never
+ * wedge the boot check.
+ * @returns {{ startedAt:number, total:number, done:number, beatAt:number } | null}
+ */
+export function readRunMarker() {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(UPLOAD_RUN_KEY);
+    if (typeof raw !== 'string' || raw === '') return null;
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch { parsed = null; }
+    const ok = parsed && typeof parsed === 'object'
+      && Number.isFinite(parsed.startedAt) && Number.isFinite(parsed.total)
+      && Number.isFinite(parsed.done) && Number.isFinite(parsed.beatAt);
+    if (!ok) { clearRunMarker(); return null; }
+    return {
+      startedAt: parsed.startedAt,
+      total: parsed.total,
+      done: parsed.done,
+      beatAt: parsed.beatAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write the upload-run marker. Throw-safe (private mode → false, no-op). All
+ * four fields must be finite numbers (timestamps are epoch ms from getNow()).
+ * @param {{ startedAt:number, total:number, done:number, beatAt:number }} marker
+ * @returns {boolean} true if persisted
+ */
+export function writeRunMarker(marker) {
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    if (!marker || typeof marker !== 'object') return false;
+    const { startedAt, total, done, beatAt } = marker;
+    if (![startedAt, total, done, beatAt].every(Number.isFinite)) return false;
+    localStorage.setItem(UPLOAD_RUN_KEY, JSON.stringify({ startedAt, total, done, beatAt }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Remove the upload-run marker. Throw-safe (private mode → silent no-op). */
+export function clearRunMarker() {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(UPLOAD_RUN_KEY);
+  } catch {
+    /* nothing to clear */
+  }
+}
+
+/**
+ * Build the live runMarker dep for wirePhotoSync: { start(total), beat(done),
+ * clear() } backed by the localStorage marker + an interval heartbeat that
+ * re-stamps `beatAt` while the run is alive (so a parallel boot — another tab —
+ * sees a fresh heartbeat and stays quiet). Timers and the clock are injectable
+ * for tests (the createWorkerDownscaler `setTimer` pattern); defaults are the
+ * real setInterval/clearInterval + getNow. Every op is throw-safe via the
+ * marker helpers above.
+ *
+ * @param {object} [opts]
+ * @param {() => Date} [opts.now] clock seam (default getNow)
+ * @param {number} [opts.heartbeatMs] re-stamp period (default RUN_HEARTBEAT_MS)
+ * @param {(fn:Function, ms:number) => unknown} [opts.setTimer] interval-style timer
+ * @param {(id:unknown) => void} [opts.clearTimer]
+ * @returns {{ start:(total:number)=>void, beat:(done:number)=>void, clear:()=>void }}
+ */
+export function createRunMarker({ now = getNow, heartbeatMs = RUN_HEARTBEAT_MS, setTimer, clearTimer } = {}) {
+  const setT = typeof setTimer === 'function' ? setTimer : (fn, ms) => setInterval(fn, ms);
+  const clearT = typeof clearTimer === 'function' ? clearTimer : (id) => clearInterval(id);
+  let timerId = null;
+  let live = null; // { startedAt, total, done } while a run is alive
+
+  const stamp = () => {
+    if (!live) return; // a stray late tick after clear() must never re-stamp
+    writeRunMarker({
+      startedAt: live.startedAt,
+      total: live.total,
+      done: live.done,
+      beatAt: now().getTime(),
+    });
+  };
+  const stopTimer = () => {
+    if (timerId != null) {
+      try { clearT(timerId); } catch { /* injected timer impl */ }
+      timerId = null;
+    }
+  };
+
+  return {
+    start(total) {
+      stopTimer(); // never two heartbeats — a prior interval would re-stamp a cleared marker
+      live = {
+        startedAt: now().getTime(),
+        total: Number.isFinite(total) ? total : 0,
+        done: 0,
+      };
+      stamp();
+      timerId = setT(stamp, heartbeatMs);
+    },
+    beat(done) {
+      if (!live) return;
+      if (Number.isFinite(done)) live.done = done;
+      stamp();
+    },
+    clear() {
+      stopTimer();
+      live = null;
+      clearRunMarker();
+    },
+  };
+}
+
+/**
+ * Boot-time interrupted-run check. Deps are injectable for tests; the once-per-
+ * boot latch lives at the CALLER (the browser boot path) so this stays a pure
+ * decision + side-effect unit. Returns a descriptor of what happened:
+ *   { action:'none' }              — no marker
+ *   { action:'live' }              — fresh heartbeat → a live run owns it; left alone
+ *   { action:'cleared', marker }   — stale but done >= total (finished, died
+ *                                    before clearing) → cleared, no message
+ *   { action:'notified', marker }  — stale with done < total → cleared + the
+ *                                    one-shot recovery notice with real counts
+ * A negative heartbeat age (clock skew / time-travel override) reads as fresh —
+ * never a false alarm.
+ *
+ * @param {object} [deps]
+ * @param {() => object|null} [deps.read]
+ * @param {() => void} [deps.clear]
+ * @param {() => Date} [deps.now]
+ * @param {(marker:object) => void} [deps.notify]
+ * @param {number} [deps.staleMs]
+ * @returns {{ action:string, marker?:object }}
+ */
+export function checkInterruptedRun({
+  read = readRunMarker,
+  clear = clearRunMarker,
+  now = getNow,
+  notify = showInterruptedRunNotice,
+  staleMs = RUN_MARKER_STALE_MS,
+} = {}) {
+  const marker = read();
+  if (!marker) return { action: 'none' };
+  if (now().getTime() - marker.beatAt < staleMs) return { action: 'live' };
+  clear();
+  if (marker.done < marker.total) {
+    notify(marker);
+    return { action: 'notified', marker };
+  }
+  return { action: 'cleared', marker };
+}
+
 // ---- Per-file decision (pure core) ----------------------------------------
 
 /**
@@ -2874,14 +3052,22 @@ let photoModalSeq = 0; // unique-id counter for aria-labelledby title ids
  * trap + body-mount (escapes the nav's backdrop-filter containing block). The
  * caller fills `.modal-body`. Returns { node, open, close, destroy, bodyEl }.
  * Focus is trapped across the modal's own focusable controls; Esc closes (unless
- * `dismissible:false`). Browser-only at runtime, but constructed via el() so the
+ * `dismissible:false`). Opt-in `onBackdrop` fires on a click that lands on the
+ * dimmed backdrop itself (e.target === overlay — card taps never trigger it);
+ * the default (no handler) leaves backdrop clicks inert, exactly as before.
+ * Browser-only at runtime, but constructed via el() so the
  * Node DOM stub can build + drive it in tests.
  */
-function buildModalSheet({ titleText, dismissible = true, onClose } = {}) {
+function buildModalSheet({ titleText, dismissible = true, onClose, onBackdrop } = {}) {
   const overlay = el('div', 'photo-modal');
   overlay.hidden = true;
   overlay.setAttribute('role', 'dialog');
   overlay.setAttribute('aria-modal', 'true');
+  if (typeof onBackdrop === 'function') {
+    overlay.addEventListener('click', (e) => {
+      if (e && e.target === overlay) onBackdrop();
+    });
+  }
 
   const card = el('div', 'photo-modal-card');
   if (titleText) {
@@ -2902,7 +3088,7 @@ function buildModalSheet({ titleText, dismissible = true, onClose } = {}) {
     return card.queryAll
       ? card.queryAll((n) => isFocusable(n)) // test stub
       : Array.from(card.querySelectorAll('button, [href], input, select, [tabindex]'))
-          .filter((n) => !n.disabled && n.tabIndex !== -1);
+          .filter((n) => !n.disabled && !n.hidden && n.tabIndex !== -1);
   }
 
   function onKey(e) {
@@ -2950,9 +3136,9 @@ function buildModalSheet({ titleText, dismissible = true, onClose } = {}) {
   return { node: overlay, card, bodyEl, open, close, destroy };
 }
 
-/** Crude focusable test for the Node stub (buttons/inputs that aren't disabled). */
+/** Crude focusable test for the Node stub (buttons/inputs that aren't disabled or hidden). */
 function isFocusable(n) {
-  if (!n || n.disabled) return false;
+  if (!n || n.disabled || n.hidden) return false;
   const tag = n.tagName;
   return tag === 'BUTTON' || tag === 'INPUT' || tag === 'SELECT' || tag === 'A';
 }
@@ -3031,20 +3217,58 @@ function promptBatchDate(count, defaultIso) {
   });
 }
 
+/** Success pill lingers this long before fading (tap-before-fade re-expands). */
+const PILL_FADE_DELAY_MS = 5000;
+/** Matches the .photo-progress-pill opacity transition; node removed after it. */
+const PILL_FADE_MS = 450;
+
 /**
- * Progress sheet: opens in an INDETERMINATE "Preparing photos…" state the instant
- * it's built (so the screen appears immediately after the picker), then flips to a
- * live "Adding N of M…" line on the first setProgress() call, finally swapping to a
- * summary + Done button when finished. Body-mounted, NOT dismissible while running.
- * Returns { setProgress(done,total), finish(summaryText), destroy }.
+ * Progress sheet: opens in an INDETERMINATE "Preparing photos…" state the
+ * instant it's built (so the screen appears immediately after the picker),
+ * flips to a live "Adding N of M…" line on the first setProgress() call, then
+ * swaps to a summary + Done button when finished. Body-mounted, NOT
+ * dismissible while running — but MINIMIZABLE: the "–" header button (chosen
+ * over "×", which reads as cancel on a running job) or a backdrop tap shrinks
+ * the modal to a body-mounted floating pill with a live aria-polite count;
+ * tapping the pill re-expands. The modal and the pill never coexist.
+ * Finishing while minimized flips the pill to "✓ N added" and auto-fades it
+ * after ~5s (tapping before the fade re-expands to the summary + Done view);
+ * finishing while expanded keeps today's behavior. The pre-totals
+ * indeterminate phase (sheet open, setProgress not yet called) passes through
+ * the machine — the pill shows "⬆ Adding photos…" until a total is known.
+ * Timers are injectable for tests (the createWorkerDownscaler `setTimer`
+ * pattern); wirePhotoSync still calls `progress()` with no args.
  *
  * The determinate fill bar is HIDDEN until setProgress() runs — showing a 0%
- * (or any) fill during the indeterminate prepare phase would imply false progress.
- * No new CSS: the bar is hidden via the `hidden` attribute (index.html is off-limits
- * for this task), revealed on the flip to counting.
+ * (or any) fill during the indeterminate prepare phase would imply false
+ * progress. No new CSS: the bar is hidden via the `hidden` attribute,
+ * revealed on the flip to counting.
+ *
+ * Returns { setProgress(done,total), finish(summaryText, meta?), destroy } —
+ * the same contract as before (`meta` is an optional extension carrying
+ * { added } so the success pill can show the real added count).
+ *
+ * @param {object} [opts]
+ * @param {(fn:Function, ms:number) => unknown} [opts.setTimer] timeout-style timer
+ * @param {(id:unknown) => void} [opts.clearTimer]
  */
-function buildProgressSheet() {
-  const modal = buildModalSheet({ titleText: 'Adding photos', dismissible: false });
+export function buildProgressSheet({ setTimer, clearTimer } = {}) {
+  const setT = typeof setTimer === 'function' ? setTimer : (fn, ms) => setTimeout(fn, ms);
+  const clearT = typeof clearTimer === 'function' ? clearTimer : (id) => clearTimeout(id);
+
+  let mode = 'expanded'; // 'expanded' | 'pill'
+  let finished = false;
+  let lastDone = null;   // null until setProgress is first called (indeterminate)
+  let lastTotal = null;
+  let addedCount = null; // from finish() meta — drives the "✓ N added" pill
+  let fadeTimers = [];
+
+  const modal = buildModalSheet({
+    titleText: 'Adding photos',
+    dismissible: false,
+    onBackdrop: () => minimize(),
+  });
+
   const status = el('p', 'photo-progress-status');
   status.setAttribute('aria-live', 'polite');
   status.textContent = 'Preparing photos…';
@@ -3062,37 +3286,142 @@ function buildProgressSheet() {
   doneBtn.addEventListener('click', () => modal.close());
   modal.bodyEl.appendChild(doneBtn);
 
+  // "–" minimize control. Icon-only → explicit aria-label. Appended to the card
+  // (CSS pins it to the top-right corner); while running it is the modal's only
+  // visible focusable, so the trap lands on it.
+  const minBtn = el('button', 'photo-modal-minimize', '–');
+  minBtn.type = 'button';
+  minBtn.setAttribute('aria-label', 'Minimize — uploads keep running');
+  minBtn.addEventListener('click', () => minimize());
+  modal.card.appendChild(minBtn);
+
+  // Floating pill — a single <button> (whole pill = the ≥44px tap target),
+  // body-mounted like the lightbox/nav popover so no containing block clips it.
+  const pill = el('button', 'photo-progress-pill');
+  pill.type = 'button';
+  pill.setAttribute('aria-live', 'polite');
+  pill.addEventListener('click', () => expand());
+
+  function pillLabel() {
+    if (finished) return addedCount != null ? `✓ ${addedCount} added` : '✓ Done';
+    if (lastTotal == null) return '⬆ Adding photos…'; // totals not known yet
+    return `⬆ ${lastDone} of ${lastTotal}`;
+  }
+
+  /** Sync the pill to the current state — label + success tint. */
+  function syncPill() {
+    pill.textContent = pillLabel();
+    pill.classList.toggle('is-success', finished);
+  }
+
+  function cancelFade() {
+    fadeTimers.forEach((id) => { try { clearT(id); } catch { /* injected timer impl */ } });
+    fadeTimers = [];
+    pill.classList.remove('is-fading');
+  }
+
+  function removePill() {
+    cancelFade();
+    if (pill.parentNode && typeof pill.parentNode.removeChild === 'function') {
+      pill.parentNode.removeChild(pill);
+    }
+  }
+
+  // Success-while-minimized: linger, then fade (CSS opacity transition), then
+  // remove. Two timers so the fade is actually visible; both are cancelled by a
+  // tap-before-fade (expand) and by destroy().
+  function startFade() {
+    cancelFade();
+    fadeTimers.push(setT(() => { pill.classList.add('is-fading'); }, PILL_FADE_DELAY_MS));
+    fadeTimers.push(setT(() => { removePill(); }, PILL_FADE_DELAY_MS + PILL_FADE_MS));
+  }
+
+  function minimize() {
+    if (mode === 'pill') return;
+    mode = 'pill';
+    modal.close(false); // keep state; do NOT restore focus — it moves to the pill
+    syncPill();
+    if (!pill.parentNode && typeof document !== 'undefined' && document.body) {
+      document.body.appendChild(pill);
+    }
+    pill.focus?.();
+    if (finished) startFade();
+  }
+
+  function expand() {
+    if (mode !== 'pill') return;
+    mode = 'expanded';
+    removePill();
+    modal.open();
+    // Sane focus: the live control for the current state, not whatever the
+    // generic trap picks (the hidden Done button while running).
+    (finished ? doneBtn : minBtn).focus?.();
+  }
+
   modal.open();
 
   return {
     setProgress(done, total) {
+      lastDone = done;
+      lastTotal = total;
       bar.hidden = false; // reveal the determinate bar on the flip to counting
       status.textContent = `Adding ${done} of ${total}…`;
       const pct = total > 0 ? Math.round((done / total) * 100) : 0;
       try { fill.style.width = `${pct}%`; } catch { /* stub has no style */ }
+      if (mode === 'pill') syncPill();
     },
-    finish(summaryText) {
+    finish(summaryText, meta) {
+      finished = true;
+      addedCount = meta && Number.isFinite(meta.added) ? meta.added : null;
+      // Update the modal innards regardless of mode, so a later expand (tap on
+      // the success pill before it fades) lands on the summary + Done view.
       status.textContent = summaryText;
       try { fill.style.width = '100%'; } catch { /* ignore */ }
       doneBtn.hidden = false;
-      doneBtn.focus?.();
+      if (mode === 'pill') {
+        syncPill();
+        startFade();
+      } else {
+        doneBtn.focus?.();
+      }
     },
-    destroy: modal.destroy,
+    destroy() {
+      removePill();
+      modal.destroy();
+    },
   };
 }
 
 /**
- * Show a transient error sheet (e.g. offline). Body-mounted, dismissible.
+ * Show a transient notice sheet (errors, the interrupted-run recovery notice).
+ * Body-mounted, dismissible. XSS-safe: message reaches the DOM via textContent.
  * @param {string} message
+ * @param {string} [titleText]
  */
-function showPhotoError(message) {
-  const modal = buildModalSheet({ titleText: 'Couldn’t add photos', dismissible: true });
+function showPhotoError(message, titleText = 'Couldn’t add photos') {
+  const modal = buildModalSheet({ titleText, dismissible: true });
   modal.bodyEl.appendChild(el('p', 'photo-modal-note', message));
   const ok = el('button', 'photo-modal-btn', 'OK');
   ok.type = 'button';
   ok.addEventListener('click', () => modal.close());
   modal.bodyEl.appendChild(ok);
   modal.open();
+}
+
+/**
+ * The interrupted-run recovery notice (checkInterruptedRun's default notifier).
+ * Real counts via textContent; the re-select promise is honest — the dedup
+ * preload makes a re-selection a true top-up (already-uploaded files skip).
+ * @param {{ done:number, total:number }} marker
+ */
+function showInterruptedRunNotice(marker) {
+  const done = Number.isFinite(marker?.done) ? marker.done : 0;
+  const total = Number.isFinite(marker?.total) ? marker.total : 0;
+  showPhotoError(
+    `Your last photo upload was interrupted: ${done} of ${total} made it. `
+      + 'Re-select those photos — the ones already uploaded will be skipped automatically.',
+    'Upload interrupted',
+  );
 }
 
 // ---- Orchestrator (injected-seam, testable) -------------------------------
@@ -3152,6 +3481,12 @@ function pickFilesBrowser() {
  * @param {() => boolean} deps.isOnline
  * @param {() => Date} deps.now clock seam (getNow)
  * @param {() => string[]} deps.windowDates trip window ISO dates (tripWindowDates)
+ * @param {{start:(total:number)=>void, beat:(done:number)=>void, clear:()=>void}} [deps.runMarker]
+ *   interrupted-run marker (createRunMarker); defaults to a no-op so existing
+ *   harnesses need no change. start() fires only post-prepared (a cancelled
+ *   pick strands no marker); clear() fires on EVERY in-page exit after start —
+ *   the marker exists to catch silent page deaths, not in-page outcomes the
+ *   user already saw.
  * @param {number} [deps.concurrency=3]
  * @returns {{ run: (currentIso?:string) => Promise<object|undefined> }}
  */
@@ -3160,8 +3495,18 @@ export function wirePhotoSync(deps) {
     pickFiles, readDate, downscale, uploadBlob, writeDoc, readDedup,
     updateSyncState, travelers, getStoredUploader, setStoredUploader,
     askUploader, askBatchDate, progress, onError, isOnline, now, windowDates,
+    runMarker,
     concurrency = 3,
   } = deps;
+
+  // Marker ops are best-effort — a buggy injected marker must never kill a run
+  // (beat() runs inside the worker loop's finally; a throw there would
+  // propagate past the per-file catch).
+  const marker = {
+    start: (t) => { try { runMarker?.start(t); } catch { /* best-effort */ } },
+    beat: (d) => { try { runMarker?.beat(d); } catch { /* best-effort */ } },
+    clear: () => { try { runMarker?.clear(); } catch { /* best-effort */ } },
+  };
 
   let running = false; // re-entrancy latch — a double-tap is a no-op while busy.
 
@@ -3176,6 +3521,7 @@ export function wirePhotoSync(deps) {
   async function run(currentIso) {
     if (running) return undefined;
     running = true;
+    let markerStarted = false; // gate so an exit BEFORE start can't clear a foreign marker
     try {
       const uploader = await resolveUploader();
       if (!uploader) return undefined; // dismissed identity prompt
@@ -3258,13 +3604,21 @@ export function wirePhotoSync(deps) {
         const daysAdded = new Set();
         let completed = 0;
         const total = prepared.length;
+        // Files are prepared and the total is known → the interrupted-run marker
+        // goes live (a page death from here on leaves it behind for the boot check).
+        marker.start(total);
+        markerStarted = true;
         // The flip from indeterminate "Preparing photos…" to the determinate
         // "Adding 0 of N…" counting bar — the upload phase starts here.
         ui.setProgress(0, total);
 
         // Per-file worker. Bounded concurrency via a shared cursor.
         let cursor = 0;
-        const advance = () => { completed += 1; ui.setProgress(completed, total); };
+        const advance = () => {
+          completed += 1;
+          ui.setProgress(completed, total);
+          marker.beat(completed);
+        };
 
         async function worker() {
           while (cursor < prepared.length) {
@@ -3338,7 +3692,7 @@ export function wirePhotoSync(deps) {
         }
 
         const summary = summarizeRun({ ...tally, days: daysAdded.size });
-        ui.finish(summary);
+        ui.finish(summary, { added: tally.added });
         return { ...tally, days: daysAdded.size };
       } catch (err) {
         // An unexpected throw between mount and finish — never leave the sheet
@@ -3348,6 +3702,9 @@ export function wirePhotoSync(deps) {
         throw err;
       }
     } finally {
+      // The run is ending IN-PAGE (finish or throw) → the marker must not
+      // survive, or the next boot would announce a phantom interruption.
+      if (markerStarted) marker.clear();
       running = false;
     }
   }
@@ -3360,6 +3717,16 @@ export function wirePhotoSync(deps) {
 // defined OUTSIDE boot(), so it reads this module-level reference to wire the
 // real onAddPhotos handler into mountApp.
 let photoService = null;
+
+// Lazy run-marker singleton (same trap as photoService/getWorkerDownscaler:
+// buildOnAddPhotos re-runs when onAuthStateChanged re-fires, and two marker
+// instances would mean two heartbeat-interval handles fighting over the same
+// localStorage key). The heartbeat interval lives inside this one instance.
+let runMarkerSingleton = null;
+function getRunMarker() {
+  if (!runMarkerSingleton) runMarkerSingleton = createRunMarker();
+  return runMarkerSingleton;
+}
 
 // Lazy worker-downscaler singleton. Built on FIRST use only (browser boot path —
 // never at module load, so `node --test` never spawns a Worker). Guarded against
@@ -3475,6 +3842,7 @@ function buildOnAddPhotos(service) {
     isOnline: () => (typeof navigator === 'undefined' ? true : navigator.onLine !== false),
     now: getNow,
     windowDates: () => tripWindowDates(),
+    runMarker: getRunMarker(),
     concurrency: 3,
   });
 
@@ -3718,6 +4086,19 @@ if (typeof document !== 'undefined') {
   // focusable content behind the aria-modal gate.
   let appController = null;
 
+  // One-shot interrupted-run detection. Latched per PAGE BOOT (module load),
+  // not per mount — mountTheApp re-runs on sign-out/in, and the structural
+  // false-positive guard ("a resumed page never shows the notice") holds only
+  // if the check is bound to boot. Resume-from-background never re-executes
+  // module code, so this path is unreachable on resume.
+  let interruptedRunCheckDone = false;
+  const checkInterruptedRunOnce = () => {
+    if (interruptedRunCheckDone) return;
+    interruptedRunCheckDone = true;
+    try { checkInterruptedRun(); }
+    catch (err) { console.warn('[photos] interrupted-run check failed:', err); }
+  };
+
   const mountTheApp = () => {
     const root = document.getElementById('app-root');
     // Wire the real Add-photos handler from the module-level photoService (built
@@ -3738,6 +4119,9 @@ if (typeof document !== 'undefined') {
     if (ACTIVE_NOW_OVERRIDE && document.body) {
       document.body.appendChild(buildTimeTravelBanner(ACTIVE_NOW_OVERRIDE));
     }
+    // After the app mounts (the notice modal mounts on <body>): did the last
+    // upload run die mid-flight? Stale marker + done < total → one-shot notice.
+    checkInterruptedRunOnce();
   };
 
   // On sign-out, tear down the mounted app so nothing focusable lingers behind

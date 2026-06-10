@@ -11,7 +11,7 @@ GitHub Pages on every push to `main`.
 data/days.js   ← the trip content (TRIP + DAYS). Edit this.
 app.js         ← imports the data, validates it, exposes a small API, renders.
 index.html     ← slim shell: theme CSS + <main id="app-root"> + the module script.
-app.test.js    ← tests for the data/API/nav layer (node --test; 500 total with sw.test.js).
+app.test.js    ← tests for the data/API/nav layer (node --test; 550 total with sw.test.js).
 ```
 
 `data/days.js` is the single source of truth. Everything you see on the page
@@ -268,7 +268,12 @@ the same data shape:
 | `sanitizePathSegment(s)` | Defensively sanitizes a string for use in a Storage path segment (the uploader name). Exported for tests. |
 | `getUploader()` / `setUploader(name)` | Read/write the per-device uploader identity (`localStorage['jt:uploader']`), `localStorage`-throw-safe. Exported for tests. |
 | `sniffImageType(buffer)` | Pure magic-byte sniffer over a file's first 16 bytes (`file.slice(0, 16)`) → `{ ext, contentType }` for JPEG/PNG/GIF/WebP/HEIC-family/TIFF/BMP, or `null` if unidentifiable. Used by the upload bail path to label original bytes honestly when both downscale decoders fail (never stamp a HEIC as `.jpg`). SVG is deliberately not recognized. Accepts an `ArrayBuffer` or `Uint8Array`. Exported for tests. |
-| `wirePhotoSync(deps)` | The injected-seam orchestrator → `{ run(currentIso) }`. `deps` supplies the picker, EXIF reader, downscaler, upload/write/dedup functions (à la `wireAuthGate`), so the upload loop is unit-testable with stubs and no Firebase. The browser bootstrap wires the real Firebase-backed `deps`. The `uploadBlob` dep signature is `uploadBlob(path, blob, contentType = 'image/jpeg')` — the success path uses the JPEG default; when both downscale decoders fail, the loop uploads the original bytes with the sniffed contentType (and a matching path extension) instead. |
+| `wirePhotoSync(deps)` | The injected-seam orchestrator → `{ run(currentIso) }`. `deps` supplies the picker, EXIF reader, downscaler, upload/write/dedup functions (à la `wireAuthGate`), so the upload loop is unit-testable with stubs and no Firebase. The browser bootstrap wires the real Firebase-backed `deps`. The `uploadBlob` dep signature is `uploadBlob(path, blob, contentType = 'image/jpeg')` — the success path uses the JPEG default; when both downscale decoders fail, the loop uploads the original bytes with the sniffed contentType (and a matching path extension) instead. Also accepts an optional `runMarker` dep (`{ start, beat, clear }`, no-op default, throw-safe) — written when files are prepared, restamped per file, cleared on finish. |
+| `buildProgressSheet({ setTimer, clearTimer })` | Builds the upload progress UI: a state machine (expanded modal ⇄ minimized floating pill ⇄ success-fade) behind a `{ setProgress(done, total), finish(summaryText, meta?), destroy() }` contract. A "–" header button or a backdrop tap minimizes it to a body-mounted `.photo-progress-pill` (`⬆ N of M`, or `⬆ Adding photos…` before totals are known, or `✓ N added` on finish-while-minimized which auto-fades ~5s); tap the pill to re-expand. Modal and pill never coexist. `finish`'s optional 2nd arg `{ added }` supplies the honest pill count. Exported for tests. |
+| `readRunMarker()` / `writeRunMarker(m)` / `clearRunMarker()` | Throw-safe read/write/clear of the interrupted-run marker — `localStorage['jt:upload-run']`, JSON `{ startedAt, total, done, beatAt }` (epoch ms via `getNow()`). `readRunMarker` returns a freshly-built object copying only the 4 validated numeric fields (malformed JSON → cleared + absent). Exported for tests. |
+| `createRunMarker({ now, heartbeatMs, setTimer, clearTimer })` | Builds the `{ start, beat, clear }` `runMarker` for `wirePhotoSync` — writes on `start(total)`, restamps `beatAt` on each `beat(done)` and on a heartbeat interval, clears on `clear()`. Exported for tests. |
+| `checkInterruptedRun({ read, clear, now, notify, staleMs })` | The boot-only stale-marker check → `{ action: 'none' \| 'live' \| 'cleared' \| 'notified' }`. A fresh heartbeat (age < `staleMs`, default `RUN_MARKER_STALE_MS` = 60s) is `'live'` (no notice); a stale marker with `done < total` clears-then-notifies exactly once. Exported for tests. |
+| `buildModalSheet(opts)` | Internal modal helper; gained an opt-in `onBackdrop` option that fires only when the click target is the overlay/backdrop (not the card). |
 
 **Immutability / copy-safety:** everything the API hands back is deeply frozen,
 so callers can't accidentally corrupt the shared data. `getDays()` additionally
@@ -348,6 +353,20 @@ contribute photos to the shared journal:
    sheet and an end summary show what landed.
 
 A few deliberate behaviours:
+
+- **Minimize and keep browsing.** The progress sheet has a **"–" button** (and a
+  tap on the dimmed backdrop) that shrinks it to a small **floating pill** — `⬆ 12
+  of 30` with a live count — so you can keep planning the day while the upload
+  runs. Tap the pill to expand the full sheet again. If a run finishes while
+  minimized, the pill shows `✓ N added` and fades away after a few seconds. (The
+  pill makes "still uploading" visible — uploads pause if you lock the phone or
+  background the app, an OS limitation, so don't lock thinking it's done.)
+- **Interrupted uploads are caught on relaunch.** If the app is killed mid-upload
+  (the OS reclaims a frozen tab, a quit, a crash, a restart), the **next launch**
+  shows a one-time notice — "Your last upload was interrupted: 14 of 30 made it" —
+  and you simply re-select the photos; the dedup skips the ones that already
+  landed, so it tops up only the missing ones. A normal background-and-return
+  (where the page just resumes) shows **no** notice.
 
 - **Nothing overwrites.** Every photo uploads to a unique path, so a photo can
   never replace another — duplicates are possible, photo loss is not.
@@ -442,7 +461,7 @@ No npm, no dependencies — just Node's built-in test runner:
 node --test
 ```
 
-The test suite (**500 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
+The test suite (**550 total** — `app.test.js` + `sw.test.js`) covers the data validation, `dayNumber` derivation, the null-on-absent
 lookups, the immutability guarantees, the day-view render layer (haversine
 math, `safeUrl` scheme gating, framing variants, recommendation expansion,
 sparse/absent-day placeholders — via a dependency-free hand-rolled DOM stub),

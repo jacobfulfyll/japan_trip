@@ -57,6 +57,13 @@ import {
   mergeGalleryPhotos,
   setSubscribePhotos,
   createWorkerDownscaler,
+  readRunMarker,
+  writeRunMarker,
+  clearRunMarker,
+  RUN_MARKER_STALE_MS,
+  createRunMarker,
+  checkInterruptedRun,
+  buildProgressSheet,
 } from './app.js';
 import { TRIP, DAYS } from './data/days.js';
 
@@ -7086,6 +7093,915 @@ test('createWorkerDownscaler: handler reads a raw `e` payload when `e.data` is u
   const out = await p;
   assert.deepEqual(out, { blob, downscaled: true }, 'raw-`e` payload is unwrapped correctly');
   assert.equal(wd._pendingSize(), 0, 'pending drains on a raw-payload reply');
+});
+
+// ===========================================================================
+// minimize-upload-modal — interrupted-run marker units
+// (readRunMarker / writeRunMarker / clearRunMarker / createRunMarker)
+//
+// The marker is a localStorage record ('jt:upload-run') that exists only while
+// an upload run is alive; a heartbeat re-stamps `beatAt` so a later boot can
+// tell a dead run (stale heartbeat) from a live one (another tab). All ops are
+// throw-safe; all timestamps flow through injectable clocks.
+// ===========================================================================
+
+test('writeRunMarker/readRunMarker: round-trip via localStorage["jt:upload-run"] (exactly the four fields)', () => {
+  withLocalStorage(makeMemoryStorage(), () => {
+    const ok = writeRunMarker({ startedAt: 1000, total: 5, done: 2, beatAt: 2000 });
+    assert.equal(ok, true, 'persisted');
+    assert.deepEqual(
+      JSON.parse(globalThis.localStorage._map.get('jt:upload-run')),
+      { startedAt: 1000, total: 5, done: 2, beatAt: 2000 },
+      'stored as JSON under the marker key, nothing extra',
+    );
+    assert.deepEqual(readRunMarker(), { startedAt: 1000, total: 5, done: 2, beatAt: 2000 });
+  });
+});
+
+test('readRunMarker: returns only the four marker fields (extras in the raw JSON are dropped)', () => {
+  const store = makeMemoryStorage();
+  store._map.set('jt:upload-run', JSON.stringify({ startedAt: 1, total: 2, done: 0, beatAt: 3, evil: 'x' }));
+  withLocalStorage(store, () => {
+    assert.deepEqual(readRunMarker(), { startedAt: 1, total: 2, done: 0, beatAt: 3 });
+  });
+});
+
+test('readRunMarker: malformed JSON is treated absent AND cleared from storage (never wedges the boot check)', () => {
+  const store = makeMemoryStorage();
+  store._map.set('jt:upload-run', '{not json!!');
+  withLocalStorage(store, () => {
+    assert.equal(readRunMarker(), null);
+    assert.equal(store._map.has('jt:upload-run'), false, 'the wedged value was removed');
+  });
+});
+
+test('readRunMarker: a marker with missing/non-finite/non-object payload is treated absent and cleared', () => {
+  const bads = [
+    JSON.stringify({ startedAt: 1, total: 2, done: 0 }),               // beatAt missing
+    JSON.stringify({ startedAt: 1, total: '2', done: 0, beatAt: 3 }),  // string field
+    JSON.stringify({ startedAt: null, total: 2, done: 0, beatAt: 3 }), // null field
+    JSON.stringify(42),                                                // not an object
+    'null',
+  ];
+  for (const raw of bads) {
+    const store = makeMemoryStorage();
+    store._map.set('jt:upload-run', raw);
+    withLocalStorage(store, () => {
+      assert.equal(readRunMarker(), null, `treated absent: ${raw}`);
+      assert.equal(store._map.has('jt:upload-run'), false, `cleared: ${raw}`);
+    });
+  }
+});
+
+test('writeRunMarker: rejects non-finite fields and non-objects (false, nothing persisted)', () => {
+  withLocalStorage(makeMemoryStorage(), () => {
+    assert.equal(writeRunMarker({ startedAt: NaN, total: 5, done: 0, beatAt: 1 }), false);
+    assert.equal(writeRunMarker({ startedAt: 1, total: Infinity, done: 0, beatAt: 1 }), false);
+    assert.equal(writeRunMarker({ startedAt: 1, total: 5, done: '0', beatAt: 1 }), false);
+    assert.equal(writeRunMarker({ startedAt: 1, total: 5, done: 0 }), false); // beatAt missing
+    assert.equal(writeRunMarker(null), false);
+    assert.equal(writeRunMarker('marker'), false);
+    assert.equal(globalThis.localStorage._map.size, 0, 'nothing was persisted by any rejected write');
+  });
+});
+
+test('clearRunMarker: removes the marker (and only the marker key)', () => {
+  const store = makeMemoryStorage();
+  store._map.set('jt:upload-run', JSON.stringify({ startedAt: 1, total: 2, done: 0, beatAt: 3 }));
+  store._map.set('jt:uploader', 'Jacob');
+  withLocalStorage(store, () => {
+    clearRunMarker();
+    assert.equal(store._map.has('jt:upload-run'), false);
+    assert.equal(store._map.get('jt:uploader'), 'Jacob', 'other keys untouched');
+    assert.equal(readRunMarker(), null);
+  });
+});
+
+test('run-marker helpers are throw-safe on blocked storage (read -> null, write -> false, clear -> no-op)', () => {
+  const blocked = {
+    getItem() { throw new Error('private mode'); },
+    setItem() { throw new Error('private mode'); },
+    removeItem() { throw new Error('private mode'); },
+  };
+  withLocalStorage(blocked, () => {
+    assert.equal(readRunMarker(), null);
+    assert.equal(writeRunMarker({ startedAt: 1, total: 2, done: 0, beatAt: 3 }), false);
+    assert.doesNotThrow(() => clearRunMarker());
+  });
+});
+
+// --- createRunMarker (heartbeat factory) -------------------------------------
+
+// Interval-style timer capture for createRunMarker: each setTimer call is
+// recorded (the fn never auto-fires); tests drive ticks by invoking the captured
+// fn directly — including AFTER clear(), simulating the stray late tick that the
+// internal `!live` guard must neutralize even if clearInterval were unreliable.
+function makeIntervalCapture() {
+  const scheduled = []; // { fn, ms, id }
+  const cleared = [];
+  return {
+    scheduled,
+    cleared,
+    setTimer: (fn, ms) => { const id = scheduled.length + 1; scheduled.push({ fn, ms, id }); return id; },
+    clearTimer: (id) => { cleared.push(id); },
+  };
+}
+
+test('createRunMarker: start(total) stamps {startedAt,total,done:0,beatAt} at now() and arms the heartbeat at the CONFIGURED interval', () => {
+  withLocalStorage(makeMemoryStorage(), () => {
+    const t = makeIntervalCapture();
+    // Explicit heartbeatMs: the contract is "the interval re-arms at the
+    // configured period" — the incidental default value is pinned separately,
+    // and only via its relationship to the staleness window.
+    const marker = createRunMarker({ now: () => new Date(50_000), heartbeatMs: 1234, setTimer: t.setTimer, clearTimer: t.clearTimer });
+    marker.start(7);
+    assert.deepEqual(readRunMarker(), { startedAt: 50_000, total: 7, done: 0, beatAt: 50_000 });
+    assert.equal(t.scheduled.length, 1, 'exactly one heartbeat interval scheduled');
+    assert.equal(t.scheduled[0].ms, 1234, 'the heartbeat is armed at the injected heartbeatMs');
+  });
+});
+
+test('createRunMarker: the DEFAULT heartbeat period keeps a live run fresh (re-stamps well inside RUN_MARKER_STALE_MS)', () => {
+  withLocalStorage(makeMemoryStorage(), () => {
+    const t = makeIntervalCapture();
+    const marker = createRunMarker({ now: () => new Date(1_000), setTimer: t.setTimer, clearTimer: t.clearTimer }); // no heartbeatMs -> default
+    marker.start(1);
+    const defaultMs = t.scheduled[0].ms;
+    // Deliberately NOT pinned to 7000 (an internal tuning constant, free to
+    // change). The load-bearing relationship: a live run must re-stamp well
+    // inside the 60s staleness window, or checkInterruptedRun would flag LIVE
+    // runs as dead. The factor-of-2 margin tolerates one missed/late tick
+    // (background tab throttling) without a false "upload interrupted" alarm.
+    assert.ok(Number.isFinite(defaultMs) && defaultMs > 0, 'default period is a positive number of ms');
+    assert.ok(defaultMs * 2 <= RUN_MARKER_STALE_MS,
+      `default heartbeat (${defaultMs}ms) must re-stamp at least twice per ${RUN_MARKER_STALE_MS}ms staleness window`);
+    marker.clear();
+  });
+});
+
+test('createRunMarker: beat(done) updates done and re-stamps beatAt (startedAt/total unchanged)', () => {
+  withLocalStorage(makeMemoryStorage(), () => {
+    const t = makeIntervalCapture();
+    let ms = 10_000;
+    const marker = createRunMarker({ now: () => new Date(ms), setTimer: t.setTimer, clearTimer: t.clearTimer });
+    marker.start(4);
+    ms = 19_000;
+    marker.beat(2);
+    assert.deepEqual(readRunMarker(), { startedAt: 10_000, total: 4, done: 2, beatAt: 19_000 });
+  });
+});
+
+test('createRunMarker: a heartbeat tick re-stamps beatAt without touching done/total', () => {
+  withLocalStorage(makeMemoryStorage(), () => {
+    const t = makeIntervalCapture();
+    let ms = 10_000;
+    const marker = createRunMarker({ now: () => new Date(ms), setTimer: t.setTimer, clearTimer: t.clearTimer });
+    marker.start(4);
+    marker.beat(1);
+    ms = 26_000;
+    t.scheduled[0].fn(); // the interval fires
+    assert.deepEqual(readRunMarker(), { startedAt: 10_000, total: 4, done: 1, beatAt: 26_000 },
+      'beatAt moved to the tick time; done stayed at the last beat');
+  });
+});
+
+test('createRunMarker: clear() removes the marker, stops the heartbeat, and a post-clear tick never re-stamps', () => {
+  withLocalStorage(makeMemoryStorage(), () => {
+    const t = makeIntervalCapture();
+    let ms = 10_000;
+    const marker = createRunMarker({ now: () => new Date(ms), setTimer: t.setTimer, clearTimer: t.clearTimer });
+    marker.start(3);
+    marker.clear();
+    assert.equal(readRunMarker(), null, 'marker removed');
+    assert.deepEqual(t.cleared, [t.scheduled[0].id], 'the heartbeat interval was cleared');
+    // The stray late tick: clearInterval would normally prevent this, but the
+    // internal `!live` guard is the safety net — it must NOT resurrect the marker
+    // (a resurrected marker = a phantom "upload interrupted" notice next boot).
+    ms = 99_000;
+    t.scheduled[0].fn();
+    assert.equal(readRunMarker(), null, 'a post-clear tick does not re-write the marker');
+    assert.equal(globalThis.localStorage._map.size, 0);
+  });
+});
+
+test('createRunMarker: beat() before start() is a no-op (writes nothing)', () => {
+  withLocalStorage(makeMemoryStorage(), () => {
+    const t = makeIntervalCapture();
+    const marker = createRunMarker({ now: () => new Date(1000), setTimer: t.setTimer, clearTimer: t.clearTimer });
+    marker.beat(3);
+    assert.equal(readRunMarker(), null);
+    assert.equal(globalThis.localStorage._map.size, 0);
+  });
+});
+
+test('createRunMarker: restarting stops the previous heartbeat first (never two live intervals)', () => {
+  withLocalStorage(makeMemoryStorage(), () => {
+    const t = makeIntervalCapture();
+    let ms = 1_000;
+    const marker = createRunMarker({ now: () => new Date(ms), setTimer: t.setTimer, clearTimer: t.clearTimer });
+    marker.start(2);
+    ms = 2_000;
+    marker.start(5);
+    assert.equal(t.scheduled.length, 2, 'a second interval was scheduled');
+    assert.deepEqual(t.cleared, [t.scheduled[0].id], 'the FIRST interval was cleared before the restart');
+    assert.deepEqual(readRunMarker(), { startedAt: 2_000, total: 5, done: 0, beatAt: 2_000 },
+      'the restart owns the marker');
+  });
+});
+
+test('createRunMarker: the default clock is the getNow() seam (setNow-pinned)', () => {
+  withLocalStorage(makeMemoryStorage(), () => {
+    const t = makeIntervalCapture();
+    setNow(() => new Date(123_456));
+    try {
+      const marker = createRunMarker({ setTimer: t.setTimer, clearTimer: t.clearTimer }); // no `now` injected
+      marker.start(1);
+      assert.deepEqual(readRunMarker(), { startedAt: 123_456, total: 1, done: 0, beatAt: 123_456 });
+    } finally {
+      setNow(null);
+    }
+  });
+});
+
+test('createRunMarker: a write-blocked storage (reads work, setItem throws — the quota/private-mode shape) never throws through start/beat/tick/clear', () => {
+  // The most common REAL localStorage failure: getItem works but setItem throws
+  // (QuotaExceededError / iOS Safari private mode). Distinct from the all-blocked
+  // helper test above: this pins that the FACTORY's stamp path stays routed
+  // through the throw-safe writeRunMarker — a heartbeat tick that threw would be
+  // an uncaught error inside a real setInterval callback.
+  const map = new Map();
+  const quotaStorage = {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem() { throw new Error('QuotaExceededError'); },
+    removeItem: (k) => { map.delete(k); },
+  };
+  withLocalStorage(quotaStorage, () => {
+    const t = makeIntervalCapture();
+    const marker = createRunMarker({ now: () => new Date(5_000), setTimer: t.setTimer, clearTimer: t.clearTimer });
+    assert.doesNotThrow(() => marker.start(3), 'start survives the blocked write');
+    assert.doesNotThrow(() => marker.beat(1), 'beat survives the blocked write');
+    assert.doesNotThrow(() => t.scheduled[0].fn(), 'a heartbeat tick survives the blocked write');
+    assert.equal(readRunMarker(), null, 'nothing was persisted (the marker is best-effort)');
+    assert.doesNotThrow(() => marker.clear());
+    assert.deepEqual(t.cleared, [t.scheduled[0].id], 'the heartbeat still stops cleanly');
+  });
+});
+
+// ===========================================================================
+// minimize-upload-modal — checkInterruptedRun (boot-time dead-run decision)
+//
+// Pure decision unit with injected read/clear/now/notify/staleMs. The action
+// vocabulary: none (no marker), live (fresh heartbeat — another tab owns it),
+// cleared (stale but finished), notified (stale and incomplete -> clear FIRST,
+// then the one-shot recovery notice with the real counts).
+// ===========================================================================
+
+// Spy-bag for checkInterruptedRun: every dep injected, with a shared call-order
+// log so clear-before-notify is assertable.
+function makeCheckSpies(marker) {
+  const order = [];
+  const read = syncSpy(() => marker);
+  const clear = syncSpy(() => { order.push('clear'); });
+  const notify = syncSpy(() => { order.push('notify'); });
+  return { read, clear, notify, order };
+}
+
+test('checkInterruptedRun: no marker -> {action:"none"}, nothing cleared, nothing notified', () => {
+  const s = makeCheckSpies(null);
+  const result = checkInterruptedRun({ read: s.read, clear: s.clear, notify: s.notify, now: () => new Date(1_000_000) });
+  assert.deepEqual(result, { action: 'none' });
+  assert.equal(s.clear.calls.length, 0);
+  assert.equal(s.notify.calls.length, 0);
+});
+
+test('checkInterruptedRun: a fresh heartbeat (age < 60s) -> "live", the marker is left alone', () => {
+  const nowMs = 1_000_000;
+  const s = makeCheckSpies({ startedAt: 0, total: 10, done: 2, beatAt: nowMs - 30_000 });
+  const result = checkInterruptedRun({ read: s.read, clear: s.clear, notify: s.notify, now: () => new Date(nowMs) });
+  assert.deepEqual(result, { action: 'live' });
+  assert.equal(s.clear.calls.length, 0, 'a live run owns the marker — never cleared from under it');
+  assert.equal(s.notify.calls.length, 0);
+});
+
+test('checkInterruptedRun: a FUTURE beatAt (negative age — clock skew / time travel) reads as fresh, never a false alarm', () => {
+  const nowMs = 1_000_000;
+  const s = makeCheckSpies({ startedAt: 0, total: 10, done: 2, beatAt: nowMs + 300_000 });
+  const result = checkInterruptedRun({ read: s.read, clear: s.clear, notify: s.notify, now: () => new Date(nowMs) });
+  assert.deepEqual(result, { action: 'live' });
+  assert.equal(s.clear.calls.length, 0);
+  assert.equal(s.notify.calls.length, 0);
+});
+
+test('checkInterruptedRun: stale + done >= total -> "cleared" silently (a finished run that died before cleanup)', () => {
+  const nowMs = 10_000_000;
+  const marker = { startedAt: 0, total: 6, done: 6, beatAt: nowMs - RUN_MARKER_STALE_MS - 1 };
+  const s = makeCheckSpies(marker);
+  const result = checkInterruptedRun({ read: s.read, clear: s.clear, notify: s.notify, now: () => new Date(nowMs) });
+  assert.equal(result.action, 'cleared');
+  assert.deepEqual(result.marker, marker, 'the dead marker is echoed for the caller');
+  assert.equal(s.clear.calls.length, 1, 'the dead marker was cleared');
+  assert.equal(s.notify.calls.length, 0, 'no notice for a completed run');
+});
+
+test('checkInterruptedRun: stale + done < total -> "notified" with the real counts, cleared BEFORE notifying', () => {
+  const nowMs = 10_000_000;
+  const marker = { startedAt: 0, total: 10, done: 3, beatAt: nowMs - RUN_MARKER_STALE_MS - 5_000 };
+  const s = makeCheckSpies(marker);
+  const result = checkInterruptedRun({ read: s.read, clear: s.clear, notify: s.notify, now: () => new Date(nowMs) });
+  assert.equal(result.action, 'notified');
+  assert.deepEqual(result.marker, marker);
+  assert.equal(s.notify.calls.length, 1);
+  assert.deepEqual(s.notify.calls[0][0], marker, 'the notifier receives the marker with the real done/total');
+  assert.deepEqual(s.order, ['clear', 'notify'], 'clear fires before notify');
+});
+
+test('checkInterruptedRun: the marker is cleared even when notify throws (clear-first ordering is load-bearing)', () => {
+  const nowMs = 10_000_000;
+  const s = makeCheckSpies({ startedAt: 0, total: 10, done: 3, beatAt: 0 });
+  const boom = () => { throw new Error('renderer dead'); };
+  assert.throws(
+    () => checkInterruptedRun({ read: s.read, clear: s.clear, notify: boom, now: () => new Date(nowMs) }),
+    /renderer dead/,
+  );
+  assert.equal(s.clear.calls.length, 1, 'cleared before the notifier blew up — no repeat notice on the next boot');
+});
+
+test('checkInterruptedRun: the staleness boundary is EXACTLY RUN_MARKER_STALE_MS (60s)', () => {
+  assert.equal(RUN_MARKER_STALE_MS, 60_000, 'pinned: a heartbeat older than 60s is a dead run');
+  const nowMs = 10_000_000;
+  // age === staleMs - 1 -> still fresh.
+  const fresh = makeCheckSpies({ startedAt: 0, total: 5, done: 1, beatAt: nowMs - (RUN_MARKER_STALE_MS - 1) });
+  assert.equal(
+    checkInterruptedRun({ read: fresh.read, clear: fresh.clear, notify: fresh.notify, now: () => new Date(nowMs) }).action,
+    'live',
+  );
+  assert.equal(fresh.clear.calls.length, 0);
+  // age === staleMs exactly -> stale (the freshness comparison is strict `< staleMs`).
+  const stale = makeCheckSpies({ startedAt: 0, total: 5, done: 1, beatAt: nowMs - RUN_MARKER_STALE_MS });
+  assert.equal(
+    checkInterruptedRun({ read: stale.read, clear: stale.clear, notify: stale.notify, now: () => new Date(nowMs) }).action,
+    'notified',
+  );
+  assert.equal(stale.clear.calls.length, 1);
+});
+
+test('checkInterruptedRun: default read/clear operate on the real localStorage marker (stale -> cleared + notified once)', () => {
+  const store = makeMemoryStorage();
+  withLocalStorage(store, () => {
+    const nowMs = 50_000_000;
+    const beatAt = nowMs - RUN_MARKER_STALE_MS - 1;
+    writeRunMarker({ startedAt: 0, total: 8, done: 2, beatAt });
+    const notify = syncSpy();
+    const result = checkInterruptedRun({ now: () => new Date(nowMs), notify });
+    assert.equal(result.action, 'notified');
+    assert.equal(notify.calls.length, 1);
+    assert.deepEqual(notify.calls[0][0], { startedAt: 0, total: 8, done: 2, beatAt });
+    assert.equal(store._map.has('jt:upload-run'), false, 'the default clear removed the stored marker');
+    // A second check against the same storage is now a no-op.
+    assert.deepEqual(checkInterruptedRun({ now: () => new Date(nowMs), notify }), { action: 'none' });
+    assert.equal(notify.calls.length, 1, 'no second notice once cleared');
+  });
+});
+
+test('checkInterruptedRun: the DEFAULT notifier renders the recovery modal — real counts, backdrop-inert, OK closes', () => {
+  withDom(() => {
+    const nowMs = 50_000_000;
+    const result = checkInterruptedRun({
+      read: () => ({ startedAt: 0, total: 10, done: 3, beatAt: nowMs - RUN_MARKER_STALE_MS - 1 }),
+      clear: () => {},
+      now: () => new Date(nowMs),
+      // notify NOT injected -> the real showInterruptedRunNotice runs.
+    });
+    assert.equal(result.action, 'notified');
+    const body = stubDocument.body;
+    const overlays = body.byClass('photo-modal');
+    assert.equal(overlays.length, 1, 'the notice modal mounted on body');
+    const overlay = overlays[0];
+    assert.equal(overlay.firstByClass('photo-modal-title').textContent, 'Upload interrupted');
+    const note = overlay.firstByClass('photo-modal-note');
+    assert.match(note.textContent, /3 of 10 made it/, 'the real counts are in the message');
+    assert.match(note.textContent, /skipped automatically/, 'the re-select promise is spelled out');
+    // This modal passes NO onBackdrop -> a backdrop-target click stays inert
+    // (the opt-in default-unchanged contract of buildModalSheet).
+    overlay._fire('click', { target: overlay });
+    assert.equal(body.byClass('photo-modal').length, 1, 'backdrop click leaves the notice open');
+    // OK dismisses it.
+    const ok = overlay.firstByClass('photo-modal-btn');
+    assert.equal(ok.textContent, 'OK');
+    ok._fire('click');
+    assert.equal(body.byClass('photo-modal').length, 0, 'OK closes the notice');
+  });
+});
+
+// ===========================================================================
+// minimize-upload-modal — buildProgressSheet state machine
+// (expanded <-> pill <-> success-fade, behind the unchanged
+//  { setProgress, finish, destroy } contract; manual timers via the seam)
+// ===========================================================================
+
+// Timeout-style manual timer harness for buildProgressSheet's setTimer/clearTimer
+// seam. Nothing auto-fires; tests drive the 5000ms linger / 5450ms removal
+// explicitly (PILL_FADE_DELAY_MS / + PILL_FADE_MS in app.js).
+function makeManualTimers() {
+  let seq = 0;
+  const active = new Map(); // id -> { fn, ms }
+  const cleared = [];
+  return {
+    cleared,
+    setTimer: (fn, ms) => { seq += 1; active.set(seq, { fn, ms }); return seq; },
+    clearTimer: (id) => { cleared.push(id); active.delete(id); },
+    // Fire the pending timer scheduled with exactly `ms`; returns false if none.
+    fire(ms) {
+      for (const [id, t] of active) {
+        if (t.ms === ms) { active.delete(id); t.fn(); return true; }
+      }
+      return false;
+    },
+    pendingCount: () => active.size,
+    pendingMs: () => [...active.values()].map((t) => t.ms).sort((a, b) => a - b),
+  };
+}
+
+// Build a progress sheet inside the (already-installed) stub DOM with manual
+// timers, returning handles to the live pieces. Must be called inside withDom.
+function sheetHarness() {
+  const timers = makeManualTimers();
+  const sheet = buildProgressSheet({ setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+  const overlay = stubDocument.body.firstByClass('photo-modal');
+  return {
+    timers,
+    sheet,
+    overlay,
+    minBtn: overlay.firstByClass('photo-modal-minimize'),
+    status: overlay.firstByClass('photo-progress-status'),
+    doneBtn: overlay.firstByClass('photo-modal-btn'),
+    pillOnBody: () => stubDocument.body.byClass('photo-progress-pill'),
+    modalsOnBody: () => stubDocument.body.byClass('photo-modal'),
+  };
+}
+
+test('buildProgressSheet: opens expanded with a hidden Done, a labelled "–" minimize, and focus past the hidden button', () => {
+  withDom(() => {
+    const h = sheetHarness();
+    assert.equal(h.modalsOnBody().length, 1, 'modal mounted on body');
+    assert.equal(h.pillOnBody().length, 0, 'no pill while expanded');
+    // Merge note: main's slice-exif-read wording ('Preparing photos…') wins over
+    // this branch's original 'Preparing…' — the early-mount suite pins it too.
+    assert.equal(h.status.textContent, 'Preparing photos…');
+    assert.equal(h.doneBtn.hidden, true, 'Done is hidden while running');
+    assert.equal(h.minBtn.textContent, '–');
+    assert.match(h.minBtn.getAttribute('aria-label'), /uploads keep running/i, 'icon-only control explains itself');
+    // The focus trap must skip the HIDDEN Done button: the only visible
+    // focusable is the minimize button, so the open() trap lands there.
+    assert.equal(stubDocument.activeElement, h.minBtn, 'initial focus lands on minimize, not the hidden Done');
+    h.sheet.destroy();
+  });
+});
+
+test('buildProgressSheet: "–" minimizes — modal unmounts, ONE aria-live pill button appears, focus moves to it', () => {
+  withDom(() => {
+    const h = sheetHarness();
+    h.minBtn._fire('click');
+    assert.equal(h.modalsOnBody().length, 0, 'the modal is gone (never coexists with the pill)');
+    const pills = h.pillOnBody();
+    assert.equal(pills.length, 1, 'exactly one pill');
+    const pill = pills[0];
+    assert.equal(pill.tagName, 'BUTTON', 'the whole pill is the tap target');
+    assert.equal(pill.getAttribute('aria-live'), 'polite');
+    assert.equal(stubDocument.activeElement, pill, 'focus moved to the pill');
+    // setProgress has never been called -> the indeterminate/preparing label.
+    assert.equal(pill.textContent, '⬆ Adding photos…');
+    h.sheet.destroy();
+  });
+});
+
+test('buildProgressSheet: a card-target click does NOT minimize; a backdrop-target click does (onBackdrop seam)', () => {
+  withDom(() => {
+    const h = sheetHarness();
+    const card = h.overlay.firstByClass('photo-modal-card');
+    // Clicks bubbling up from the card or its children (e.target !== overlay) are inert.
+    h.overlay._fire('click', { target: card });
+    h.overlay._fire('click', { target: h.status });
+    assert.equal(h.modalsOnBody().length, 1, 'card/child clicks leave the modal up');
+    assert.equal(h.pillOnBody().length, 0);
+    // A click landing on the dimmed backdrop itself minimizes.
+    h.overlay._fire('click', { target: h.overlay });
+    assert.equal(h.modalsOnBody().length, 0, 'backdrop click minimizes');
+    assert.equal(h.pillOnBody().length, 1);
+    h.sheet.destroy();
+  });
+});
+
+test('buildProgressSheet: pill shows "N of M" once totals are known and live-updates while minimized', () => {
+  withDom(() => {
+    const h = sheetHarness();
+    h.sheet.setProgress(0, 5);
+    h.minBtn._fire('click');
+    const pill = h.pillOnBody()[0];
+    assert.equal(pill.textContent, '⬆ 0 of 5', 'totals known at minimize time');
+    h.sheet.setProgress(2, 5);
+    assert.equal(pill.textContent, '⬆ 2 of 5', 'live update while minimized');
+    h.sheet.setProgress(5, 5);
+    assert.equal(pill.textContent, '⬆ 5 of 5');
+    h.sheet.destroy();
+  });
+});
+
+test('buildProgressSheet: tapping the running pill re-expands — pill gone, modal back, focus on minimize, progress carried', () => {
+  withDom(() => {
+    const h = sheetHarness();
+    h.minBtn._fire('click');
+    h.sheet.setProgress(2, 5); // progress arrives while minimized
+    const pill = h.pillOnBody()[0];
+    pill._fire('click');
+    assert.equal(h.pillOnBody().length, 0, 'pill removed');
+    assert.equal(h.modalsOnBody().length, 1, 'modal restored (never coexists)');
+    assert.equal(h.overlay.hidden, false);
+    assert.equal(stubDocument.activeElement, h.minBtn, 'focus returns to the live control (minimize) while running');
+    assert.equal(h.status.textContent, 'Adding 2 of 5…', 'the modal innards tracked progress during the minimized stretch');
+    h.sheet.destroy();
+  });
+});
+
+test('buildProgressSheet: stray repeat events are no-ops — re-minimize while a pill is up, re-expand while expanded', () => {
+  withDom(() => {
+    const h = sheetHarness();
+    h.minBtn._fire('click');
+    const pill = h.pillOnBody()[0];
+    // Late backdrop/minimize events on the (now detached) overlay must not mint a second pill.
+    h.overlay._fire('click', { target: h.overlay });
+    h.minBtn._fire('click');
+    assert.equal(h.pillOnBody().length, 1, 'still exactly one pill');
+    assert.equal(h.modalsOnBody().length, 0);
+    pill._fire('click'); // expand
+    // A late click on the (now detached) pill must not double-open or remount it.
+    pill._fire('click');
+    assert.equal(h.modalsOnBody().length, 1, 'one modal');
+    assert.equal(h.pillOnBody().length, 0, 'no pill');
+    h.sheet.destroy();
+  });
+});
+
+test('buildProgressSheet: a second minimize after expanding REMOUNTS the pill with a fresh label (round-trip stability)', () => {
+  withDom(() => {
+    const h = sheetHarness();
+    h.sheet.setProgress(1, 5);
+    // Cycle 1: minimize -> expand. (The expand removed the pill from body.)
+    h.minBtn._fire('click');
+    assert.equal(h.pillOnBody()[0].textContent, '⬆ 1 of 5');
+    h.pillOnBody()[0]._fire('click');
+    assert.equal(h.modalsOnBody().length, 1);
+    assert.equal(h.pillOnBody().length, 0);
+    // Progress advances while expanded; cycle 2's minimize must RE-APPEND the
+    // previously-removed pill node and re-read the label at minimize time.
+    h.sheet.setProgress(4, 5);
+    h.minBtn._fire('click');
+    const pills = h.pillOnBody();
+    assert.equal(pills.length, 1, 'the pill remounts after a prior removal — still exactly one');
+    assert.equal(h.modalsOnBody().length, 0, 'modal and pill never coexist on the second cycle either');
+    assert.equal(pills[0].textContent, '⬆ 4 of 5', 'the remounted pill reflects progress made while expanded');
+    assert.equal(stubDocument.activeElement, pills[0], 'focus moves to the pill on every minimize, not just the first');
+    // Cycle 2's expand still restores the modal cleanly.
+    pills[0]._fire('click');
+    assert.equal(h.modalsOnBody().length, 1);
+    assert.equal(h.pillOnBody().length, 0);
+    assert.equal(h.status.textContent, 'Adding 4 of 5…');
+    h.sheet.destroy();
+  });
+});
+
+test('buildProgressSheet: finish while minimized flips the pill to "✓ N added" and schedules the linger+fade timers', () => {
+  withDom(() => {
+    const h = sheetHarness();
+    h.sheet.setProgress(3, 3);
+    h.minBtn._fire('click');
+    h.sheet.finish('Added 3 photos', { added: 3 });
+    const pill = h.pillOnBody()[0];
+    assert.equal(pill.textContent, '✓ 3 added');
+    assert.ok(pill.classList.contains('is-success'));
+    assert.equal(h.modalsOnBody().length, 0, 'the modal does not pop back open on finish');
+    // Two timers: the 5s linger, then the 450ms fade-out removal (PILL_FADE_DELAY_MS / + PILL_FADE_MS).
+    assert.deepEqual(h.timers.pendingMs(), [5000, 5450]);
+    assert.ok(!pill.classList.contains('is-fading'), 'not fading during the linger');
+    h.sheet.destroy();
+  });
+});
+
+test('buildProgressSheet: the success pill fades after the linger (is-fading) and is removed after the fade timer', () => {
+  withDom(() => {
+    const h = sheetHarness();
+    h.minBtn._fire('click');
+    h.sheet.finish('Added 2 photos', { added: 2 });
+    const pill = h.pillOnBody()[0];
+    assert.ok(h.timers.fire(5000), 'the linger timer was scheduled');
+    assert.ok(pill.classList.contains('is-fading'));
+    assert.equal(h.pillOnBody().length, 1, 'still mounted mid-fade (CSS transition runs)');
+    assert.ok(h.timers.fire(5450), 'the removal timer was scheduled');
+    assert.equal(h.pillOnBody().length, 0, 'pill removed after the fade');
+    assert.equal(h.modalsOnBody().length, 0, 'nothing left on body');
+    assert.doesNotThrow(() => h.sheet.destroy(), 'destroy after a completed fade is safe');
+  });
+});
+
+test('buildProgressSheet: tapping the success pill during the linger cancels the fade and expands to summary + Done', () => {
+  withDom(() => {
+    const h = sheetHarness();
+    h.sheet.setProgress(3, 3);
+    h.minBtn._fire('click');
+    h.sheet.finish('Added 3 photos across 2 days', { added: 3 });
+    const pill = h.pillOnBody()[0];
+    pill._fire('click');
+    assert.equal(h.timers.pendingCount(), 0, 'both fade timers cancelled');
+    assert.equal(h.pillOnBody().length, 0, 'pill removed');
+    assert.equal(h.modalsOnBody().length, 1, 'modal re-opened');
+    assert.equal(h.status.textContent, 'Added 3 photos across 2 days', 'the summary view, not the progress view');
+    assert.equal(h.doneBtn.hidden, false, 'Done is visible');
+    assert.equal(stubDocument.activeElement, h.doneBtn, 'focus lands on Done when finished');
+    // Done still dismisses from here.
+    h.doneBtn._fire('click');
+    assert.equal(h.modalsOnBody().length, 0);
+    h.sheet.destroy();
+  });
+});
+
+test('buildProgressSheet: tapping the pill mid-fade (is-fading already applied) still cancels and expands', () => {
+  withDom(() => {
+    const h = sheetHarness();
+    h.minBtn._fire('click');
+    h.sheet.finish('Added 1 photo', { added: 1 });
+    const pill = h.pillOnBody()[0];
+    h.timers.fire(5000); // linger elapsed -> fade underway
+    assert.ok(pill.classList.contains('is-fading'));
+    pill._fire('click');
+    assert.equal(h.timers.pendingCount(), 0, 'the pending removal timer was cancelled');
+    assert.equal(h.pillOnBody().length, 0);
+    assert.equal(h.modalsOnBody().length, 1, 'expanded to the summary view');
+    assert.ok(!pill.classList.contains('is-fading'), 'fade state cleared');
+    h.sheet.destroy();
+  });
+});
+
+test('buildProgressSheet: finish while EXPANDED keeps the legacy behavior — summary + Done focused, no pill, no timers', () => {
+  withDom(() => {
+    const h = sheetHarness();
+    h.sheet.setProgress(2, 2);
+    h.sheet.finish('Added 2 photos', { added: 2 });
+    assert.equal(h.status.textContent, 'Added 2 photos');
+    assert.equal(h.doneBtn.hidden, false);
+    assert.equal(stubDocument.activeElement, h.doneBtn, 'Done takes focus');
+    assert.equal(h.pillOnBody().length, 0, 'no pill was ever mounted');
+    assert.equal(h.timers.pendingCount(), 0, 'no fade timers while expanded');
+    h.doneBtn._fire('click');
+    assert.equal(h.modalsOnBody().length, 0, 'Done dismisses the sheet');
+    h.sheet.destroy();
+  });
+});
+
+test('buildProgressSheet: minimizing AFTER finish mounts the success pill and starts the fade immediately', () => {
+  withDom(() => {
+    const h = sheetHarness();
+    h.sheet.finish('Added 4 photos', { added: 4 });
+    // Finished + expanded -> a backdrop tap still minimizes, straight to the success pill.
+    h.overlay._fire('click', { target: h.overlay });
+    const pill = h.pillOnBody()[0];
+    assert.equal(pill.textContent, '✓ 4 added');
+    assert.ok(pill.classList.contains('is-success'));
+    assert.deepEqual(h.timers.pendingMs(), [5000, 5450], 'the fade starts immediately for an already-finished pill');
+    h.sheet.destroy();
+  });
+});
+
+test('buildProgressSheet: single-arg finish (and non-finite meta.added) falls back to the "✓ Done" pill label', () => {
+  withDom(() => {
+    const h1 = sheetHarness();
+    h1.minBtn._fire('click');
+    h1.sheet.finish('All done'); // legacy single-arg call
+    assert.equal(h1.pillOnBody()[0].textContent, '✓ Done');
+    h1.sheet.destroy();
+
+    const h2 = sheetHarness();
+    h2.minBtn._fire('click');
+    h2.sheet.finish('All done', { added: NaN }); // malformed meta degrades the same way
+    assert.equal(h2.pillOnBody()[0].textContent, '✓ Done');
+    h2.sheet.destroy();
+  });
+});
+
+test('buildProgressSheet: destroy() while minimized removes the running pill (clean teardown)', () => {
+  withDom(() => {
+    const h = sheetHarness();
+    h.sheet.setProgress(1, 4);
+    h.minBtn._fire('click');
+    assert.equal(h.pillOnBody().length, 1);
+    h.sheet.destroy();
+    assert.equal(h.pillOnBody().length, 0, 'pill removed');
+    assert.equal(h.modalsOnBody().length, 0, 'no modal either');
+    assert.equal((stubDocument._listeners.keydown || []).length, 0, 'no leaked document keydown listeners');
+  });
+});
+
+test('buildProgressSheet: destroy() mid-fade clears the pending fade timer and removes the pill', () => {
+  withDom(() => {
+    const h = sheetHarness();
+    h.minBtn._fire('click');
+    h.sheet.finish('Added 2 photos', { added: 2 });
+    h.timers.fire(5000); // is-fading applied; the 5450ms removal still pending
+    assert.equal(h.timers.pendingCount(), 1);
+    h.sheet.destroy();
+    assert.equal(h.pillOnBody().length, 0, 'pill removed mid-fade');
+    assert.equal(h.timers.pendingCount(), 0, 'the orphan removal timer was cleared');
+  });
+});
+
+test('buildProgressSheet: the focus trap skips the hidden Done while running and includes it once finished', () => {
+  withDom(() => {
+    const h = sheetHarness();
+    const tab = () => stubDocument._fire('keydown', { key: 'Tab', shiftKey: false, preventDefault() {} });
+    // Running: Done is hidden -> the only tab stop is the minimize button.
+    assert.equal(stubDocument.activeElement, h.minBtn);
+    tab();
+    assert.equal(stubDocument.activeElement, h.minBtn, 'Tab cycles within [minimize] — never the hidden Done');
+    // Finished: Done unhides and joins the cycle.
+    h.sheet.finish('Added 1 photo', { added: 1 });
+    assert.equal(stubDocument.activeElement, h.doneBtn);
+    tab();
+    assert.equal(stubDocument.activeElement, h.minBtn, 'Tab moves Done -> minimize');
+    tab();
+    assert.equal(stubDocument.activeElement, h.doneBtn, 'Tab wraps minimize -> Done');
+    h.sheet.destroy();
+  });
+});
+
+// ===========================================================================
+// minimize-upload-modal — wirePhotoSync runMarker threading
+//
+// The optional runMarker dep ({ start, beat, clear }) goes live only AFTER the
+// prepare phase (so a cancelled pick strands no marker), beats per completion,
+// and is cleared on every in-page exit AFTER start — but never on an exit
+// BEFORE start (which would wipe a live marker owned by another tab).
+// ===========================================================================
+
+function makeMarkerSpy(order) {
+  return {
+    start: syncSpy(() => { order?.push('start'); }),
+    beat: syncSpy(() => { order?.push('beat'); }),
+    clear: syncSpy(() => { order?.push('clear'); }),
+  };
+}
+
+test('wirePhotoSync: runMarker.start fires ONCE with the prepared total, only after every EXIF read', async () => {
+  const files = [
+    datedFile('a.jpg', '2026-06-25', 13001),
+    datedFile('b.jpg', '2026-06-25', 13002),
+    datedFile('c.jpg', '2026-06-26', 13003),
+  ];
+  const order = [];
+  const { deps, progressSheet } = makePhotoHarness({ files });
+  // Set the marker + the order-logging stubs BEFORE wiring — wirePhotoSync
+  // destructures `deps` at construction.
+  deps.readDate = asyncSpy((file) => {
+    order.push('read');
+    return { exifDateTime: file._exif, date: file._date, fromExif: true };
+  });
+  progressSheet.finish = syncSpy(() => { order.push('finish'); });
+  const marker = makeMarkerSpy(order);
+  deps.runMarker = marker;
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+
+  assert.deepEqual(result, { added: 3, dupes: 0, skipped: 0, errors: 0, days: 2 });
+  assert.equal(marker.start.calls.length, 1, 'start exactly once');
+  assert.deepEqual(marker.start.calls[0], [3], 'started with the prepared count');
+  assert.ok(order.indexOf('start') > order.lastIndexOf('read'),
+    'start fires only AFTER the whole prepare loop (a cancelled pick can never strand a marker)');
+  // Every completion beats with the RUNNING count.
+  assert.deepEqual(marker.beat.calls, [[1], [2], [3]]);
+  assert.equal(marker.clear.calls.length, 1, 'cleared once on the normal finish');
+  assert.ok(order.indexOf('clear') > order.indexOf('finish'), 'cleared in the finally, after the summary surfaced');
+  assert.deepEqual(progressSheet.finish.calls[0][1], { added: 3 }, 'finish meta carries the real added count');
+});
+
+test('wirePhotoSync: runMarker covers skipped/duped files too — start counts prepared, beat fires per completion', async () => {
+  const a = datedFile('a.jpg', '2026-06-25', 14001);
+  const dupA = datedFile('dup-a.jpg', '2026-06-25', 14001); // same uploader+exif+size -> same key as `a`
+  const out = datedFile('out.jpg', '2030-01-01', 14002);    // outside the trip window
+  const { deps } = makePhotoHarness({ files: [a, dupA, out] });
+  const marker = makeMarkerSpy();
+  deps.runMarker = marker;
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+
+  assert.deepEqual(result, { added: 1, dupes: 1, skipped: 1, errors: 0, days: 1 });
+  assert.deepEqual(marker.start.calls, [[3]], 'all three prepared files count toward the marker total');
+  assert.deepEqual(marker.beat.calls, [[1], [2], [3]],
+    'skips and dupes still beat — a stalled done-count would read as a dead run');
+  assert.equal(marker.clear.calls.length, 1);
+});
+
+test('wirePhotoSync: a prepared-but-nothing-added run still starts AND clears the marker; finish meta is {added:0}', async () => {
+  const files = [datedFile('out.jpg', '2030-01-01', 15001)]; // prepared, then window-skipped
+  const { deps, progressSheet } = makePhotoHarness({ files });
+  const marker = makeMarkerSpy();
+  deps.runMarker = marker;
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+
+  assert.equal(result.added, 0);
+  assert.deepEqual(marker.start.calls, [[1]]);
+  assert.equal(marker.clear.calls.length, 1);
+  assert.deepEqual(progressSheet.finish.calls[0][1], { added: 0 }, 'success-pill meta is honest about zero adds');
+});
+
+test('wirePhotoSync: exits BEFORE files are prepared never touch the marker (dismissed identity, empty pick)', async () => {
+  // (a) dismissed identity prompt.
+  {
+    const { deps } = makePhotoHarness({
+      files: [datedFile('a.jpg', '2026-06-25', 16001)],
+      storedUploader: null,
+      askUploaderResult: null,
+    });
+    const marker = makeMarkerSpy();
+    deps.runMarker = marker;
+    const { run } = wirePhotoSync(deps);
+    await runQuiet(() => run('2026-06-25'));
+    assert.equal(marker.start.calls.length, 0, 'dismissed identity: start never fires');
+    assert.equal(marker.clear.calls.length, 0,
+      'dismissed identity: clear never fires (protects a live marker owned by another tab)');
+  }
+  // (b) cancelled / empty picker.
+  {
+    const { deps } = makePhotoHarness({ files: [] });
+    const marker = makeMarkerSpy();
+    deps.runMarker = marker;
+    const { run } = wirePhotoSync(deps);
+    await runQuiet(() => run('2026-06-25'));
+    assert.equal(marker.start.calls.length, 0, 'empty pick: start never fires');
+    assert.equal(marker.clear.calls.length, 0, 'empty pick: clear never fires');
+  }
+});
+
+test('wirePhotoSync: offline and all-files-dropped exits never touch the marker either', async () => {
+  // (a) offline gate.
+  {
+    const { deps } = makePhotoHarness({ files: [datedFile('a.jpg', '2026-06-25', 17001)], isOnline: false });
+    const marker = makeMarkerSpy();
+    deps.runMarker = marker;
+    const { run } = wirePhotoSync(deps);
+    await runQuiet(() => run('2026-06-25'));
+    assert.equal(deps.onError.calls.length, 1, 'sanity: the offline error surfaced');
+    assert.equal(marker.start.calls.length, 0);
+    assert.equal(marker.clear.calls.length, 0);
+  }
+  // (b) every file lacks a capture date and the batch-date prompt is cancelled -> prepared is empty.
+  {
+    const { deps } = makePhotoHarness({ files: [fakeFile('nodate-1.jpg', 17002), fakeFile('nodate-2.jpg', 17003)] });
+    const marker = makeMarkerSpy();
+    deps.runMarker = marker;
+    const { run } = wirePhotoSync(deps);
+    const { result } = await runQuiet(() => run('2026-06-25'));
+    assert.equal(result, undefined, 'sanity: the run bailed with nothing prepared');
+    assert.equal(marker.start.calls.length, 0, 'no prepared files: start never fires');
+    assert.equal(marker.clear.calls.length, 0, 'no prepared files: clear never fires');
+  }
+});
+
+test('wirePhotoSync: a runMarker whose methods THROW cannot kill the run (wrapped best-effort)', async () => {
+  const files = [datedFile('a.jpg', '2026-06-25', 18001), datedFile('b.jpg', '2026-06-26', 18002)];
+  const { deps, progressSheet } = makePhotoHarness({ files });
+  deps.runMarker = {
+    start() { throw new Error('quota'); },
+    beat() { throw new Error('quota'); }, // beat runs inside the worker finally — an unwrapped throw would reject the run
+    clear() { throw new Error('quota'); },
+  };
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+  assert.deepEqual(result, { added: 2, dupes: 0, skipped: 0, errors: 0, days: 2 },
+    'every file uploaded; the throwing marker never surfaced as a file error');
+  assert.equal(progressSheet.finish.calls.length, 1, 'the summary still surfaced');
+  assert.equal(deps.uploadBlob.calls.length, 2);
+});
+
+test('wirePhotoSync: the marker is cleared in the finally even when the run throws after start (ui.finish blows up)', async () => {
+  const files = [datedFile('a.jpg', '2026-06-25', 19001)];
+  const { deps, progressSheet } = makePhotoHarness({ files });
+  progressSheet.finish = syncSpy(() => { throw new Error('sheet torn down'); });
+  const marker = makeMarkerSpy();
+  deps.runMarker = marker;
+  const { run } = wirePhotoSync(deps);
+  await assert.rejects(() => runQuiet(() => run('2026-06-25')), /sheet torn down/);
+  assert.equal(marker.start.calls.length, 1, 'the marker went live');
+  assert.equal(marker.clear.calls.length, 1,
+    'and was still cleared on the throwing exit — no phantom interruption notice next boot');
+});
+
+test('wirePhotoSync: an absent runMarker dep is a silent no-op default (run completes, finish fires)', async () => {
+  const files = [datedFile('a.jpg', '2026-06-25', 20001)];
+  const { deps, progressSheet } = makePhotoHarness({ files }); // NOTE: the harness bag has no runMarker
+  assert.equal('runMarker' in deps, false, 'sanity: no runMarker injected');
+  const { run } = wirePhotoSync(deps);
+  const { result } = await runQuiet(() => run('2026-06-25'));
+  assert.deepEqual(result, { added: 1, dupes: 0, skipped: 0, errors: 0, days: 1 });
+  assert.deepEqual(progressSheet.finish.calls[0][1], { added: 1 });
 });
 
 // ===========================================================================
