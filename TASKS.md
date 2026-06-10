@@ -2,22 +2,6 @@
 
 ## Active Tasks
 
-### harden-exif-subifd-truncation-null
-**Task**: EXIF slice-truncation evidence → null degrade (never the IFD0 edit-time fallback)
-**Pipeline**: code-workflow
-**Branch**: task/harden-exif-subifd-truncation-null
-**Worktree**: .worktree/harden-exif-subifd-truncation-null
-**Base**: main
-**Started**: 2026-06-10
-**Files**:
-- MOD: app.js
-- MOD: app.test.js
-- MOD: sw.js
-- MOD: sw.test.js
-- MOD: CLAUDE.md
-- MOD: README.md
-- MOD: CHANGELOG.md
-
 ### export-downscale-router-seam
 **Task**: Extract exported buildDownscaleRouter factory so the worker→main retry contract is unit-testable
 **Pipeline**: code-workflow

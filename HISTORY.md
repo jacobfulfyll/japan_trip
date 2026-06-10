@@ -60,3 +60,4 @@
 - [x] fix-photo-storage-cors: Set CORS on the Storage bucket so gallery photos load from jacobfulfyll.github.io (Cloud Shell, zero code) -- manual, completed 2026-06-10
 - [x] redesign-gallery-mosaic "Seigaiha" reminisce gallery — card-bleed 3-col square mosaic, hash crests + dims-gated panoramas, hole-free via list-based demotion + exact-placement property test (CACHE_VERSION v41) -- 2026-06-10
 - [x] speed-up-photo-picker-handoff Kill the iOS in-picker freeze — accept HEIC originals + multi-container EXIF dating (HEIC ISO-BMFF + PNG eXIf) -- 2026-06-10
+- [x] harden-exif-subifd-truncation-null EXIF slice-truncation evidence → null degrade (never the IFD0 edit-time fallback) — discriminating mutation-proven fixtures, 651 tests, CACHE_VERSION v43 -- 2026-06-10
