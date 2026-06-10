@@ -2,6 +2,22 @@
 
 ## Active Tasks
 
+### harden-exif-subifd-truncation-null
+**Task**: EXIF slice-truncation evidence → null degrade (never the IFD0 edit-time fallback)
+**Pipeline**: code-workflow
+**Branch**: task/harden-exif-subifd-truncation-null
+**Worktree**: .worktree/harden-exif-subifd-truncation-null
+**Base**: main
+**Started**: 2026-06-10
+**Files**:
+- MOD: app.js
+- MOD: app.test.js
+- MOD: sw.js
+- MOD: sw.test.js
+- MOD: CLAUDE.md
+- MOD: README.md
+- MOD: CHANGELOG.md
+
 ### export-downscale-router-seam
 **Task**: Extract exported buildDownscaleRouter factory so the worker→main retry contract is unit-testable
 **Pipeline**: code-workflow
@@ -54,9 +70,6 @@
 
 ### Photo Journal v2.2 — Live-Test Fixes
 <!-- From 2026-06-09/10 live photo testing + ungroomed-debt triage (16-agent researched+verified 2026-06-10). DEPLOY-STATE GOTCHA: origin/main = 4e8d343 (TEMP date-shift build — CACHE_VERSION v40 is CONSUMED on the live site); local main = 8ab3daf (UNPUSHED revert, back to v39 + real dates). The FIRST code task to merge bumps v39→v41 (SKIP v40 — reuse risks byte-identical sw.js → devices stuck on the shifted build); later merges take the next FREE version, sw.test.js pin in lockstep, re-derived from origin/main at MERGE time. The first push also carries the 8ab3daf revert. The five code tasks all touch app.js + bump CACHE_VERSION → MUTUALLY CONFLICTING; run SERIALLY in listed order. (fix-photo-storage-cors: manual, COMPLETED 2026-06-10 — bucket CORS set, gallery renders live.) Tiers per user decision 2026-06-10: opus:high for complex tasks, opus:medium for fully-specified simple ones. -->
-- [ ] harden-exif-subifd-truncation-null: EXIF slice-truncation evidence → null degrade (never the IFD0 edit-time fallback) [P3] [depends: speed-up-photo-picker-handoff] [conflicts: speed-up-photo-picker-handoff, redesign-gallery-mosaic, fix-modal-stack-overlaps, export-downscale-router-seam] [simple] [tier: opus:medium] [code] [planned]
-  files: app.js (MOD), app.test.js (MOD), sw.js (MOD), sw.test.js (MOD), CLAUDE.md (MOD), README.md (MOD), CHANGELOG.md (MOD)
-
 ### Ungroomed
 
 <!-- Discovered-issue backlog (code). Surfaced by pipeline stages; not yet groomed into tasks. (Previous 5 code items triaged 2026-06-10 via /reggie-init-tasks: 2 formalized standalone, 2 bundled into fix-modal-stack-overlaps, 1 pruned — see the v2.2 section + HISTORY.md.) -->
