@@ -620,13 +620,14 @@ test('a non-/firebasejs/ path on www.gstatic.com is NOT intercepted by the Fireb
   assert.equal(event._responded, false, 'only the /firebasejs/ path should route to the SDK cache');
 });
 
-test('CACHE_VERSION is v46 (TEMP Jun 1 date shift — data/days.js shell change)', () => {
+test('CACHE_VERSION is v47 (revert TEMP date shift — real Jun 16 – Jul 3 dates)', () => {
   // sw.test.js derives CACHE_VERSION from the sw.js literal; this pins the
   // expected value so an accidental revert of the bump fails loudly.
-  // data/days.js (a precached shell file) re-shifted the trip dates to start
-  // Jun 1 for live testing, so CACHE_VERSION must bump. v40 (the first TEMP
-  // shift build, live on Pages) is consumed — next free after v45 is v46.
-  assert.equal(CACHE_VERSION, 'v46');
+  // data/days.js (a precached shell file) restored the real trip dates
+  // (Jun 16 – Jul 3) after live photo-feature testing, so CACHE_VERSION must
+  // bump. v46 (the second TEMP shift build, live on Pages) is consumed —
+  // next free is v47, earmarked for this revert.
+  assert.equal(CACHE_VERSION, 'v47');
 });
 
 // ===========================================================================
